@@ -21,6 +21,7 @@ impl ExecuteResult {
     }
 
     /// Iterate over per-statement row counts.
+    #[allow(clippy::should_implement_trait)]
     pub fn into_iter(self) -> impl Iterator<Item = u64> {
         self.counts.into_iter()
     }

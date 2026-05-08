@@ -635,3 +635,29 @@ async fn column_metadata() {
     assert_eq!(cols[0].name, "answer");
     assert_eq!(cols[1].name, "greeting");
 }
+
+// --- &str borrowing (tiberius compat) ---
+
+#[tokio::test]
+async fn str_borrow_from_row() {
+    let mut client = connect().await;
+    let rows = client
+        .query("SELECT @P1 AS name", &[&"hello world"])
+        .await
+        .expect("query failed")
+        .into_first_result();
+    let name: &str = rows[0].get("name").expect("should borrow &str");
+    assert_eq!(name, "hello world");
+}
+
+#[tokio::test]
+async fn str_borrow_null() {
+    let mut client = connect().await;
+    let rows = client
+        .simple_query("SELECT CAST(NULL AS nvarchar(50)) AS val")
+        .await
+        .expect("query failed")
+        .into_first_result();
+    let val: Option<&str> = rows[0].get("val").expect("option should work");
+    assert_eq!(val, None);
+}

@@ -13,6 +13,8 @@ use crate::error::{Error, Result};
 pub struct Row {
     columns: Vec<Column>,
     values: Vec<ColumnValues>,
+    /// Pre-decoded UTF-8 strings for &str borrowing support.
+    decoded_strings: Vec<Option<String>>,
     name_map: HashMap<String, usize>,
 }
 
@@ -25,9 +27,19 @@ impl Row {
             .enumerate()
             .map(|(i, c)| (c.name.clone(), i))
             .collect();
+        // Pre-decode strings so &str can be borrowed from the Row.
+        let decoded_strings: Vec<Option<String>> = values
+            .iter()
+            .map(|v| match v {
+                ColumnValues::String(s) => Some(s.to_utf8_string()),
+                ColumnValues::Xml(x) => Some(x.as_string()),
+                _ => None,
+            })
+            .collect();
         Row {
             columns,
             values,
+            decoded_strings,
             name_map,
         }
     }
@@ -51,7 +63,7 @@ impl Row {
     /// the type doesn't match. Panics if the column name doesn't exist.
     pub fn get<'a, T: FromSql<'a>, I: ColumnIndex>(&'a self, col: I) -> Option<T> {
         let idx = col.resolve(self).expect("column not found");
-        T::from_sql(&self.values[idx])
+        T::from_sql_with_str(&self.values[idx], self.decoded_strings[idx].as_deref())
     }
 
     /// Try to get a column value by name or index, returning a `Result`.
@@ -63,7 +75,10 @@ impl Row {
                 count: self.values.len(),
             });
         }
-        Ok(T::from_sql(&self.values[idx]))
+        Ok(T::from_sql_with_str(
+            &self.values[idx],
+            self.decoded_strings[idx].as_deref(),
+        ))
     }
 
     /// Raw access to the underlying ColumnValues at a given index.
@@ -114,6 +129,12 @@ impl ColumnIndex for &str {
 /// Trait for extracting a Rust type from a `ColumnValues` cell.
 pub trait FromSql<'a>: Sized {
     fn from_sql(val: &'a ColumnValues) -> Option<Self>;
+
+    /// Extract with an optional pre-decoded string (used for &str borrowing).
+    /// Default delegates to `from_sql`.
+    fn from_sql_with_str(val: &'a ColumnValues, _decoded: Option<&'a str>) -> Option<Self> {
+        Self::from_sql(val)
+    }
 }
 
 // Option<T>: NULL → Some(None), value → Some(Some(v))
@@ -122,6 +143,13 @@ impl<'a, T: FromSql<'a>> FromSql<'a> for Option<T> {
         match val {
             ColumnValues::Null => Some(None),
             _ => Some(T::from_sql(val)),
+        }
+    }
+
+    fn from_sql_with_str(val: &'a ColumnValues, decoded: Option<&'a str>) -> Option<Self> {
+        match val {
+            ColumnValues::Null => Some(None),
+            _ => Some(T::from_sql_with_str(val, decoded)),
         }
     }
 }
@@ -208,9 +236,13 @@ impl<'a> FromSql<'a> for String {
 
 impl<'a> FromSql<'a> for &'a str {
     fn from_sql(_val: &'a ColumnValues) -> Option<Self> {
-        // mssql-tds SqlString doesn't expose &str directly (it stores UTF-16
-        // internally), so borrowing is not possible. Use String instead.
+        // Can't borrow from ColumnValues directly (UTF-16 internal).
+        // Use from_sql_with_str path via Row::get() instead.
         None
+    }
+
+    fn from_sql_with_str(_val: &'a ColumnValues, decoded: Option<&'a str>) -> Option<Self> {
+        decoded
     }
 }
 
@@ -366,9 +398,17 @@ mod tests {
             .enumerate()
             .map(|(i, c)| (c.name.clone(), i))
             .collect();
+        let decoded_strings: Vec<Option<String>> = values
+            .iter()
+            .map(|v| match v {
+                ColumnValues::String(s) => Some(s.to_utf8_string()),
+                _ => None,
+            })
+            .collect();
         Row {
             columns,
             values,
+            decoded_strings,
             name_map,
         }
     }
@@ -384,6 +424,8 @@ mod tests {
         );
         assert_eq!(row.get::<i32, _>("id"), Some(42));
         assert_eq!(row.get::<String, _>("name"), Some("hello".into()));
+        // &str borrowing from pre-decoded cache
+        assert_eq!(row.get::<&str, _>("name"), Some("hello"));
     }
 
     #[test]
@@ -436,5 +478,29 @@ mod tests {
     fn bytes_extraction() {
         let row = make_row(&["b"], vec![ColumnValues::Bytes(vec![1, 2, 3])]);
         assert_eq!(row.get::<Vec<u8>, _>("b"), Some(vec![1, 2, 3]));
+    }
+
+    #[test]
+    fn str_borrowing() {
+        let row = make_row(
+            &["s", "n"],
+            vec![
+                ColumnValues::String(SqlString::from_utf8_string("borrowed".into())),
+                ColumnValues::Null,
+            ],
+        );
+        // Can borrow &str from the row
+        assert_eq!(row.get::<&str, _>("s"), Some("borrowed"));
+        // NULL returns None
+        assert_eq!(row.get::<&str, _>("n"), None);
+        // Option<&str> works too
+        assert_eq!(row.get::<Option<&str>, _>("s"), Some(Some("borrowed")));
+        assert_eq!(row.get::<Option<&str>, _>("n"), Some(None));
+    }
+
+    #[test]
+    fn str_non_string_column_returns_none() {
+        let row = make_row(&["i"], vec![ColumnValues::Int(42)]);
+        assert_eq!(row.get::<&str, _>("i"), None);
     }
 }

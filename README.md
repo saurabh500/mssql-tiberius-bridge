@@ -53,10 +53,8 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
 | `conn.simple_query(sql)` | `client.simple_query(sql)` |
 | `conn.query(sql, &[&p1])` | `client.query(sql, &[&p1])` |
 | `stream.into_first_result()` | `.into_first_result()` |
-| `row.get::<&str, _>("col")` | `row.get::<String, _>("col")` * |
+| `row.get::<&str, _>("col")` | `row.get::<&str, _>("col")` |
 | `tiberius::AuthMethod::sql_server` | `AuthMethod::sql_server` |
-
-\* `&str` borrowing isn't supported since mssql-tds stores strings as UTF-16 internally. Use `String` instead.
 
 ## License
 

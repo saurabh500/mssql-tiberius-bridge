@@ -1,0 +1,56 @@
+name: Publish to crates.io
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run (validate without publishing)'
+        type: boolean
+        default: false
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish mssql-tiberius-bridge
+    runs-on: ubuntu-latest
+    environment: crates-io
+    permissions:
+      contents: write
+    if: github.actor == github.repository_owner
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Determine version
+        id: version
+        run: |
+          VERSION=$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "📦 Version: $VERSION"
+
+      - name: Verify build
+        run: cargo check
+
+      - name: Dry run
+        if: inputs.dry_run
+        run: |
+          cargo publish --dry-run
+          echo "✅ Dry run passed for v${{ steps.version.outputs.version }}"
+
+      - name: Publish
+        if: "!inputs.dry_run"
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish
+          echo "✅ Published mssql-tiberius-bridge v${{ steps.version.outputs.version }}"
+
+      - name: Tag release
+        if: "!inputs.dry_run"
+        run: |
+          git tag "v${{ steps.version.outputs.version }}"
+          git push origin "v${{ steps.version.outputs.version }}"

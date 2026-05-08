@@ -1,4 +1,7 @@
-//! Row type with named and indexed column access, mirroring tiberius' Row API.
+//! Row type with named and indexed column access, mirroring tiberius' `Row` API.
+//!
+//! A [`Row`] is returned from [`QueryResult::into_first_result()`](crate::QueryResult::into_first_result)
+//! and provides typed access to column values via [`get()`](Row::get).
 
 use std::collections::HashMap;
 
@@ -8,7 +11,10 @@ use mssql_tds::query::metadata::ColumnMetadata;
 use crate::column::Column;
 use crate::error::{Error, Result};
 
-/// A single result row with tiberius-style `get`/`try_get` access by name or index.
+/// A single result row with tiberius-style typed column access.
+///
+/// String values are eagerly decoded from UTF-16 to UTF-8 at construction
+/// time, enabling `row.get::<&str, _>("col")` without allocation.
 #[derive(Debug, Clone)]
 pub struct Row {
     columns: Vec<Column>,

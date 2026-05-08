@@ -1,4 +1,18 @@
-//! Connection pool via deadpool, mirroring the tiberius + deadpool pattern.
+//! Connection pooling via [`deadpool`], mirroring the tiberius + deadpool pattern.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use mssql_tiberius_bridge::{Config, AuthMethod, TdsManager};
+//!
+//! # fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
+//! let mut cfg = Config::new();
+//! cfg.host("localhost").authentication(AuthMethod::sql_server("sa", "pass")).trust_cert();
+//! let pool = TdsManager::create_pool(cfg, 10)?;
+//! // Use pool.get().await? to checkout connections
+//! # Ok(())
+//! # }
+//! ```
 
 use deadpool::managed::{Manager, Metrics, RecycleError, RecycleResult};
 
@@ -7,13 +21,15 @@ use mssql_tds::connection_provider::tds_connection_provider::TdsConnectionProvid
 
 use crate::config::Config;
 
-/// Pooled connection type alias.
+/// A checked-out connection from the pool.
 pub type PooledConnection = deadpool::managed::Object<TdsManager>;
 
-/// Pool type alias.
+/// Connection pool type alias.
 pub type Pool = deadpool::managed::Pool<TdsManager>;
 
-/// Deadpool `Manager` for mssql-tds connections.
+/// [`deadpool::managed::Manager`] implementation for mssql-tds connections.
+///
+/// Creates and recycles `TdsClient` connections using the provided [`Config`].
 #[derive(Debug, Clone)]
 pub struct TdsManager {
     config: Config,
@@ -25,7 +41,11 @@ impl TdsManager {
         Self { config }
     }
 
-    /// Build a deadpool `Pool` with default settings.
+    /// Build a [`Pool`] with the given maximum connection count.
+    ///
+    /// # Errors
+    ///
+    /// Returns a build error if the pool configuration is invalid.
     pub fn create_pool(
         config: Config,
         max_size: usize,

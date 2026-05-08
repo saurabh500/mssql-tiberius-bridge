@@ -1,6 +1,6 @@
 [package]
 name = "mssql-tiberius-bridge"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 edition = "2021"
 description = "A tiberius-compatible API bridge over Microsoft's mssql-tds crate. Migrate from tiberius with minimal code changes."
 repository = "https://github.com/saurabh500/mssql-tiberius-bridge"

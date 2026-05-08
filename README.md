@@ -59,3 +59,4 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
 ## License
 
 MIT
+

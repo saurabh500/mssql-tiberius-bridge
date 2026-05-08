@@ -452,6 +452,7 @@ async fn empty_result_set() {
 // =============================================================================
 
 #[tokio::test]
+#[ignore = "Blocked on mssql-tds exposing DONE token row counts. See GitHub issue."]
 async fn execute_insert_update_delete() {
     let mut client = connect().await;
     client

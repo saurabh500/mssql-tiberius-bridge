@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "mssql-tiberius-bridge"
-version = "0.1.0"
+version = "0.1.0-preview.1"
 dependencies = [
  "async-trait",
  "chrono",

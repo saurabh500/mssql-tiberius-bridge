@@ -62,38 +62,57 @@ impl Client {
     }
 
     /// Execute a statement and return an `ExecuteResult` with row counts per statement.
+    ///
+    /// Appends `; SELECT @@ROWCOUNT` to capture affected rows, since mssql-tds
+    /// doesn't expose DONE token row counts through its public API.
     pub async fn execute(
         &mut self,
         sql: impl Into<String>,
         params: &[&dyn ToSql],
     ) -> Result<ExecuteResult> {
         let sql = sql.into();
+        let rowcount_sql = format!("{sql}; SELECT @@ROWCOUNT AS __rc");
 
         if params.is_empty() {
             self.inner
-                .execute(sql, None, None)
+                .execute(rowcount_sql, None, None)
                 .await
                 .map_err(Error::Tds)?;
         } else {
             let rpc_params = build_params(params);
             self.inner
-                .execute_sp_executesql(sql, rpc_params, None, None)
+                .execute_sp_executesql(rowcount_sql, rpc_params, None, None)
                 .await
                 .map_err(Error::Tds)?;
         }
 
-        // Drain result sets, counting rows in each.
         let mut counts: Vec<u64> = Vec::new();
+        let mut last_rowcount: u64 = 0;
         while let Some(rs) = self.inner.get_current_resultset() {
-            let mut count = 0u64;
-            while let Some(_row) = rs.next_row().await.map_err(Error::Tds)? {
-                count += 1;
+            let metadata = rs.get_metadata().clone();
+            let is_rc = metadata.len() == 1 && metadata[0].column_name == "__rc";
+
+            while let Some(row) = rs.next_row().await.map_err(Error::Tds)? {
+                if is_rc {
+                    if let Some(ColumnValues::Int(n)) = row.first() {
+                        last_rowcount = *n as u64;
+                    }
+                }
             }
-            counts.push(count);
+
+            if !is_rc {
+                counts.push(0);
+            }
+
             if !self.inner.move_to_next().await.map_err(Error::Tds)? {
                 break;
             }
         }
+
+        if counts.is_empty() {
+            counts.push(last_rowcount);
+        }
+
         Ok(ExecuteResult { counts })
     }
 

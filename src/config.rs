@@ -18,8 +18,14 @@
 //!    .trust_cert();
 //! ```
 
-use mssql_tds::connection::client_context::{ClientContext, TdsAuthenticationMethod};
+use mssql_tds::connection::client_context::{
+    ClientContext, DriverVersion, TdsAuthenticationMethod,
+};
 use mssql_tds::core::EncryptionSetting;
+
+/// The driver name sent in the TDS Login7 packet and UserAgent feature extension.
+/// Follows the MS driver naming convention (e.g., `MS-TDS`, `MS-PYTHON`).
+const DRIVER_NAME: &str = "MS-TIB-BRID";
 
 /// TLS encryption level for the connection.
 ///
@@ -182,6 +188,14 @@ impl Config {
     }
 
     /// Convert to an mssql-tds `ClientContext`.
+    ///
+    /// Sets the driver identity so SQL Server can distinguish connections
+    /// from `mssql-tiberius-bridge` in `sys.dm_exec_sessions` and telemetry:
+    ///
+    /// - **Library name** (Login7 `ibCltIntName`): `MS-TIB-BRID`
+    /// - **UserAgent feature extension** (TDS 0x10):
+    ///   `1|MS-TIB-BRID|{version}|{arch}|{os}|{os_details}|...`
+    /// - **Driver version** (`client_prog_ver`): crate major.minor.build
     pub fn to_client_context(&self) -> ClientContext {
         let mut ctx = ClientContext::default();
         ctx.database = self.database.clone();
@@ -212,6 +226,17 @@ impl Config {
             ctx.application_name = app.clone();
         }
 
+        // ── Driver identity ──
+        // Login7 client interface name
+        ctx.library_name = DRIVER_NAME.to_string();
+        // Login7 client_prog_ver from the bridge crate version
+        ctx.driver_version = DriverVersion::from_cargo_version();
+
+        // UserAgent feature extension (TDS 0x10)
+        let bridge_version = env!("CARGO_PKG_VERSION");
+        ctx.user_agent.set_library_name(DRIVER_NAME.to_string());
+        ctx.user_agent
+            .set_driver_version(bridge_version.to_string());
         ctx
     }
 }
@@ -269,5 +294,18 @@ mod tests {
             ctx.tds_authentication_method,
             TdsAuthenticationMethod::SSPI
         ));
+    }
+
+    #[test]
+    fn driver_identity_is_set() {
+        let cfg = Config::new();
+        let ctx = cfg.to_client_context();
+
+        // Login7 library name
+        assert_eq!(ctx.library_name, "MS-TIB-BRID");
+
+        // UserAgent feature extension fields
+        assert_eq!(ctx.user_agent.library_name, "MS-TIB-BRID");
+        assert_eq!(ctx.user_agent.driver_version, env!("CARGO_PKG_VERSION"));
     }
 }

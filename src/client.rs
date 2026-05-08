@@ -7,7 +7,7 @@ use mssql_tds::query::metadata::ColumnMetadata;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::query::{build_params, QueryResult, ToSql};
+use crate::query::{build_params, ExecuteResult, QueryResult, ToSql};
 
 /// Ergonomic wrapper around `TdsClient` with tiberius-style query methods.
 pub struct Client {
@@ -61,8 +61,12 @@ impl Client {
         self.collect_results().await
     }
 
-    /// Execute a statement and return the number of affected rows.
-    pub async fn execute(&mut self, sql: impl Into<String>, params: &[&dyn ToSql]) -> Result<u64> {
+    /// Execute a statement and return an `ExecuteResult` with row counts per statement.
+    pub async fn execute(
+        &mut self,
+        sql: impl Into<String>,
+        params: &[&dyn ToSql],
+    ) -> Result<ExecuteResult> {
         let sql = sql.into();
 
         if params.is_empty() {
@@ -78,17 +82,19 @@ impl Client {
                 .map_err(Error::Tds)?;
         }
 
-        // Drain any result sets to get to the done token with row count.
-        let mut total = 0u64;
+        // Drain result sets, counting rows in each.
+        let mut counts: Vec<u64> = Vec::new();
         while let Some(rs) = self.inner.get_current_resultset() {
+            let mut count = 0u64;
             while let Some(_row) = rs.next_row().await.map_err(Error::Tds)? {
-                total += 1;
+                count += 1;
             }
+            counts.push(count);
             if !self.inner.move_to_next().await.map_err(Error::Tds)? {
                 break;
             }
         }
-        Ok(total)
+        Ok(ExecuteResult { counts })
     }
 
     /// Access the underlying TdsClient for advanced operations.

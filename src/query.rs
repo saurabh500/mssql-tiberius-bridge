@@ -8,6 +8,24 @@ use mssql_tds::query::metadata::ColumnMetadata;
 
 use crate::row::Row;
 
+/// Result of an `execute()` call, containing row counts per statement.
+#[derive(Debug, Clone)]
+pub struct ExecuteResult {
+    pub(crate) counts: Vec<u64>,
+}
+
+impl ExecuteResult {
+    /// Total rows affected across all statements.
+    pub fn total(&self) -> u64 {
+        self.counts.iter().sum()
+    }
+
+    /// Iterate over per-statement row counts.
+    pub fn into_iter(self) -> impl Iterator<Item = u64> {
+        self.counts.into_iter()
+    }
+}
+
 /// Collected query results, mirroring tiberius' QueryStream after materialization.
 pub struct QueryResult {
     pub(crate) result_sets: Vec<(Vec<ColumnMetadata>, Vec<Vec<ColumnValues>>)>,

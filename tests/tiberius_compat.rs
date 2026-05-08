@@ -27,7 +27,9 @@ fn test_config() -> Config {
 }
 
 async fn connect() -> Client {
-    Client::connect(&test_config()).await.expect("connect failed")
+    Client::connect(&test_config())
+        .await
+        .expect("connect failed")
 }
 
 // =============================================================================
@@ -150,7 +152,10 @@ async fn string_roundtrip() {
         .await
         .unwrap()
         .into_first_result();
-    assert_eq!(row[0].get::<String, _>(0usize), Some("hello world".to_string()));
+    assert_eq!(
+        row[0].get::<String, _>(0usize),
+        Some("hello world".to_string())
+    );
 }
 
 #[tokio::test]
@@ -242,10 +247,7 @@ async fn kanji_nvarchar() {
         .await
         .unwrap();
     client
-        .execute(
-            "INSERT INTO #kanji_test (val) VALUES (@P1)",
-            &[&text],
-        )
+        .execute("INSERT INTO #kanji_test (val) VALUES (@P1)", &[&text])
         .await
         .unwrap();
     let row = client
@@ -265,10 +267,7 @@ async fn finnish_varchar() {
         .await
         .unwrap();
     client
-        .execute(
-            "INSERT INTO #finnish_test (val) VALUES (@P1)",
-            &[&text],
-        )
+        .execute("INSERT INTO #finnish_test (val) VALUES (@P1)", &[&text])
         .await
         .unwrap();
     let row = client
@@ -287,7 +286,10 @@ async fn empty_string() {
         .await
         .unwrap()
         .into_first_result();
-    assert_eq!(row[0].get::<Option<String>, _>(0usize), Some(Some(String::new())));
+    assert_eq!(
+        row[0].get::<Option<String>, _>(0usize),
+        Some(Some(String::new()))
+    );
 }
 
 // =============================================================================
@@ -408,10 +410,7 @@ async fn binary_type() {
 async fn multiple_rows() {
     let mut client = connect().await;
     let rows = client
-        .query(
-            "SELECT value FROM (VALUES (1),(2),(3)) AS t(value)",
-            &[],
-        )
+        .query("SELECT value FROM (VALUES (1),(2),(3)) AS t(value)", &[])
         .await
         .unwrap()
         .into_first_result();
@@ -492,10 +491,7 @@ async fn simple_query_ddl() {
         .simple_query("CREATE TABLE #ddl_test (id int)")
         .await
         .unwrap();
-    client
-        .simple_query("DROP TABLE #ddl_test")
-        .await
-        .unwrap();
+    client.simple_query("DROP TABLE #ddl_test").await.unwrap();
 }
 
 // =============================================================================
@@ -588,10 +584,7 @@ async fn money_type() {
 async fn xml_type() {
     let mut client = connect().await;
     let row = client
-        .query(
-            "SELECT CAST('<root><item>test</item></root>' AS xml)",
-            &[],
-        )
+        .query("SELECT CAST('<root><item>test</item></root>' AS xml)", &[])
         .await
         .unwrap()
         .into_first_result();

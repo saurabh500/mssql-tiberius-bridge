@@ -50,7 +50,7 @@ pub use column::{Column, ColumnType};
 pub use config::{AuthMethod, Config, EncryptionLevel};
 pub use error::{Error, Result};
 pub use pool::{Pool, PooledConnection, TdsManager};
-pub use query::{QueryResult, ToSql};
+pub use query::{ExecuteResult, QueryResult, ToSql};
 pub use row::{ColumnIndex, FromSql, Row};
 
 // Re-export mssql-tds types that consumers might need for advanced use.

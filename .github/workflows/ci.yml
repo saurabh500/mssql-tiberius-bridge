@@ -33,6 +33,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev pkg-config libkrb5-dev
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:

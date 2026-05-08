@@ -43,6 +43,7 @@ pub mod error;
 pub mod pool;
 pub mod query;
 pub mod row;
+pub mod vector;
 
 // Re-exports for ergonomic top-level access.
 pub use client::Client;
@@ -52,6 +53,7 @@ pub use error::{Error, Result};
 pub use pool::{Pool, PooledConnection, TdsManager};
 pub use query::{ExecuteResult, QueryResult, ToSql};
 pub use row::{ColumnIndex, FromSql, Row};
+pub use vector::VectorValue;
 
 // Re-export mssql-tds types that consumers might need for advanced use.
 pub use mssql_tds::connection::tds_client::TdsClient;

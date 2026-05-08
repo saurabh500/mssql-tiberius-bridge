@@ -33,6 +33,7 @@ impl Row {
             .map(|v| match v {
                 ColumnValues::String(s) => Some(s.to_utf8_string()),
                 ColumnValues::Xml(x) => Some(x.as_string()),
+                ColumnValues::Json(j) => Some(j.as_string()),
                 _ => None,
             })
             .collect();
@@ -229,6 +230,17 @@ impl<'a> FromSql<'a> for String {
         match val {
             ColumnValues::String(s) => Some(s.to_utf8_string()),
             ColumnValues::Xml(x) => Some(x.as_string()),
+            ColumnValues::Json(j) => Some(j.as_string()),
+            _ => None,
+        }
+    }
+}
+
+impl<'a> FromSql<'a> for serde_json::Value {
+    fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+        match val {
+            ColumnValues::Json(j) => serde_json::from_str(&j.as_string()).ok(),
+            ColumnValues::String(s) => serde_json::from_str(&s.to_utf8_string()).ok(),
             _ => None,
         }
     }

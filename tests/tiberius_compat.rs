@@ -662,3 +662,66 @@ async fn str_borrow_null() {
     let val: Option<&str> = rows[0].get("val").expect("option should work");
     assert_eq!(val, None);
 }
+
+// --- JSON type ---
+
+#[tokio::test]
+async fn json_as_string() {
+    let mut client = connect().await;
+    let rows = client
+        .simple_query("SELECT CAST('{\"key\": \"value\"}' AS json) AS j")
+        .await
+        .expect("query failed")
+        .into_first_result();
+    let j: String = rows[0].get("j").expect("json as string");
+    assert!(j.contains("key"));
+    assert!(j.contains("value"));
+}
+
+#[tokio::test]
+async fn json_as_str() {
+    let mut client = connect().await;
+    let rows = client
+        .simple_query("SELECT CAST('{\"a\": 1}' AS json) AS j")
+        .await
+        .expect("query failed")
+        .into_first_result();
+    let j: &str = rows[0].get("j").expect("json as &str");
+    assert!(j.contains("a"));
+}
+
+// --- Vector type ---
+
+#[tokio::test]
+async fn vector_roundtrip() {
+    let mut client = connect().await;
+    let rows = client
+        .simple_query("SELECT CAST('[1.0, 2.0, 3.0]' AS vector(3)) AS v")
+        .await
+        .expect("query failed")
+        .into_first_result();
+    let v: mssql_tiberius_bridge::VectorValue = rows[0].get("v").expect("vector");
+    assert_eq!(v.len(), 3);
+    assert_eq!(v.dimensions(), &[1.0, 2.0, 3.0]);
+}
+
+#[tokio::test]
+async fn vector_write() {
+    let mut client = connect().await;
+    client
+        .simple_query("CREATE TABLE #vec_test (v vector(3))")
+        .await
+        .unwrap();
+    let embedding = mssql_tiberius_bridge::VectorValue::from(vec![0.1f32, 0.2, 0.3]);
+    client
+        .query("INSERT INTO #vec_test VALUES (@P1)", &[&embedding])
+        .await
+        .unwrap();
+    let rows = client
+        .simple_query("SELECT v FROM #vec_test")
+        .await
+        .unwrap()
+        .into_first_result();
+    let v: mssql_tiberius_bridge::VectorValue = rows[0].get("v").expect("vector back");
+    assert_eq!(v.dimensions(), &[0.1, 0.2, 0.3]);
+}

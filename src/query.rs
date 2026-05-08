@@ -162,6 +162,12 @@ impl<T: ToSql + Default> ToSql for Option<T> {
     }
 }
 
+impl ToSql for serde_json::Value {
+    fn to_sql(&self) -> SqlType {
+        SqlType::NVarchar(Some(SqlString::from_utf8_string(self.to_string())), 4000)
+    }
+}
+
 /// Build a Vec<RpcParameter> from a slice of ToSql values, using positional
 /// naming (@P1, @P2, ...) like tiberius.
 pub fn build_params(params: &[&dyn ToSql]) -> Vec<RpcParameter> {

@@ -259,7 +259,8 @@ impl<'a> FromSql<'a> for chrono::NaiveTime {
     fn from_sql(val: &'a ColumnValues) -> Option<Self> {
         match val {
             ColumnValues::Time(t) => {
-                let total_nanos = t.time_nanoseconds;
+                // time_nanoseconds is actually in 100-nanosecond units despite the field name
+                let total_nanos = t.time_nanoseconds * 100;
                 let secs = (total_nanos / 1_000_000_000) as u32;
                 let nanos = (total_nanos % 1_000_000_000) as u32;
                 chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)
@@ -274,7 +275,8 @@ impl<'a> FromSql<'a> for chrono::NaiveDateTime {
         match val {
             ColumnValues::DateTime2(dt) => {
                 let date = chrono::NaiveDate::from_num_days_from_ce_opt(dt.days as i32 + 1)?;
-                let total_nanos = dt.time.time_nanoseconds;
+                // time_nanoseconds is in 100-nanosecond units
+                let total_nanos = dt.time.time_nanoseconds * 100;
                 let secs = (total_nanos / 1_000_000_000) as u32;
                 let nanos = (total_nanos % 1_000_000_000) as u32;
                 let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)?;
@@ -308,7 +310,8 @@ impl<'a> FromSql<'a> for chrono::DateTime<chrono::FixedOffset> {
             ColumnValues::DateTimeOffset(dto) => {
                 let dt2 = &dto.datetime2;
                 let date = chrono::NaiveDate::from_num_days_from_ce_opt(dt2.days as i32 + 1)?;
-                let total_nanos = dt2.time.time_nanoseconds;
+                // time_nanoseconds is in 100-nanosecond units
+                let total_nanos = dt2.time.time_nanoseconds * 100;
                 let secs = (total_nanos / 1_000_000_000) as u32;
                 let nanos = (total_nanos % 1_000_000_000) as u32;
                 let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(secs, nanos)?;

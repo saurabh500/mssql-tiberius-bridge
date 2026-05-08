@@ -1,4 +1,8 @@
-//! Query result types and ToSql trait for parameterized queries.
+//! Query result types and the [`ToSql`] trait for parameter binding.
+//!
+//! [`QueryResult`] wraps streamed result sets from SQL Server and provides
+//! [`into_first_result()`](QueryResult::into_first_result) (single result set)
+//! and [`into_results()`](QueryResult::into_results) (multiple result sets).
 
 use mssql_tds::datatypes::column_values::ColumnValues;
 use mssql_tds::datatypes::sql_string::SqlString;
@@ -27,15 +31,22 @@ impl ExecuteResult {
     }
 }
 
-/// Collected query results, mirroring tiberius' QueryStream after materialization.
+/// Collected query results from one or more SQL statements.
+///
+/// Use [`into_first_result()`](Self::into_first_result) for single-statement
+/// queries (most common), or [`into_results()`](Self::into_results) for
+/// multi-statement batches.
 pub struct QueryResult {
     pub(crate) result_sets: Vec<(Vec<ColumnMetadata>, Vec<Vec<ColumnValues>>)>,
 }
 
 impl QueryResult {
-    /// Consume the first result set into a Vec of Rows.
-    /// This is the most common access pattern, matching tiberius'
-    /// `stream.into_first_result().await`.
+    /// Consume the first result set into a `Vec<Row>`.
+    ///
+    /// This is the most common access pattern, equivalent to tiberius'
+    /// `stream.into_first_result().await?`.
+    ///
+    /// Returns an empty `Vec` if the query produced no result set.
     pub fn into_first_result(self) -> Vec<Row> {
         let mut sets = self.result_sets;
         if sets.is_empty() {
@@ -47,7 +58,9 @@ impl QueryResult {
             .collect()
     }
 
-    /// Consume all result sets into a Vec<Vec<Row>>.
+    /// Consume all result sets into a `Vec<Vec<Row>>`.
+    ///
+    /// Use for multi-statement batches like `SELECT 1; SELECT 2`.
     pub fn into_results(self) -> Vec<Vec<Row>> {
         self.result_sets
             .into_iter()
@@ -78,6 +91,22 @@ impl QueryResult {
 // ---------------------------------------------------------------------------
 
 /// Trait for types that can be used as query parameters.
+///
+/// Implemented for common Rust types:
+///
+/// | Rust type | SQL Server type |
+/// |-----------|------------------|
+/// | `bool` | `bit` |
+/// | `u8` | `tinyint` |
+/// | `i16` | `smallint` |
+/// | `i32` | `int` |
+/// | `i64` | `bigint` |
+/// | `f32` | `real` |
+/// | `f64` | `float` |
+/// | `&str` | `nvarchar(4000)` |
+/// | `String` | `nvarchar(4000)` |
+/// | `uuid::Uuid` | `uniqueidentifier` |
+/// | `Option<T>` | Nullable version of inner type |
 pub trait ToSql: Send + Sync {
     /// Convert this value into an mssql-tds `SqlType` for parameter binding.
     fn to_sql(&self) -> SqlType;

@@ -1,24 +1,50 @@
-//! Configuration builder mirroring tiberius' Config API.
+//! Connection configuration builder mirroring tiberius' `Config` API.
+//!
+//! Use [`Config`] to build connection settings with a fluent API, then pass
+//! to [`Client::connect()`](crate::Client::connect) or
+//! [`TdsManager::new()`](crate::TdsManager::new) for pooling.
+//!
+//! # Example
+//!
+//! ```rust,no_run
+//! use mssql_tiberius_bridge::{Config, AuthMethod, EncryptionLevel};
+//!
+//! let mut cfg = Config::new();
+//! cfg.host("db.example.com")
+//!    .port(1433)
+//!    .database("mydb")
+//!    .authentication(AuthMethod::sql_server("sa", "password"))
+//!    .encryption(EncryptionLevel::Required)
+//!    .trust_cert();
+//! ```
 
 use mssql_tds::connection::client_context::{ClientContext, TdsAuthenticationMethod};
 use mssql_tds::core::EncryptionSetting;
 
 /// TLS encryption level for the connection.
+///
+/// Controls whether and how TLS is negotiated with SQL Server.
+/// Mirrors tiberius' `EncryptionLevel`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncryptionLevel {
-    /// Encrypt the login packet only.
+    /// Encrypt login only; data flows unencrypted.
     Off,
-    /// Encrypt the entire connection.
+    /// Encrypt the entire connection (default).
     On,
-    /// Let the server decide.
+    /// Don't request encryption; server may still require it.
     NotSupported,
-    /// Require encryption.
+    /// Require encryption; fail if the server doesn't support it.
     Required,
-    /// TDS 8.0 strict mode.
+    /// TDS 8.0 strict mode — encrypts the entire stream including pre-login.
     Strict,
 }
 
-/// Authentication method.
+/// Authentication method for SQL Server connections.
+///
+/// # Variants
+///
+/// - [`SqlServer`](Self::SqlServer) — username/password authentication (most common)
+/// - [`Integrated`](Self::Integrated) — Windows SSPI or Kerberos/GSSAPI
 #[derive(Debug, Clone)]
 pub enum AuthMethod {
     /// SQL Server authentication with username and password.
@@ -43,6 +69,19 @@ impl AuthMethod {
 }
 
 /// Fluent connection configuration builder, mirroring tiberius' `Config`.
+///
+/// All settings have sensible defaults — at minimum you need to set
+/// credentials via [`authentication()`](Self::authentication).
+///
+/// # Defaults
+///
+/// | Setting | Default |
+/// |---------|----------|
+/// | Host | `localhost` |
+/// | Port | `1433` |
+/// | Database | `master` |
+/// | Encryption | [`On`](EncryptionLevel::On) |
+/// | Trust cert | `false` |
 #[derive(Debug, Clone)]
 pub struct Config {
     host: String,
@@ -56,7 +95,7 @@ pub struct Config {
 }
 
 impl Config {
-    /// Create a new Config with defaults (localhost:1433, empty SQL auth).
+    /// Create a new `Config` with defaults (`localhost:1433`, `master` database, empty SQL auth).
     pub fn new() -> Self {
         Config {
             host: "localhost".to_string(),
@@ -73,31 +112,34 @@ impl Config {
         }
     }
 
-    /// Set the server hostname.
+    /// Set the server hostname or IP address.
     pub fn host(&mut self, host: impl Into<String>) -> &mut Self {
         self.host = host.into();
         self
     }
 
-    /// Set the server port.
+    /// Set the server port (default: 1433).
     pub fn port(&mut self, port: u16) -> &mut Self {
         self.port = port;
         self
     }
 
-    /// Set the default database.
+    /// Set the default database to connect to.
     pub fn database(&mut self, database: impl Into<String>) -> &mut Self {
         self.database = database.into();
         self
     }
 
-    /// Set the authentication method.
+    /// Set the authentication method (see [`AuthMethod`]).
     pub fn authentication(&mut self, auth: AuthMethod) -> &mut Self {
         self.auth = auth;
         self
     }
 
-    /// Trust the server certificate (skip validation).
+    /// Trust the server's TLS certificate without validation.
+    ///
+    /// **Use only for development** — in production, configure proper
+    /// certificate validation.
     pub fn trust_cert(&mut self) -> &mut Self {
         self.trust_cert = true;
         self
@@ -109,24 +151,28 @@ impl Config {
         self
     }
 
-    /// Set the application name reported to the server.
+    /// Set the application name reported to the server in `sys.dm_exec_sessions`.
     pub fn application_name(&mut self, name: impl Into<String>) -> &mut Self {
         self.application_name = Some(name.into());
         self
     }
 
-    /// Set the instance name (for named instances via SQL Browser).
+    /// Set the named instance (e.g., `SQLEXPRESS`).
+    ///
+    /// When set, the client uses SQL Browser to resolve the port.
     pub fn instance_name(&mut self, name: impl Into<String>) -> &mut Self {
         self.instance_name = Some(name.into());
         self
     }
 
-    /// Get the address string in `host:port` format.
+    /// Get the address as `host:port` (useful for logging).
     pub fn get_addr(&self) -> String {
         format!("{}:{}", self.host, self.port)
     }
 
-    /// Build the TDS datasource string for `TdsConnectionProvider`.
+    /// Build the TDS datasource string used by `TdsConnectionProvider`.
+    ///
+    /// Format: `tcp:host,port` or `tcp:host,port\instance`.
     pub fn datasource_string(&self) -> String {
         if let Some(ref inst) = self.instance_name {
             format!("tcp:{},{}\\{}", self.host, self.port, inst)

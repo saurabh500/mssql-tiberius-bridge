@@ -36,6 +36,7 @@ pub enum ColumnType {
     Image,
     Xml,
     Json,
+    Vector,
     BigVarBin,
     Ssvariant,
 }
@@ -73,6 +74,7 @@ impl From<TdsDataType> for ColumnType {
             TdsDataType::Image => ColumnType::Image,
             TdsDataType::Xml => ColumnType::Xml,
             TdsDataType::Json => ColumnType::Json,
+            TdsDataType::Vector => ColumnType::Vector,
             TdsDataType::SsVariant => ColumnType::Ssvariant,
             _ => ColumnType::Null,
         }

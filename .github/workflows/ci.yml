@@ -39,7 +39,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
+          components: rustfmt, clippy, llvm-tools-preview
+
+      - name: Install cargo-llvm-cov
+        uses: taiki-e/install-action@cargo-llvm-cov
 
       - name: Cache cargo
         uses: actions/cache@v4
@@ -64,11 +67,18 @@ jobs:
       - name: Doc tests
         run: cargo test --doc
 
-      - name: Integration tests
+      - name: Integration tests with coverage
         env:
           TEST_DB_HOST: localhost
           TEST_DB_PORT: 1433
           TEST_DB_USER: sa
           TEST_DB_PASSWORD: "Strong!Pass123"
           TEST_DB_NAME: master
-        run: cargo test --test integration -- --nocapture
+        run: cargo llvm-cov --all-targets --lcov --output-path lcov.info
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          files: lcov.info
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

@@ -1,16 +1,19 @@
-//! Tiberius-style ergonomic facade over the `mssql-tds` crate.
+//! # mssql-tiberius-bridge
+//!
+//! A tiberius-compatible API bridge over Microsoft's `mssql-tds` crate.
+//! Migrate from tiberius with minimal code changes.
 //!
 //! Provides familiar APIs like `row.get::<T, _>("column_name")`,
 //! `stream.into_first_result()`, and `conn.query(sql, &[&params])` on top
-//! of Microsoft's `mssql-tds` TDS protocol implementation.
+//! of Microsoft's official TDS protocol implementation.
 //!
 //! # Quick start
 //!
 //! ```rust,no_run
-//! use mssql_facade::{Config, AuthMethod, Client};
+//! use mssql_tiberius_bridge::{Config, AuthMethod, Client};
 //!
 //! #[tokio::main]
-//! async fn main() -> mssql_facade::Result<()> {
+//! async fn main() -> mssql_tiberius_bridge::Result<()> {
 //!     let mut cfg = Config::new();
 //!     cfg.host("localhost")
 //!        .port(1433)

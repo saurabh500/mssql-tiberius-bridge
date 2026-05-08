@@ -1,8 +1,11 @@
 [package]
-name = "mssql-facade"
+name = "mssql-tiberius-bridge"
 version = "0.1.0"
 edition = "2021"
-description = "Tiberius-style ergonomic facade over the mssql-tds crate"
+description = "A tiberius-compatible API bridge over Microsoft's mssql-tds crate. Migrate from tiberius with minimal code changes."
+repository = "https://github.com/saurabh500/mssql-tiberius-bridge"
+keywords = ["sql-server", "tds", "mssql", "tiberius", "database"]
+categories = ["database"]
 license = "MIT"
 
 [dependencies]

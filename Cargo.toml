@@ -9,7 +9,7 @@ categories = ["database"]
 license = "MIT"
 
 [dependencies]
-mssql-tds = { git = "https://github.com/microsoft/mssql-rs", default-features = false }
+mssql-tds = { package = "mssql-tds-preview", version = "=0.1.0-preview.1", default-features = false }
 deadpool = "0.12"
 chrono = "0.4"
 rust_decimal = "1"

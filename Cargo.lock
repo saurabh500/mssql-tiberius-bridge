@@ -679,9 +679,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "mssql-tds"
-version = "0.1.0"
-source = "git+https://github.com/microsoft/mssql-rs#63de19de0c9d41f29650644e01b98e49c33bafc1"
+name = "mssql-tds-preview"
+version = "0.1.0-preview.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "454957bed59024ea56acb311e8c0b74369182f1a3256d9e036d4b46f687d0462"
 dependencies = [
  "async-trait",
  "bigdecimal",
@@ -714,7 +715,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "deadpool",
- "mssql-tds",
+ "mssql-tds-preview",
  "rust_decimal",
  "serde_json",
  "thiserror",

@@ -62,11 +62,7 @@ impl Client {
     }
 
     /// Execute a statement and return the number of affected rows.
-    pub async fn execute(
-        &mut self,
-        sql: impl Into<String>,
-        params: &[&dyn ToSql],
-    ) -> Result<u64> {
+    pub async fn execute(&mut self, sql: impl Into<String>, params: &[&dyn ToSql]) -> Result<u64> {
         let sql = sql.into();
 
         if params.is_empty() {
@@ -83,18 +79,12 @@ impl Client {
         }
 
         // Drain any result sets to get to the done token with row count.
-        // mssql-tds doesn't expose affected rows directly in a simple way,
-        // so we drain and count.
         let mut total = 0u64;
-        loop {
-            if let Some(rs) = self.inner.get_current_resultset() {
-                while let Some(_row) = rs.next_row().await.map_err(Error::Tds)? {
-                    total += 1;
-                }
-                if !self.inner.move_to_next().await.map_err(Error::Tds)? {
-                    break;
-                }
-            } else {
+        while let Some(rs) = self.inner.get_current_resultset() {
+            while let Some(_row) = rs.next_row().await.map_err(Error::Tds)? {
+                total += 1;
+            }
+            if !self.inner.move_to_next().await.map_err(Error::Tds)? {
                 break;
             }
         }
@@ -110,21 +100,17 @@ impl Client {
     async fn collect_results(&mut self) -> Result<QueryResult> {
         let mut result_sets: Vec<(Vec<ColumnMetadata>, Vec<Vec<ColumnValues>>)> = Vec::new();
 
-        loop {
-            if let Some(rs) = self.inner.get_current_resultset() {
-                let metadata = rs.get_metadata().clone();
-                let mut rows: Vec<Vec<ColumnValues>> = Vec::new();
+        while let Some(rs) = self.inner.get_current_resultset() {
+            let metadata = rs.get_metadata().clone();
+            let mut rows: Vec<Vec<ColumnValues>> = Vec::new();
 
-                while let Some(row) = rs.next_row().await.map_err(Error::Tds)? {
-                    rows.push(row);
-                }
+            while let Some(row) = rs.next_row().await.map_err(Error::Tds)? {
+                rows.push(row);
+            }
 
-                result_sets.push((metadata, rows));
+            result_sets.push((metadata, rows));
 
-                if !self.inner.move_to_next().await.map_err(Error::Tds)? {
-                    break;
-                }
-            } else {
+            if !self.inner.move_to_next().await.map_err(Error::Tds)? {
                 break;
             }
         }

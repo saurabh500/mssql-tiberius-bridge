@@ -46,6 +46,7 @@ impl QueryResult {
     }
 
     /// Create an empty QueryResult.
+    #[allow(dead_code)]
     pub(crate) fn empty() -> Self {
         QueryResult {
             result_sets: Vec::new(),
@@ -116,10 +117,7 @@ impl ToSql for &str {
 
 impl ToSql for String {
     fn to_sql(&self) -> SqlType {
-        SqlType::NVarchar(
-            Some(SqlString::from_utf8_string(self.clone())),
-            4000,
-        )
+        SqlType::NVarchar(Some(SqlString::from_utf8_string(self.clone())), 4000)
     }
 }
 
@@ -152,15 +150,10 @@ pub fn build_params(params: &[&dyn ToSql]) -> Vec<RpcParameter> {
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            RpcParameter::new(
-                Some(format!("@P{}", i + 1)),
-                StatusFlags::NONE,
-                p.to_sql(),
-            )
+            RpcParameter::new(Some(format!("@P{}", i + 1)), StatusFlags::NONE, p.to_sql())
         })
         .collect()
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -171,7 +164,7 @@ mod tests {
         let _ = 42i32.to_sql();
         let _ = "hello".to_sql();
         let _ = true.to_sql();
-        let _ = 3.14f64.to_sql();
+        let _ = 2.72_f64.to_sql();
     }
 
     #[test]

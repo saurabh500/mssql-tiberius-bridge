@@ -26,7 +26,10 @@ impl TdsManager {
     }
 
     /// Build a deadpool `Pool` with default settings.
-    pub fn create_pool(config: Config, max_size: usize) -> Result<Pool, deadpool::managed::BuildError> {
+    pub fn create_pool(
+        config: Config,
+        max_size: usize,
+    ) -> Result<Pool, deadpool::managed::BuildError> {
         let mgr = TdsManager::new(config);
         Pool::builder(mgr).max_size(max_size).build()
     }
@@ -43,11 +46,7 @@ impl Manager for TdsManager {
         provider.create_client(ctx, &datasource, None).await
     }
 
-    async fn recycle(
-        &self,
-        conn: &mut Self::Type,
-        _: &Metrics,
-    ) -> RecycleResult<Self::Error> {
+    async fn recycle(&self, conn: &mut Self::Type, _: &Metrics) -> RecycleResult<Self::Error> {
         // Cheap ping to verify the connection is alive.
         conn.execute("SELECT 1".to_string(), None, None)
             .await
@@ -55,7 +54,12 @@ impl Manager for TdsManager {
 
         // Drain the result to reset state.
         if let Some(rs) = conn.get_current_resultset() {
-            while let Some(_) = rs.next_row().await.map_err(RecycleError::Backend)? {}
+            while rs
+                .next_row()
+                .await
+                .map_err(RecycleError::Backend)?
+                .is_some()
+            {}
         }
         // Move past any remaining result sets.
         while conn.move_to_next().await.map_err(RecycleError::Backend)? {}

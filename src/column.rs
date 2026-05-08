@@ -109,10 +109,19 @@ mod tests {
     fn test_column_type_from_tds() {
         assert_eq!(ColumnType::from(TdsDataType::Int4), ColumnType::Int4);
         assert_eq!(ColumnType::from(TdsDataType::Bit), ColumnType::Bit);
-        assert_eq!(ColumnType::from(TdsDataType::NVarChar), ColumnType::NVarchar);
-        assert_eq!(ColumnType::from(TdsDataType::DateTime), ColumnType::Datetime);
+        assert_eq!(
+            ColumnType::from(TdsDataType::NVarChar),
+            ColumnType::NVarchar
+        );
+        assert_eq!(
+            ColumnType::from(TdsDataType::DateTime),
+            ColumnType::Datetime
+        );
         assert_eq!(ColumnType::from(TdsDataType::Guid), ColumnType::Guid);
-        assert_eq!(ColumnType::from(TdsDataType::DecimalN), ColumnType::Decimaln);
+        assert_eq!(
+            ColumnType::from(TdsDataType::DecimalN),
+            ColumnType::Decimaln
+        );
         assert_eq!(ColumnType::from(TdsDataType::Image), ColumnType::Image);
     }
 

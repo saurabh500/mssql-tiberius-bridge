@@ -293,10 +293,8 @@ impl<'a> FromSql<'a> for chrono::NaiveDateTime {
             ColumnValues::SmallDateTime(sdt) => {
                 let base = chrono::NaiveDate::from_ymd_opt(1900, 1, 1)?;
                 let date = base.checked_add_signed(chrono::Duration::days(sdt.days as i64))?;
-                let time = chrono::NaiveTime::from_num_seconds_from_midnight_opt(
-                    sdt.time as u32 * 60,
-                    0,
-                )?;
+                let time =
+                    chrono::NaiveTime::from_num_seconds_from_midnight_opt(sdt.time as u32 * 60, 0)?;
                 Some(chrono::NaiveDateTime::new(date, time))
             }
             _ => None,
@@ -334,9 +332,7 @@ impl<'a> FromSql<'a> for rust_decimal::Decimal {
                 // DecimalParts has Display impl; parse through string for safety
                 d.to_string().parse::<rust_decimal::Decimal>().ok()
             }
-            ColumnValues::SmallMoney(m) => {
-                Some(rust_decimal::Decimal::new(m.int_val as i64, 4))
-            }
+            ColumnValues::SmallMoney(m) => Some(rust_decimal::Decimal::new(m.int_val as i64, 4)),
             ColumnValues::Money(m) => {
                 let raw = ((m.msb_part as i64) << 32) | (m.lsb_part as u32 as i64);
                 Some(rust_decimal::Decimal::new(raw, 4))
@@ -389,10 +385,7 @@ mod tests {
 
     #[test]
     fn get_by_index() {
-        let row = make_row(
-            &["a"],
-            vec![ColumnValues::BigInt(99)],
-        );
+        let row = make_row(&["a"], vec![ColumnValues::BigInt(99)]);
         assert_eq!(row.get::<i64, _>(0usize), Some(99));
     }
 

@@ -1,7 +1,7 @@
 //! Configuration builder mirroring tiberius' Config API.
 
 use mssql_tds::connection::client_context::{ClientContext, TdsAuthenticationMethod};
-use mssql_tds::core::{EncryptionOptions, EncryptionSetting};
+use mssql_tds::core::EncryptionSetting;
 
 /// TLS encryption level for the connection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -155,7 +155,9 @@ impl Config {
         match self.encryption {
             EncryptionLevel::Off => ctx.encryption_options.mode = EncryptionSetting::PreferOff,
             EncryptionLevel::On => ctx.encryption_options.mode = EncryptionSetting::On,
-            EncryptionLevel::NotSupported => ctx.encryption_options.mode = EncryptionSetting::PreferOff,
+            EncryptionLevel::NotSupported => {
+                ctx.encryption_options.mode = EncryptionSetting::PreferOff
+            }
             EncryptionLevel::Required => ctx.encryption_options.mode = EncryptionSetting::Required,
             EncryptionLevel::Strict => ctx.encryption_options.mode = EncryptionSetting::Strict,
         }
@@ -217,6 +219,9 @@ mod tests {
         let mut cfg = Config::new();
         cfg.authentication(AuthMethod::integrated());
         let ctx = cfg.to_client_context();
-        assert!(matches!(ctx.tds_authentication_method, TdsAuthenticationMethod::SSPI));
+        assert!(matches!(
+            ctx.tds_authentication_method,
+            TdsAuthenticationMethod::SSPI
+        ));
     }
 }

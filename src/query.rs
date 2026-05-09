@@ -197,6 +197,101 @@ impl ToSql for serde_json::Value {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Binary
+// ---------------------------------------------------------------------------
+
+impl ToSql for Vec<u8> {
+    fn to_sql(&self) -> SqlType {
+        SqlType::VarBinaryMax(Some(self.clone()))
+    }
+}
+
+impl ToSql for &[u8] {
+    fn to_sql(&self) -> SqlType {
+        SqlType::VarBinaryMax(Some(self.to_vec()))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// chrono date/time
+// ---------------------------------------------------------------------------
+
+// chrono is an unconditional dep on the bridge; FromSql for these types
+// already lives in `row.rs`, so the ToSql side is provided unconditionally too.
+mod chrono_to_sql {
+    use super::{SqlType, ToSql};
+    use chrono::{
+        DateTime, Datelike, FixedOffset, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc,
+    };
+    use mssql_tds::datatypes::column_values::{
+        SqlDate, SqlDateTime2, SqlDateTimeOffset, SqlTime, DEFAULT_VARTIME_SCALE,
+    };
+
+    fn naive_date_to_sql(d: &NaiveDate) -> SqlDate {
+        // SqlDate stores days where 0 = 0001-01-01; chrono's num_days_from_ce
+        // counts 0001-01-01 as day 1.
+        let days = (d.num_days_from_ce() - 1) as u32;
+        SqlDate::create(days).expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)")
+    }
+
+    fn naive_time_to_sql(t: &NaiveTime) -> SqlTime {
+        // SqlTime.time_nanoseconds is actually in 100-nanosecond units (mirrors
+        // the FromSql side in row.rs).
+        let nanos_since_midnight =
+            (t.num_seconds_from_midnight() as u64) * 1_000_000_000 + t.nanosecond() as u64;
+        SqlTime {
+            time_nanoseconds: nanos_since_midnight / 100,
+            scale: DEFAULT_VARTIME_SCALE,
+        }
+    }
+
+    fn naive_dt_to_sql(dt: &NaiveDateTime) -> SqlDateTime2 {
+        SqlDateTime2 {
+            days: (dt.date().num_days_from_ce() - 1) as u32,
+            time: naive_time_to_sql(&dt.time()),
+        }
+    }
+
+    impl ToSql for NaiveDate {
+        fn to_sql(&self) -> SqlType {
+            SqlType::Date(Some(naive_date_to_sql(self)))
+        }
+    }
+
+    impl ToSql for NaiveTime {
+        fn to_sql(&self) -> SqlType {
+            SqlType::Time(Some(naive_time_to_sql(self)))
+        }
+    }
+
+    impl ToSql for NaiveDateTime {
+        fn to_sql(&self) -> SqlType {
+            SqlType::DateTime2(Some(naive_dt_to_sql(self)))
+        }
+    }
+
+    impl ToSql for DateTime<FixedOffset> {
+        fn to_sql(&self) -> SqlType {
+            // Storage matches FromSql: dt2 holds the UTC components, offset is
+            // the original tz offset in minutes.
+            let datetime2 = naive_dt_to_sql(&self.naive_utc());
+            let offset = (self.offset().local_minus_utc() / 60) as i16;
+            SqlType::DateTimeOffset(Some(SqlDateTimeOffset { datetime2, offset }))
+        }
+    }
+
+    impl ToSql for DateTime<Utc> {
+        fn to_sql(&self) -> SqlType {
+            let datetime2 = naive_dt_to_sql(&self.naive_utc());
+            SqlType::DateTimeOffset(Some(SqlDateTimeOffset {
+                datetime2,
+                offset: 0,
+            }))
+        }
+    }
+}
+
 /// Build a Vec<RpcParameter> from a slice of ToSql values, using positional
 /// naming (@P1, @P2, ...) like tiberius.
 pub fn build_params(params: &[&dyn ToSql]) -> Vec<RpcParameter> {

@@ -403,6 +403,109 @@ async fn binary_type() {
 }
 
 // =============================================================================
+// 5b. ToSql round-trips for binary/chrono (issue #13)
+// =============================================================================
+
+#[tokio::test]
+async fn vec_u8_param_roundtrip() {
+    let mut client = connect().await;
+    let payload: Vec<u8> = vec![0xDE, 0xAD, 0xBE, 0xEF, 0x00, 0xFF];
+    let row = client
+        .query("SELECT @P1", &[&payload])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(row[0].get::<Vec<u8>, _>(0usize), Some(payload));
+}
+
+#[tokio::test]
+async fn empty_vec_u8_param_roundtrip() {
+    let mut client = connect().await;
+    let payload: Vec<u8> = vec![];
+    let row = client
+        .query("SELECT @P1", &[&payload])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(row[0].get::<Vec<u8>, _>(0usize), Some(payload));
+}
+
+#[tokio::test]
+async fn naive_date_param_roundtrip() {
+    let mut client = connect().await;
+    let d = chrono::NaiveDate::from_ymd_opt(2024, 7, 4).unwrap();
+    let row = client
+        .query("SELECT @P1", &[&d])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(row[0].get::<chrono::NaiveDate, _>(0usize), Some(d));
+}
+
+#[tokio::test]
+async fn naive_time_param_roundtrip() {
+    let mut client = connect().await;
+    let t = chrono::NaiveTime::from_hms_nano_opt(12, 34, 56, 789_000_000).unwrap();
+    let row = client
+        .query("SELECT @P1", &[&t])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(row[0].get::<chrono::NaiveTime, _>(0usize), Some(t));
+}
+
+#[tokio::test]
+async fn naive_date_time_param_roundtrip() {
+    let mut client = connect().await;
+    let dt = chrono::NaiveDate::from_ymd_opt(1999, 12, 31)
+        .unwrap()
+        .and_hms_milli_opt(23, 59, 58, 250)
+        .unwrap();
+    let row = client
+        .query("SELECT @P1", &[&dt])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(row[0].get::<chrono::NaiveDateTime, _>(0usize), Some(dt));
+}
+
+#[tokio::test]
+async fn datetime_fixed_offset_param_roundtrip() {
+    use chrono::TimeZone;
+    let mut client = connect().await;
+    let dt = chrono::FixedOffset::east_opt(2 * 3600)
+        .unwrap()
+        .with_ymd_and_hms(2024, 1, 15, 9, 30, 0)
+        .unwrap();
+    let row = client
+        .query("SELECT @P1", &[&dt])
+        .await
+        .unwrap()
+        .into_first_result();
+    let got = row[0]
+        .get::<chrono::DateTime<chrono::FixedOffset>, _>(0usize)
+        .unwrap();
+    assert_eq!(got, dt);
+}
+
+#[tokio::test]
+async fn datetime_utc_param_sends_offset_zero() {
+    use chrono::TimeZone;
+    let mut client = connect().await;
+    let dt_utc = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 12, 0, 0).unwrap();
+    let row = client
+        .query("SELECT @P1", &[&dt_utc])
+        .await
+        .unwrap()
+        .into_first_result();
+    let got = row[0]
+        .get::<chrono::DateTime<chrono::FixedOffset>, _>(0usize)
+        .unwrap();
+    assert_eq!(got.naive_utc(), dt_utc.naive_utc());
+    assert_eq!(got.offset().local_minus_utc(), 0);
+}
+
+// =============================================================================
 // 6. Multiple rows and result sets
 // =============================================================================
 

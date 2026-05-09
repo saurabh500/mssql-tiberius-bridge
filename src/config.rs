@@ -95,6 +95,7 @@ pub struct Config {
     database: String,
     auth: AuthMethod,
     trust_cert: bool,
+    server_certificate: Option<String>,
     encryption: EncryptionLevel,
     application_name: Option<String>,
     instance_name: Option<String>,
@@ -112,6 +113,7 @@ impl Config {
                 password: String::new(),
             },
             trust_cert: false,
+            server_certificate: None,
             encryption: EncryptionLevel::On,
             application_name: None,
             instance_name: None,
@@ -148,6 +150,30 @@ impl Config {
     /// certificate validation.
     pub fn trust_cert(&mut self) -> &mut Self {
         self.trust_cert = true;
+        self
+    }
+
+    /// Pin the server's TLS certificate to the DER- or PEM-encoded X.509
+    /// file at `path`.
+    ///
+    /// When set, the driver bypasses standard CA chain validation and
+    /// performs an exact binary match between the file and the certificate
+    /// presented by the server. Mirrors tiberius' `Config::trust_cert_ca`.
+    ///
+    /// `trust_cert_ca` and [`trust_cert`](Self::trust_cert) are mutually
+    /// exclusive — `trust_cert_ca` takes precedence and `trust_cert` is
+    /// ignored if both are set.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mssql_tiberius_bridge::Config;
+    ///
+    /// let mut cfg = Config::new();
+    /// cfg.host("db.internal").trust_cert_ca("/etc/ssl/private-ca.pem");
+    /// ```
+    pub fn trust_cert_ca(&mut self, path: impl Into<String>) -> &mut Self {
+        self.server_certificate = Some(path.into());
         self
     }
 
@@ -211,6 +237,7 @@ impl Config {
         }
 
         ctx.encryption_options.trust_server_certificate = self.trust_cert;
+        ctx.encryption_options.server_certificate = self.server_certificate.clone();
 
         match self.encryption {
             EncryptionLevel::Off => ctx.encryption_options.mode = EncryptionSetting::PreferOff,
@@ -276,6 +303,30 @@ mod tests {
         assert_eq!(ctx.password, "pass123");
         assert_eq!(ctx.database, "mydb");
         assert!(ctx.encryption_options.trust_server_certificate);
+    }
+
+    #[test]
+    fn trust_cert_ca_sets_server_certificate() {
+        let mut cfg = Config::new();
+        cfg.trust_cert_ca("/etc/ssl/ca.pem");
+        let ctx = cfg.to_client_context();
+        assert_eq!(
+            ctx.encryption_options.server_certificate.as_deref(),
+            Some("/etc/ssl/ca.pem")
+        );
+        assert!(!ctx.encryption_options.trust_server_certificate);
+    }
+
+    #[test]
+    fn trust_cert_ca_independent_of_trust_cert() {
+        let mut cfg = Config::new();
+        cfg.trust_cert().trust_cert_ca("/tmp/ca.pem");
+        let ctx = cfg.to_client_context();
+        assert!(ctx.encryption_options.trust_server_certificate);
+        assert_eq!(
+            ctx.encryption_options.server_certificate.as_deref(),
+            Some("/tmp/ca.pem")
+        );
     }
 
     #[test]

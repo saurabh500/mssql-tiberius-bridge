@@ -15,6 +15,7 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://github.c
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
 - `Config::new().host().port().trust_cert()` — fluent builder
 - `Config::trust_cert_ca("ca.pem")` — pin a CA certificate (mirrors tiberius)
+- `AuthMethod::aad_token(jwt)` — Microsoft Entra ID / AAD federated auth
 - deadpool connection pooling out of the box
 
 ## Quick Start

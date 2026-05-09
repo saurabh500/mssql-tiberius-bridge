@@ -4,6 +4,7 @@
 //! and provides typed access to column values via [`get()`](Row::get).
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use mssql_tds::datatypes::column_values::ColumnValues;
 use mssql_tds::query::metadata::ColumnMetadata;
@@ -11,29 +12,48 @@ use mssql_tds::query::metadata::ColumnMetadata;
 use crate::column::Column;
 use crate::error::{Error, Result};
 
-/// A single result row with tiberius-style typed column access.
+/// Per-result-set schema (column metadata + name index).
 ///
-/// String values are eagerly decoded from UTF-16 to UTF-8 at construction
-/// time, enabling `row.get::<&str, _>("col")` without allocation.
-#[derive(Debug, Clone)]
-pub struct Row {
-    columns: Vec<Column>,
-    values: Vec<ColumnValues>,
-    /// Pre-decoded UTF-8 strings for &str borrowing support.
-    decoded_strings: Vec<Option<String>>,
-    name_map: HashMap<String, usize>,
+/// Built once per result set and shared across every [`Row`] in that set
+/// via [`Arc`], so streaming N rows from a result set with K columns no
+/// longer pays the O(K) `Vec<Column>` + `HashMap<String, usize>` build
+/// cost per row.
+#[derive(Debug)]
+pub struct RowSchema {
+    pub(crate) columns: Vec<Column>,
+    pub(crate) name_map: HashMap<String, usize>,
 }
 
-impl Row {
-    /// Build a Row from mssql-tds column metadata and decoded values.
-    pub fn from_tds(metadata: &[ColumnMetadata], values: Vec<ColumnValues>) -> Self {
+impl RowSchema {
+    /// Build a schema from a slice of mssql-tds column metadata.
+    pub fn from_metadata(metadata: &[ColumnMetadata]) -> Arc<Self> {
         let columns: Vec<Column> = metadata.iter().map(Column::from_tds).collect();
         let name_map: HashMap<String, usize> = columns
             .iter()
             .enumerate()
             .map(|(i, c)| (c.name.clone(), i))
             .collect();
-        // Pre-decode strings so &str can be borrowed from the Row.
+        Arc::new(RowSchema { columns, name_map })
+    }
+}
+
+/// A single result row with tiberius-style typed column access.
+///
+/// String values are eagerly decoded from UTF-16 to UTF-8 at construction
+/// time, enabling `row.get::<&str, _>("col")` without allocation.
+#[derive(Debug, Clone)]
+pub struct Row {
+    schema: Arc<RowSchema>,
+    values: Vec<ColumnValues>,
+    /// Pre-decoded UTF-8 strings for &str borrowing support.
+    decoded_strings: Vec<Option<String>>,
+}
+
+impl Row {
+    /// Build a Row reusing a pre-built [`RowSchema`]. Hot path for the
+    /// streaming and buffered code paths — clones the `Arc`, never the
+    /// underlying `Vec<Column>`/`HashMap`.
+    pub fn from_schema(schema: Arc<RowSchema>, values: Vec<ColumnValues>) -> Self {
         let decoded_strings: Vec<Option<String>> = values
             .iter()
             .map(|v| match v {
@@ -44,16 +64,24 @@ impl Row {
             })
             .collect();
         Row {
-            columns,
+            schema,
             values,
             decoded_strings,
-            name_map,
         }
+    }
+
+    /// Build a Row from mssql-tds column metadata and decoded values.
+    ///
+    /// Convenience wrapper that builds a fresh [`RowSchema`] each call —
+    /// prefer [`Row::from_schema`] inside row loops where the schema is
+    /// known to be constant for the result set.
+    pub fn from_tds(metadata: &[ColumnMetadata], values: Vec<ColumnValues>) -> Self {
+        Self::from_schema(RowSchema::from_metadata(metadata), values)
     }
 
     /// Column metadata for this row.
     pub fn columns(&self) -> &[Column] {
-        &self.columns
+        &self.schema.columns
     }
 
     /// Number of columns.
@@ -95,7 +123,7 @@ impl Row {
 
     /// Look up a column index by name (case-sensitive).
     pub fn column_index(&self, name: &str) -> Option<usize> {
-        self.name_map.get(name).copied()
+        self.schema.name_map.get(name).copied()
     }
 }
 
@@ -122,7 +150,8 @@ impl ColumnIndex for usize {
 
 impl ColumnIndex for &str {
     fn resolve(&self, row: &Row) -> Result<usize> {
-        row.name_map
+        row.schema
+            .name_map
             .get(*self)
             .copied()
             .ok_or_else(|| Error::ColumnNotFound(self.to_string()))
@@ -416,19 +445,8 @@ mod tests {
             .enumerate()
             .map(|(i, c)| (c.name.clone(), i))
             .collect();
-        let decoded_strings: Vec<Option<String>> = values
-            .iter()
-            .map(|v| match v {
-                ColumnValues::String(s) => Some(s.to_utf8_string()),
-                _ => None,
-            })
-            .collect();
-        Row {
-            columns,
-            values,
-            decoded_strings,
-            name_map,
-        }
+        let schema = Arc::new(RowSchema { columns, name_map });
+        Row::from_schema(schema, values)
     }
 
     #[test]

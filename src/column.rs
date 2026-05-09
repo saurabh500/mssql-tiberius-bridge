@@ -85,14 +85,29 @@ impl From<TdsDataType> for ColumnType {
 #[derive(Debug, Clone)]
 pub struct Column {
     /// Column name.
-    pub name: String,
+    pub(crate) name: String,
     /// Column data type.
-    pub column_type: ColumnType,
+    pub(crate) column_type: ColumnType,
     /// Whether the column is nullable.
-    pub nullable: bool,
+    pub(crate) nullable: bool,
 }
 
 impl Column {
+    /// Returns the column name.
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    /// Returns the column data type.
+    pub fn column_type(&self) -> ColumnType {
+        self.column_type
+    }
+
+    /// Returns whether the column is nullable.
+    pub fn nullable(&self) -> bool {
+        self.nullable
+    }
+
     /// Create a Column from mssql-tds ColumnMetadata.
     pub fn from_tds(meta: &mssql_tds::query::metadata::ColumnMetadata) -> Self {
         Column {

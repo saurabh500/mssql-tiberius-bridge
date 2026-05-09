@@ -633,8 +633,8 @@ async fn column_metadata() {
         .unwrap()
         .into_first_result();
     let cols = rows[0].columns();
-    assert_eq!(cols[0].name, "answer");
-    assert_eq!(cols[1].name, "greeting");
+    assert_eq!(cols[0].name(), "answer");
+    assert_eq!(cols[1].name(), "greeting");
 }
 
 // --- &str borrowing (tiberius compat) ---

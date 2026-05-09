@@ -10,6 +10,8 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://github.c
 
 - `row.get::<T, _>("column_name")` — named and indexed column access
 - `stream.into_first_result()` — collect results into `Vec<Row>`
+- `stream.into_row_stream()` — `Stream<Item = Result<Row>>` over a buffered `QueryResult` (rows pre-buffered)
+- `client.query_streamed(sql, params)` / `simple_query_streamed(sql)` — true wire-level row streaming for memory-bounded large result sets
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
 - `Config::new().host().port().trust_cert()` — fluent builder
 - `Config::trust_cert_ca("ca.pem")` — pin a CA certificate (mirrors tiberius)

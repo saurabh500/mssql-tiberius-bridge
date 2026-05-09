@@ -89,6 +89,7 @@ impl Client {
     /// Returns [`Error::Tds`] on SQL errors or connection issues.
     pub async fn simple_query(&mut self, sql: impl Into<String>) -> Result<QueryResult> {
         let sql = sql.into();
+        self.inner.close_query().await.map_err(Error::Tds)?;
         self.inner
             .execute(sql, None, None)
             .await
@@ -131,6 +132,7 @@ impl Client {
             return self.simple_query(sql).await;
         }
 
+        self.inner.close_query().await.map_err(Error::Tds)?;
         let rpc_params = build_params(params);
         self.inner
             .execute_sp_executesql(sql, rpc_params, None, None)
@@ -160,6 +162,7 @@ impl Client {
         params: &[&dyn ToSql],
     ) -> Result<ExecuteResult> {
         let sql = sql.into();
+        self.inner.close_query().await.map_err(Error::Tds)?;
 
         if params.is_empty() {
             self.inner
@@ -187,6 +190,94 @@ impl Client {
             }
         }
         Ok(ExecuteResult { counts })
+    }
+
+    /// Execute a parameterized query and return rows as a true wire-level
+    /// stream — each `.next().await` pulls the next row from the network
+    /// without buffering the rest of the result set.
+    ///
+    /// Mirrors tiberius' `Client::query(...).await?.into_row_stream()`
+    /// behavior; rows from multiple result sets are flattened in order.
+    ///
+    /// Use this for memory-bounded processing of large result sets
+    /// (e.g., the windmill MSSQL → S3 export path). For small result
+    /// sets, [`query`](Self::query) is more ergonomic.
+    ///
+    /// # Lifetime
+    ///
+    /// The returned stream borrows `&mut self` for its lifetime. You must
+    /// fully consume the stream (or drop it) before issuing another query
+    /// on the same `Client`.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mssql_tiberius_bridge::Client;
+    /// use futures_util::StreamExt;
+    ///
+    /// # async fn ex(client: &mut Client) -> mssql_tiberius_bridge::Result<()> {
+    /// let mut s = client.query_streamed("SELECT @P1 AS n", &[&1i32]);
+    /// while let Some(row) = s.next().await {
+    ///     println!("{:?}", row?.get::<i32, _>("n"));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn query_streamed<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+        params: &[&dyn ToSql],
+    ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<crate::row::Row>> + Send + 'a>>
+    {
+        let sql = sql.into();
+        let rpc_params = if params.is_empty() {
+            None
+        } else {
+            Some(build_params(params))
+        };
+        Box::pin(async_stream::try_stream! {
+            // Drain any leftover state from a prior query / dropped stream
+            // so we don't hit "open batch" errors when re-using the Client.
+            self.inner.close_query().await.map_err(Error::Tds)?;
+
+            // Initiate the query inside the stream so the &mut self borrow
+            // lives for the entire row-pull duration.
+            match rpc_params {
+                None => self.inner.execute(sql, None, None).await.map_err(Error::Tds)?,
+                Some(p) => self.inner.execute_sp_executesql(sql, p, None, None).await.map_err(Error::Tds)?,
+            }
+
+            while let Some(metadata) = self
+                .inner
+                .get_current_resultset()
+                .map(|rs| rs.get_metadata().clone())
+            {
+                loop {
+                    let next = match self.inner.get_current_resultset() {
+                        Some(rs) => rs.next_row().await.map_err(Error::Tds)?,
+                        None => None,
+                    };
+                    match next {
+                        Some(values) => yield crate::row::Row::from_tds(&metadata, values),
+                        None => break,
+                    }
+                }
+                if !self.inner.move_to_next().await.map_err(Error::Tds)? {
+                    break;
+                }
+            }
+        })
+    }
+
+    /// Streaming counterpart of [`simple_query`](Self::simple_query) — see
+    /// [`query_streamed`](Self::query_streamed) for semantics and the
+    /// borrow contract.
+    pub fn simple_query_streamed<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+    ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<crate::row::Row>> + Send + 'a>>
+    {
+        self.query_streamed(sql, &[])
     }
 
     /// Access the underlying `mssql-tds` [`TdsClient`] for advanced operations.

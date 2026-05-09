@@ -77,12 +77,91 @@ impl QueryResult {
         self.result_sets.len()
     }
 
+    /// Consume into a [`Stream`](futures_core::Stream) of rows across all
+    /// result sets.
+    ///
+    /// Mirrors tiberius' `QueryStream::into_row_stream()` for API
+    /// compatibility. Use this when migrating code that calls
+    /// `.into_row_stream().map(...).next().await` (e.g., the
+    /// `windmill-worker` MSSQL S3 export path).
+    ///
+    /// # Limitations
+    ///
+    /// **Rows are pre-collected.** Unlike tiberius (which streams from the
+    /// wire), this yields rows that have already been buffered into memory
+    /// during the originating `query()` / `simple_query()` call. The
+    /// streaming API is preserved for migration ergonomics, but wire-level
+    /// streaming will require the `Client::query_streamed` follow-up
+    /// tracked in <https://github.com/saurabh500/mssql-tiberius-bridge/issues/20>.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use mssql_tiberius_bridge::Client;
+    /// use futures_util::StreamExt;
+    ///
+    /// # async fn example(client: &mut Client) -> mssql_tiberius_bridge::Result<()> {
+    /// let mut stream = client
+    ///     .simple_query("SELECT 1 AS n UNION ALL SELECT 2")
+    ///     .await?
+    ///     .into_row_stream();
+    /// while let Some(row) = stream.next().await {
+    ///     let row = row?;
+    ///     println!("{:?}", row.get::<i32, _>("n"));
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn into_row_stream(self) -> RowStream {
+        let rows: Vec<Row> = self
+            .result_sets
+            .into_iter()
+            .flat_map(|(meta, rows)| {
+                rows.into_iter()
+                    .map(move |values| Row::from_tds(&meta, values))
+            })
+            .collect();
+        RowStream {
+            rows: rows.into_iter(),
+        }
+    }
+
     /// Create an empty QueryResult.
     #[allow(dead_code)]
     pub(crate) fn empty() -> Self {
         QueryResult {
             result_sets: Vec::new(),
         }
+    }
+}
+
+/// A `Stream` of [`Row`]s yielded across all result sets of a buffered
+/// [`QueryResult`].
+///
+/// Created by [`QueryResult::into_row_stream`]. Implements
+/// [`futures_core::Stream`] so it composes with `StreamExt`/`TryStreamExt`
+/// (`.map`, `.try_next`, `.collect`, etc.) — matching the API surface
+/// callers used with tiberius' `into_row_stream()`.
+///
+/// **Note:** rows are pre-buffered (see
+/// [`QueryResult::into_row_stream`] for the limitation and roadmap).
+pub struct RowStream {
+    rows: std::vec::IntoIter<Row>,
+}
+
+impl futures_core::Stream for RowStream {
+    type Item = crate::error::Result<Row>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        _cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        std::task::Poll::Ready(self.rows.next().map(Ok))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        let n = self.rows.len();
+        (n, Some(n))
     }
 }
 

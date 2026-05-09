@@ -18,9 +18,9 @@
 //!    .trust_cert();
 //! ```
 
-use mssql_tds::connection::client_context::{
-    ClientContext, DriverVersion, TdsAuthenticationMethod,
-};
+#[cfg(any(feature = "integrated-auth-gssapi", feature = "winauth"))]
+use mssql_tds::connection::client_context::TdsAuthenticationMethod;
+use mssql_tds::connection::client_context::{ClientContext, DriverVersion};
 use mssql_tds::core::EncryptionSetting;
 
 /// The driver name sent in the TDS Login7 packet and UserAgent feature extension.
@@ -56,6 +56,11 @@ pub enum AuthMethod {
     /// SQL Server authentication with username and password.
     SqlServer { user: String, password: String },
     /// Windows Integrated authentication (Kerberos/NTLM).
+    ///
+    /// Requires either the `integrated-auth-gssapi` feature (Linux/macOS,
+    /// pulls GSSAPI / Kerberos via `mssql-tds`) or the `winauth` feature
+    /// (Windows, pulls SSPI via `mssql-tds`).
+    #[cfg(any(feature = "integrated-auth-gssapi", feature = "winauth"))]
     Integrated,
 }
 
@@ -69,6 +74,10 @@ impl AuthMethod {
     }
 
     /// Create Windows Integrated authentication.
+    ///
+    /// Requires the `integrated-auth-gssapi` (Linux/macOS) or `winauth`
+    /// (Windows) Cargo feature.
+    #[cfg(any(feature = "integrated-auth-gssapi", feature = "winauth"))]
     pub fn integrated() -> Self {
         AuthMethod::Integrated
     }
@@ -205,6 +214,7 @@ impl Config {
                 ctx.user_name = user.clone();
                 ctx.password = password.clone();
             }
+            #[cfg(any(feature = "integrated-auth-gssapi", feature = "winauth"))]
             AuthMethod::Integrated => {
                 ctx.tds_authentication_method = TdsAuthenticationMethod::SSPI;
             }
@@ -250,6 +260,7 @@ impl Default for Config {
 #[cfg(test)]
 mod tests {
     use crate::config::*;
+    #[cfg(any(feature = "integrated-auth-gssapi", feature = "winauth"))]
     use mssql_tds::connection::client_context::TdsAuthenticationMethod;
 
     #[test]
@@ -286,6 +297,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(any(feature = "integrated-auth-gssapi", feature = "winauth"))]
     fn integrated_auth() {
         let mut cfg = Config::new();
         cfg.authentication(AuthMethod::integrated());

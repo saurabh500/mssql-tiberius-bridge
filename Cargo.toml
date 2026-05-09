@@ -18,3 +18,12 @@ tokio = { version = "1", features = ["net"] }
 serde_json = "1"
 async-trait = "0.1"
 thiserror = "2"
+
+[features]
+default = []
+# Integrated authentication (Kerberos / GSSAPI) on Linux/macOS. Mirrors
+# tiberius' `integrated-auth-gssapi` feature. Enables `AuthMethod::Integrated`.
+integrated-auth-gssapi = ["mssql-tds/gssapi"]
+# Integrated authentication (SSPI / NTLM / Kerberos) on Windows. Mirrors
+# tiberius' `winauth` feature. Enables `AuthMethod::Integrated`.
+winauth = ["mssql-tds/sspi"]

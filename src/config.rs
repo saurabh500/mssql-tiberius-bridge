@@ -57,6 +57,10 @@ pub enum AuthMethod {
     SqlServer { user: String, password: String },
     /// Windows Integrated authentication (Kerberos/NTLM).
     Integrated,
+    /// Microsoft Entra ID (Azure AD) federated authentication using a
+    /// pre-acquired access token (JWT). Acquire the token from MSAL /
+    /// `azure_identity` / `oauth2`, scoped for `https://database.windows.net/.default`.
+    AadToken { token: String },
 }
 
 impl AuthMethod {
@@ -71,6 +75,14 @@ impl AuthMethod {
     /// Create Windows Integrated authentication.
     pub fn integrated() -> Self {
         AuthMethod::Integrated
+    }
+
+    /// Create AAD/Entra ID federated authentication from a pre-acquired
+    /// access token (JWT). Mirrors tiberius' `AuthMethod::aad_token`.
+    pub fn aad_token(token: impl Into<String>) -> Self {
+        AuthMethod::AadToken {
+            token: token.into(),
+        }
     }
 }
 
@@ -246,6 +258,10 @@ impl Config {
             AuthMethod::Integrated => {
                 ctx.tds_authentication_method = TdsAuthenticationMethod::SSPI;
             }
+            AuthMethod::AadToken { token } => {
+                ctx.tds_authentication_method = TdsAuthenticationMethod::AccessToken;
+                ctx.access_token = Some(token.clone());
+            }
         }
 
         ctx.encryption_options.trust_server_certificate = self.trust_cert;
@@ -383,6 +399,21 @@ mod tests {
             ctx.tds_authentication_method,
             TdsAuthenticationMethod::SSPI
         ));
+    }
+
+    #[test]
+    fn aad_token_sets_access_token() {
+        let mut cfg = Config::new();
+        cfg.authentication(AuthMethod::aad_token("eyJ0eXAi.fake.jwt"));
+        let ctx = cfg.to_client_context();
+        assert!(matches!(
+            ctx.tds_authentication_method,
+            TdsAuthenticationMethod::AccessToken
+        ));
+        assert_eq!(ctx.access_token.as_deref(), Some("eyJ0eXAi.fake.jwt"));
+        // user_name/password must remain empty when using AAD
+        assert!(ctx.user_name.is_empty());
+        assert!(ctx.password.is_empty());
     }
 
     #[test]

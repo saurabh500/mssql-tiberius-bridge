@@ -178,10 +178,19 @@ impl Config {
 
     /// Build the TDS datasource string used by `TdsConnectionProvider`.
     ///
-    /// Format: `tcp:host,port` or `tcp:host,port\instance`.
+    /// Format:
+    /// - `tcp:host,port` (default — explicit port)
+    /// - `tcp:host\instance` (when [`instance_name`](Self::instance_name) is
+    ///   set — port is omitted so `mssql-tds` runs SSRP / SQL Browser to
+    ///   resolve the instance's TCP port)
+    ///
+    /// Per MDAC convention, including both an explicit port and an instance
+    /// name causes the instance to be silently ignored, so the bridge drops
+    /// the port whenever an instance is specified. If you need a fixed port,
+    /// don't call [`instance_name`](Self::instance_name).
     pub fn datasource_string(&self) -> String {
         if let Some(ref inst) = self.instance_name {
-            format!("tcp:{},{}\\{}", self.host, self.port, inst)
+            format!("tcp:{}\\{}", self.host, inst)
         } else {
             format!("tcp:{},{}", self.host, self.port)
         }
@@ -282,7 +291,16 @@ mod tests {
     fn instance_name_in_datasource() {
         let mut cfg = Config::new();
         cfg.host("server").instance_name("SQLEXPRESS");
-        assert_eq!(cfg.datasource_string(), "tcp:server,1433\\SQLEXPRESS");
+        // Port is omitted when an instance name is set so mssql-tds runs SSRP.
+        assert_eq!(cfg.datasource_string(), "tcp:server\\SQLEXPRESS");
+    }
+
+    #[test]
+    fn instance_name_overrides_port_in_datasource() {
+        let mut cfg = Config::new();
+        cfg.host("server").port(14330).instance_name("SQLEXPRESS");
+        // Even with an explicit port, instance triggers SSRP; port is dropped.
+        assert_eq!(cfg.datasource_string(), "tcp:server\\SQLEXPRESS");
     }
 
     #[test]

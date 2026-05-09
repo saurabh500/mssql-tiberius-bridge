@@ -96,6 +96,7 @@ pub struct Config {
     auth: AuthMethod,
     trust_cert: bool,
     server_certificate: Option<String>,
+    readonly: bool,
     encryption: EncryptionLevel,
     application_name: Option<String>,
     instance_name: Option<String>,
@@ -114,6 +115,7 @@ impl Config {
             },
             trust_cert: false,
             server_certificate: None,
+            readonly: false,
             encryption: EncryptionLevel::On,
             application_name: None,
             instance_name: None,
@@ -174,6 +176,16 @@ impl Config {
     /// ```
     pub fn trust_cert_ca(&mut self, path: impl Into<String>) -> &mut Self {
         self.server_certificate = Some(path.into());
+        self
+    }
+
+    /// Send `ApplicationIntent=ReadOnly` in the login (mirrors tiberius'
+    /// `Config::readonly`). Required for routing to a readable secondary in
+    /// an Always On availability group / Azure SQL geo-replica.
+    ///
+    /// Defaults to `ReadWrite`.
+    pub fn readonly(&mut self, readonly: bool) -> &mut Self {
+        self.readonly = readonly;
         self
     }
 
@@ -259,6 +271,12 @@ impl Config {
         // Login7 client_prog_ver from the bridge crate version
         ctx.driver_version = DriverVersion::from_cargo_version();
 
+        ctx.application_intent = if self.readonly {
+            mssql_tds::message::login_options::ApplicationIntent::ReadOnly
+        } else {
+            mssql_tds::message::login_options::ApplicationIntent::ReadWrite
+        };
+
         // UserAgent feature extension (TDS 0x10)
         let bridge_version = env!("CARGO_PKG_VERSION");
         ctx.user_agent.set_library_name(DRIVER_NAME.to_string());
@@ -326,6 +344,26 @@ mod tests {
         assert_eq!(
             ctx.encryption_options.server_certificate.as_deref(),
             Some("/tmp/ca.pem")
+        );
+    }
+
+    #[test]
+    fn readonly_sets_application_intent() {
+        use mssql_tds::message::login_options::ApplicationIntent;
+        let mut cfg = Config::new();
+        assert_eq!(
+            cfg.to_client_context().application_intent,
+            ApplicationIntent::ReadWrite
+        );
+        cfg.readonly(true);
+        assert_eq!(
+            cfg.to_client_context().application_intent,
+            ApplicationIntent::ReadOnly
+        );
+        cfg.readonly(false);
+        assert_eq!(
+            cfg.to_client_context().application_intent,
+            ApplicationIntent::ReadWrite
         );
     }
 

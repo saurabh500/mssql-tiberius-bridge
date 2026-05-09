@@ -506,6 +506,33 @@ async fn datetime_utc_param_sends_offset_zero() {
 }
 
 // =============================================================================
+// 5c. Connection options — Config::readonly (issue #15)
+// =============================================================================
+
+/// `Config::readonly(true)` must surface `ApplicationIntent=ReadOnly` in the
+/// Login7 packet. The unit test in `src/config.rs` verifies the
+/// `ClientContext.application_intent` field; this test verifies the login is
+/// accepted by SQL Server end-to-end. (Bridge #15.)
+///
+/// Note: standalone SQL Server doesn't expose the negotiated value via
+/// `CONNECTIONPROPERTY('client_app_intent')` (always NULL), so a true
+/// observable round-trip requires Always On / Azure SQL geo-replicas.
+#[tokio::test]
+async fn readonly_login_smoke() {
+    let mut cfg = test_config();
+    cfg.readonly(true);
+    let mut client = Client::connect(&cfg)
+        .await
+        .expect("login with readonly=true");
+    let row = client
+        .query("SELECT 1", &[])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(row[0].get::<i32, _>(0usize), Some(1));
+}
+
+// =============================================================================
 // 6. Multiple rows and result sets
 // =============================================================================
 

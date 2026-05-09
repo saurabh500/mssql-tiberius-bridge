@@ -12,6 +12,7 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://github.c
 - `stream.into_first_result()` — collect results into `Vec<Row>`
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
 - `Config::new().host().port().trust_cert()` — fluent builder
+- `Config::trust_cert_ca("ca.pem")` — pin a CA certificate (mirrors tiberius)
 - deadpool connection pooling out of the box
 
 ## Quick Start

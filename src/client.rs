@@ -247,10 +247,10 @@ impl Client {
                 Some(p) => self.inner.execute_sp_executesql(sql, p, None, None).await.map_err(Error::Tds)?,
             }
 
-            while let Some(metadata) = self
+            while let Some(schema) = self
                 .inner
                 .get_current_resultset()
-                .map(|rs| rs.get_metadata().clone())
+                .map(|rs| crate::row::RowSchema::from_metadata(rs.get_metadata()))
             {
                 loop {
                     let next = match self.inner.get_current_resultset() {
@@ -258,7 +258,9 @@ impl Client {
                         None => None,
                     };
                     match next {
-                        Some(values) => yield crate::row::Row::from_tds(&metadata, values),
+                        Some(values) => {
+                            yield crate::row::Row::from_schema(schema.clone(), values)
+                        }
                         None => break,
                     }
                 }

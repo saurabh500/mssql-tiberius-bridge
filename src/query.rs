@@ -53,8 +53,9 @@ impl QueryResult {
             return Vec::new();
         }
         let (meta, rows) = sets.remove(0);
+        let schema = crate::row::RowSchema::from_metadata(&meta);
         rows.into_iter()
-            .map(|values| Row::from_tds(&meta, values))
+            .map(|values| Row::from_schema(schema.clone(), values))
             .collect()
     }
 
@@ -65,8 +66,9 @@ impl QueryResult {
         self.result_sets
             .into_iter()
             .map(|(meta, rows)| {
+                let schema = crate::row::RowSchema::from_metadata(&meta);
                 rows.into_iter()
-                    .map(|values| Row::from_tds(&meta, values))
+                    .map(|values| Row::from_schema(schema.clone(), values))
                     .collect()
             })
             .collect()
@@ -117,8 +119,9 @@ impl QueryResult {
             .result_sets
             .into_iter()
             .flat_map(|(meta, rows)| {
+                let schema = crate::row::RowSchema::from_metadata(&meta);
                 rows.into_iter()
-                    .map(move |values| Row::from_tds(&meta, values))
+                    .map(move |values| Row::from_schema(schema.clone(), values))
             })
             .collect();
         RowStream {

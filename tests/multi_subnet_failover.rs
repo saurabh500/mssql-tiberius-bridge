@@ -36,7 +36,9 @@ fn msf_config() -> Option<Config> {
 #[tokio::test]
 async fn multi_subnet_failover_connects_to_single_endpoint() {
     let Some(cfg) = msf_config() else {
-        eprintln!("skipping multi_subnet_failover_connects_to_single_endpoint: TEST_DB_PASSWORD not set");
+        eprintln!(
+            "skipping multi_subnet_failover_connects_to_single_endpoint: TEST_DB_PASSWORD not set"
+        );
         return;
     };
     assert!(cfg.is_multi_subnet_failover());

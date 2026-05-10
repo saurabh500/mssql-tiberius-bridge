@@ -127,6 +127,7 @@ pub struct Config {
     instance_name: Option<String>,
     client_name: Option<String>,
     send_string_parameters_as_unicode: bool,
+    multi_subnet_failover: bool,
 }
 
 impl Config {
@@ -149,6 +150,7 @@ impl Config {
             instance_name: None,
             client_name: None,
             send_string_parameters_as_unicode: true,
+            multi_subnet_failover: false,
         }
     }
 
@@ -247,6 +249,31 @@ impl Config {
     pub fn encryption(&mut self, level: EncryptionLevel) -> &mut Self {
         self.encryption = level;
         self
+    }
+
+    /// Enable `MultiSubnetFailover` (MSF) connection mode.
+    ///
+    /// With SQL Server Always On Availability Groups whose listener spans
+    /// multiple subnets, the listener DNS record contains every replica IP.
+    /// With MSF enabled, the client resolves all A/AAAA records and races
+    /// `TcpStream::connect` against them in parallel, taking the first that
+    /// completes the TCP handshake. This drives sub-second failover when a
+    /// replica becomes unreachable.
+    ///
+    /// Notes:
+    /// - MSF is only meaningful for **TCP** connections. mssql-tds rejects
+    ///   the combination with Named Pipes / Shared Memory / LocalDB.
+    /// - Off by default (single-target connect, the typical case).
+    /// - Mirrors Microsoft .NET's `MultiSubnetFailover=true` connection
+    ///   string keyword.
+    pub fn multi_subnet_failover(&mut self, enabled: bool) -> &mut Self {
+        self.multi_subnet_failover = enabled;
+        self
+    }
+
+    /// Returns whether `MultiSubnetFailover` is enabled on this config.
+    pub fn is_multi_subnet_failover(&self) -> bool {
+        self.multi_subnet_failover
     }
 
     /// Set the application name reported to the server in `sys.dm_exec_sessions`.
@@ -348,6 +375,8 @@ impl Config {
         } else {
             mssql_tds::message::login_options::ApplicationIntent::ReadWrite
         };
+
+        ctx.multi_subnet_failover = self.multi_subnet_failover;
 
         // UserAgent feature extension (TDS 0x10)
         let bridge_version = env!("CARGO_PKG_VERSION");
@@ -599,5 +628,24 @@ mod tests {
         assert_eq!(opts.mode, mssql_tds::core::EncryptionSetting::Strict);
         assert_eq!(opts.host_name_in_cert.as_deref(), Some("sql.example.com"));
         assert_eq!(opts.server_certificate.as_deref(), Some("/etc/ssl/ca.pem"));
+    }
+
+    #[test]
+    fn multi_subnet_failover_defaults_to_off() {
+        let cfg = Config::new();
+        assert!(!cfg.is_multi_subnet_failover());
+        assert!(!cfg.to_client_context().multi_subnet_failover);
+    }
+
+    #[test]
+    fn multi_subnet_failover_setter_propagates() {
+        let mut cfg = Config::new();
+        cfg.multi_subnet_failover(true);
+        assert!(cfg.is_multi_subnet_failover());
+        assert!(cfg.to_client_context().multi_subnet_failover);
+
+        cfg.multi_subnet_failover(false);
+        assert!(!cfg.is_multi_subnet_failover());
+        assert!(!cfg.to_client_context().multi_subnet_failover);
     }
 }

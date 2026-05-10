@@ -437,6 +437,136 @@ impl<'a> FromSql<'a> for chrono::DateTime<chrono::FixedOffset> {
     }
 }
 
+#[cfg(feature = "time")]
+mod time_from_sql {
+    use super::{ColumnValues, FromSql};
+    use chrono::{Datelike, Timelike};
+    use time::{Date, Month, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
+
+    fn date_from_chrono(date: chrono::NaiveDate) -> Option<Date> {
+        Date::from_calendar_date(
+            date.year(),
+            Month::try_from(date.month() as u8).ok()?,
+            date.day() as u8,
+        )
+        .ok()
+    }
+
+    fn time_from_chrono(time: chrono::NaiveTime) -> Option<Time> {
+        Time::from_hms_nano(
+            time.hour() as u8,
+            time.minute() as u8,
+            time.second() as u8,
+            time.nanosecond(),
+        )
+        .ok()
+    }
+
+    impl<'a> FromSql<'a> for Date {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            date_from_chrono(chrono::NaiveDate::from_sql(val)?)
+        }
+    }
+
+    impl<'a> FromSql<'a> for Time {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            time_from_chrono(chrono::NaiveTime::from_sql(val)?)
+        }
+    }
+
+    impl<'a> FromSql<'a> for PrimitiveDateTime {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            let dt = chrono::NaiveDateTime::from_sql(val)?;
+            Some(PrimitiveDateTime::new(
+                date_from_chrono(dt.date())?,
+                time_from_chrono(dt.time())?,
+            ))
+        }
+    }
+
+    impl<'a> FromSql<'a> for OffsetDateTime {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            let dt = chrono::DateTime::<chrono::FixedOffset>::from_sql(val)?;
+            let offset = UtcOffset::from_whole_seconds(dt.offset().local_minus_utc()).ok()?;
+            let utc = PrimitiveDateTime::new(
+                date_from_chrono(dt.naive_utc().date())?,
+                time_from_chrono(dt.naive_utc().time())?,
+            )
+            .assume_utc();
+            Some(utc.to_offset(offset))
+        }
+    }
+}
+
+#[cfg(feature = "jiff")]
+mod jiff_from_sql {
+    use super::{ColumnValues, FromSql};
+    use chrono::{Datelike, Timelike};
+    use jiff::{civil, tz::Offset, Timestamp, Zoned};
+
+    fn date_from_chrono(date: chrono::NaiveDate) -> Option<civil::Date> {
+        civil::Date::new(date.year() as i16, date.month() as i8, date.day() as i8).ok()
+    }
+
+    fn time_from_chrono(time: chrono::NaiveTime) -> Option<civil::Time> {
+        civil::Time::new(
+            time.hour() as i8,
+            time.minute() as i8,
+            time.second() as i8,
+            time.nanosecond() as i32,
+        )
+        .ok()
+    }
+
+    fn datetime_from_chrono(dt: chrono::NaiveDateTime) -> Option<civil::DateTime> {
+        civil::DateTime::new(
+            dt.year() as i16,
+            dt.month() as i8,
+            dt.day() as i8,
+            dt.hour() as i8,
+            dt.minute() as i8,
+            dt.second() as i8,
+            dt.nanosecond() as i32,
+        )
+        .ok()
+    }
+
+    impl<'a> FromSql<'a> for civil::Date {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            date_from_chrono(chrono::NaiveDate::from_sql(val)?)
+        }
+    }
+
+    impl<'a> FromSql<'a> for civil::Time {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            time_from_chrono(chrono::NaiveTime::from_sql(val)?)
+        }
+    }
+
+    impl<'a> FromSql<'a> for civil::DateTime {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            datetime_from_chrono(chrono::NaiveDateTime::from_sql(val)?)
+        }
+    }
+
+    impl<'a> FromSql<'a> for Timestamp {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            let dt = chrono::DateTime::<chrono::FixedOffset>::from_sql(val)?;
+            Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32).ok()
+        }
+    }
+
+    impl<'a> FromSql<'a> for Zoned {
+        fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+            let dt = chrono::DateTime::<chrono::FixedOffset>::from_sql(val)?;
+            let timestamp =
+                Timestamp::new(dt.timestamp(), dt.timestamp_subsec_nanos() as i32).ok()?;
+            let offset = Offset::from_seconds(dt.offset().local_minus_utc()).ok()?;
+            Some(timestamp.to_zoned(offset.to_time_zone()))
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Decimal
 // ---------------------------------------------------------------------------

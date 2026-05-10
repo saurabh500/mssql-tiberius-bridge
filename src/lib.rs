@@ -53,6 +53,8 @@
 //! | Flag | Default | Description |
 //! |------|---------|-------------|
 //! | `json` | off | Enables [`serde_json::Value`] support for [`FromSql`] and [`ToSql`] |
+//! | `time` | off | Enables `time` crate support for [`FromSql`] and [`ToSql`] |
+//! | `jiff` | off | Enables `jiff` crate support for [`FromSql`] and [`ToSql`] |
 //!
 //! # Modules
 //!
@@ -87,7 +89,7 @@ pub use column::{Column, ColumnType};
 pub use config::{AuthMethod, Config, EncryptionLevel};
 pub use error::{Error, Result};
 pub use pool::{Pool, PooledConnection, TdsManager};
-pub use query::{ExecuteResult, QueryResult, ToSql};
+pub use query::{DebugParams, ExecuteResult, QueryResult, ToSql};
 pub use row::{ColumnIndex, FromSql, Row};
 
 // Re-export mssql-tds types that consumers might need for advanced use.

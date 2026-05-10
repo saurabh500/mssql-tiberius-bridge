@@ -39,10 +39,18 @@ async fn prepare_select_arithmetic_runs_many_times_with_single_plan() {
         .prepare("SELECT @P1 + @P2 AS s", &[&0i32, &0i32])
         .await
         .expect("prepare");
-    assert!(stmt.handle() > 0, "sp_prepare should return positive handle");
+    assert!(
+        stmt.handle() > 0,
+        "sp_prepare should return positive handle"
+    );
     assert_eq!(stmt.sql(), "SELECT @P1 + @P2 AS s");
 
-    for (a, b, expected) in [(1i32, 2i32, 3i32), (10, 20, 30), (-5, 5, 0), (100, 200, 300)] {
+    for (a, b, expected) in [
+        (1i32, 2i32, 3i32),
+        (10, 20, 30),
+        (-5, 5, 0),
+        (100, 200, 300),
+    ] {
         let rows = stmt
             .query(&mut client, &[&a, &b])
             .await
@@ -71,10 +79,7 @@ async fn prepare_with_string_param_and_multiple_executions() {
     let mut client = Client::connect(&cfg).await.expect("connect");
 
     let stmt = client
-        .prepare(
-            "SELECT @P1 AS msg, LEN(@P1) AS n",
-            &[&"sample"],
-        )
+        .prepare("SELECT @P1 AS msg, LEN(@P1) AS n", &[&"sample"])
         .await
         .expect("prepare");
 

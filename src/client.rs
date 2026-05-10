@@ -64,6 +64,20 @@ impl Client {
         })
     }
 
+    /// Check whether the connection is alive and responsive.
+    ///
+    /// This sends a tiny `SELECT 1` batch and drains the result so the client is
+    /// ready for the next request. Connection pools can use this as a cheap
+    /// validation step before handing out an existing connection.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Tds`] if the batch fails or the connection cannot be used.
+    pub async fn ping(&mut self) -> Result<()> {
+        let _ = self.simple_query("SELECT 1").await?.into_first_result();
+        Ok(())
+    }
+
     /// Execute a raw SQL query without parameters.
     ///
     /// Mirrors tiberius' `simple_query`. The SQL is sent as a TDS SQL Batch
@@ -331,5 +345,11 @@ mod tests {
         let mut cfg = Config::new();
         cfg.host("myserver").port(1433).database("testdb");
         assert_eq!(cfg.datasource_string(), "tcp:myserver,1433");
+    }
+
+    #[test]
+    fn client_is_send_for_pooling() {
+        fn assert_send<T: Send>() {}
+        assert_send::<Client>();
     }
 }

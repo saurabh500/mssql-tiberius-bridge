@@ -185,22 +185,57 @@ async fn decimal_type() {
 }
 
 #[tokio::test]
+async fn client_ping() {
+    let cfg = test_config();
+    let mut client = Client::connect(&cfg).await.expect("connect failed");
+
+    client.ping().await.expect("ping failed");
+
+    let rows = client
+        .simple_query("SELECT 1 AS value")
+        .await
+        .expect("query after ping failed")
+        .into_first_result();
+    assert_eq!(rows[0].get::<i32, _>("value"), Some(1));
+}
+
+#[tokio::test]
+#[ignore = "requires SQL Server reachable at 10.0.0.21:1434 and TEST_DB_PASSWORD"]
+async fn client_ping_against_known_sql_server() {
+    let password = match std::env::var("TEST_DB_PASSWORD") {
+        Ok(p) => p,
+        Err(_) => {
+            eprintln!("TEST_DB_PASSWORD not set, skipping");
+            return;
+        }
+    };
+    let mut cfg = Config::new();
+    cfg.host("10.0.0.21")
+        .port(1434)
+        .database("master")
+        .authentication(AuthMethod::sql_server(
+            std::env::var("TEST_DB_USER").unwrap_or("sa".into()),
+            password,
+        ))
+        .trust_cert();
+
+    let mut client = Client::connect(&cfg).await.expect("connect failed");
+    client.ping().await.expect("ping failed");
+}
+
+#[tokio::test]
 async fn connection_pool() {
     let cfg = test_config();
     let pool = TdsManager::create_pool(cfg, 4).expect("pool creation failed");
 
     let mut conn = pool.get().await.expect("pool checkout failed");
 
-    // Use raw TdsClient API through the pool
-    use mssql_tds::connection::tds_client::{ResultSet, ResultSetClient};
-    conn.execute("SELECT 1".into(), None, None)
+    let rows = conn
+        .simple_query("SELECT 1 AS value")
         .await
-        .expect("execute failed");
-
-    if let Some(rs) = conn.get_current_resultset() {
-        let row = rs.next_row().await.expect("next_row failed");
-        assert!(row.is_some());
-    }
+        .expect("query failed")
+        .into_first_result();
+    assert_eq!(rows[0].get::<i32, _>("value"), Some(1));
 }
 
 #[tokio::test]

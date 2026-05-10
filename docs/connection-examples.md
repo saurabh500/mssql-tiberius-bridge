@@ -200,7 +200,7 @@ let mut client = Client::connect(&cfg).await?;
 
 ### `encryption(EncryptionLevel::Off)`
 
-Default is `On`; `Off` maps to `PreferOff`, encrypting login only and allowing data to flow unencrypted if the server permits it. Use only for legacy servers or controlled test networks.
+Default is `On`. `Off` is an **alias of `NotSupported`** — both map to `EncryptionSetting::PreferOff` in the underlying `mssql-tds` wiring. The pair exists for parity with tiberius' API; pick whichever reads better. The server can still upgrade the connection to TLS regardless.
 
 ```rust,no_run
 # async fn example() -> mssql_tiberius_bridge::Result<()> {
@@ -216,7 +216,7 @@ let mut client = Client::connect(&cfg).await?;
 
 ### `encryption(EncryptionLevel::NotSupported)`
 
-Default is `On`; `NotSupported` also maps to `PreferOff` in the current bridge wiring. Use it only when porting tiberius code that already uses this spelling.
+**Alias of `Off`** — both map to `EncryptionSetting::PreferOff`. Use whichever spelling matches the tiberius code you're porting.
 
 ```rust,no_run
 # async fn example() -> mssql_tiberius_bridge::Result<()> {
@@ -249,6 +249,10 @@ let mut client = Client::connect(&cfg).await?;
 ### `trust_cert_ca(...)`
 
 Default is no pinned certificate or CA path. Set `trust_cert_ca(path)` to provide a PEM or DER X.509 file for private PKI or self-signed SQL Server certificates; it sets `server_certificate` in the underlying TLS options.
+
+**Supersedes `trust_cert()`**: if you call both, `mssql-tds` logs a warning and uses the pinned certificate (`ServerCertificate takes precedence`); `trust_cert()` becomes a no-op.
+
+**Mutually exclusive with `host_name_in_certificate(...)`**: setting both makes `mssql-tds` fail the TLS handshake with a usage error. Pin a certificate *or* override the SNI hostname, not both.
 
 ```rust,no_run
 # async fn example() -> mssql_tiberius_bridge::Result<()> {

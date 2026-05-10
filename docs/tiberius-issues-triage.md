@@ -283,3 +283,50 @@ Each agent owns one tiberius issue or a tightly-related cluster.
 ---
 
 _Last updated: 2026-05-09_
+
+---
+
+## Bridge Issues Filed (Cross-Reference)
+
+The following bridge issues were filed from this triage to track the work:
+
+### Implemented (PRs landed or open)
+
+| Bridge | PR | Tiberius | What |
+|--------|----|----------|------|
+| #37 | #38 | #417 | cargo-audit clean + weekly CI |
+| #39 | #43 | #262 | `ColumnIndex` public |
+| #40 | #43 | #169 | Owned `String`/`Vec<u8>` `FromSql` |
+| #41 | #43 | #219 | Case-insensitive `Row::get_ci`/`try_get_ci` |
+| #42 | #43 | #211 | `try_get` panic audit |
+| #44 | #45 | #198, #299, #301 | `Client::ping()` |
+| #46 | #50 | #414 | `Config::client_name` |
+| #47 | #50 | #340 | `Config::host_name_in_certificate` |
+| #49 | #50 | #367 | `Config::send_string_parameters_as_unicode` |
+| —  | #51 | #368, #316, #160, #380, #371, #282, #221, #333 | Tier-2 repro tests |
+
+### Filed as tracking issues (work pending)
+
+| Bridge | Tiberius | Topic |
+|--------|----------|-------|
+| #48 | #224 | `accept_invalid_hostnames` (blocked on mssql-tds) |
+| #52 | #299 | `Client::reset_session()` / `sp_reset_connection` (blocked on mssql-tds) |
+| #53 | #311, #302, #410, #358, #322, #307, #319, #352, #373 | `Client::bulk_insert` (BCP) + options |
+| #55 | #28  | Transactions API |
+| #56 | #30  | Prepared Statements (`sp_prepare`/`sp_execute`) |
+| #57 | #115 | Serde `Deserialize` for `Row` |
+| #58 | #54  | Always Encrypted (CEK) |
+| #59 | #289 | Service Broker / `SqlDependency` |
+| #60 | #131, #53 | Named pipe + shared-memory transport |
+| #61 | #337 | MultiSubnetFailover |
+| #62 | #412 | TDS 8.0 Strict encryption (verify wiring) |
+| #63 | #397, #403, #217 | Full column metadata (Identity, nullable, size, scale, collation) |
+| #64 | #404 | `Debug` for `ToSql` |
+| #65 | #402 | `PartialEq`/`Eq` for `Row` |
+| #66 | #407, #276, #97 | NTLM on Linux/macOS without Kerberos |
+| #67 | #277 | `time` crate `ToSql`/`IntoSql` |
+| #68 | #354 | `jiff` crate support |
+| #69 | #257 | `geography`/`geometry` spatial types |
+| #70 | #381 | openssl backend for TLS 1.0/1.1 (legacy SQL Server) |
+
+**Total: 14 PRs/issues already implemented + 19 tracking issues filed = 33 bridge work items derived from the triage.**

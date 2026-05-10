@@ -192,11 +192,35 @@ impl futures_core::Stream for RowStream {
 pub trait ToSql: Send + Sync {
     /// Convert this value into an mssql-tds `SqlType` for parameter binding.
     fn to_sql(&self) -> SqlType;
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "<sql param>")
+    }
+}
+
+impl std::fmt::Debug for dyn ToSql + '_ {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.debug_fmt(f)
+    }
+}
+
+pub struct DebugParams<'a>(pub &'a [&'a dyn ToSql]);
+
+impl std::fmt::Debug for DebugParams<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_list()
+            .entries(self.0.iter().map(|p| *p as &dyn ToSql))
+            .finish()
+    }
 }
 
 impl ToSql for bool {
     fn to_sql(&self) -> SqlType {
         SqlType::Bit(Some(*self))
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
     }
 }
 
@@ -204,11 +228,19 @@ impl ToSql for u8 {
     fn to_sql(&self) -> SqlType {
         SqlType::TinyInt(Some(*self))
     }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
 }
 
 impl ToSql for i16 {
     fn to_sql(&self) -> SqlType {
         SqlType::SmallInt(Some(*self))
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
     }
 }
 
@@ -216,11 +248,19 @@ impl ToSql for i32 {
     fn to_sql(&self) -> SqlType {
         SqlType::Int(Some(*self))
     }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
 }
 
 impl ToSql for i64 {
     fn to_sql(&self) -> SqlType {
         SqlType::BigInt(Some(*self))
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
     }
 }
 
@@ -228,11 +268,19 @@ impl ToSql for f32 {
     fn to_sql(&self) -> SqlType {
         SqlType::Real(Some(*self))
     }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
 }
 
 impl ToSql for f64 {
     fn to_sql(&self) -> SqlType {
         SqlType::Float(Some(*self))
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
     }
 }
 
@@ -243,11 +291,19 @@ impl ToSql for &str {
             4000, // default max length
         )
     }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
 }
 
 impl ToSql for String {
     fn to_sql(&self) -> SqlType {
         SqlType::NVarchar(Some(SqlString::from_utf8_string(self.clone())), 4000)
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
     }
 }
 
@@ -269,6 +325,17 @@ impl<T: ToSql + Default> ToSql for Option<T> {
                 // For simplicity, default to NVarchar NULL.
                 SqlType::NVarchar(None, 4000)
             }
+        }
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Some(v) => {
+                f.write_str("Some(")?;
+                v.debug_fmt(f)?;
+                f.write_str(")")
+            }
+            None => f.write_str("None"),
         }
     }
 }
@@ -374,6 +441,148 @@ mod chrono_to_sql {
     }
 }
 
+#[cfg(feature = "time")]
+mod time_to_sql {
+    use super::{SqlType, ToSql};
+    use chrono::Datelike;
+    use mssql_tds::datatypes::column_values::{
+        SqlDate, SqlDateTime2, SqlDateTimeOffset, SqlTime, DEFAULT_VARTIME_SCALE,
+    };
+    use time::{Date, OffsetDateTime, PrimitiveDateTime, Time, UtcOffset};
+
+    fn date_to_sql(d: Date) -> SqlDate {
+        let chrono_date =
+            chrono::NaiveDate::from_ymd_opt(d.year(), u8::from(d.month()) as u32, d.day() as u32)
+                .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)");
+        SqlDate::create((chrono_date.num_days_from_ce() - 1) as u32)
+            .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)")
+    }
+
+    fn time_to_sql(t: Time) -> SqlTime {
+        let nanos_since_midnight = (t.hour() as u64) * 3_600_000_000_000
+            + (t.minute() as u64) * 60_000_000_000
+            + (t.second() as u64) * 1_000_000_000
+            + t.nanosecond() as u64;
+        SqlTime {
+            time_nanoseconds: nanos_since_midnight / 100,
+            scale: DEFAULT_VARTIME_SCALE,
+        }
+    }
+
+    fn primitive_dt_to_sql(dt: PrimitiveDateTime) -> SqlDateTime2 {
+        SqlDateTime2 {
+            days: date_to_sql(dt.date()).get_days(),
+            time: time_to_sql(dt.time()),
+        }
+    }
+
+    impl ToSql for Date {
+        fn to_sql(&self) -> SqlType {
+            SqlType::Date(Some(date_to_sql(*self)))
+        }
+    }
+
+    impl ToSql for Time {
+        fn to_sql(&self) -> SqlType {
+            SqlType::Time(Some(time_to_sql(*self)))
+        }
+    }
+
+    impl ToSql for PrimitiveDateTime {
+        fn to_sql(&self) -> SqlType {
+            SqlType::DateTime2(Some(primitive_dt_to_sql(*self)))
+        }
+    }
+
+    impl ToSql for OffsetDateTime {
+        fn to_sql(&self) -> SqlType {
+            let offset = self.offset();
+            let utc = self.to_offset(UtcOffset::UTC);
+            SqlType::DateTimeOffset(Some(SqlDateTimeOffset {
+                datetime2: primitive_dt_to_sql(PrimitiveDateTime::new(utc.date(), utc.time())),
+                offset: (offset.whole_seconds() / 60) as i16,
+            }))
+        }
+    }
+}
+
+#[cfg(feature = "jiff")]
+mod jiff_to_sql {
+    use super::{SqlType, ToSql};
+    use chrono::Datelike;
+    use jiff::{civil, tz::TimeZone, Timestamp, Zoned};
+    use mssql_tds::datatypes::column_values::{
+        SqlDate, SqlDateTime2, SqlDateTimeOffset, SqlTime, DEFAULT_VARTIME_SCALE,
+    };
+
+    fn date_to_sql(d: civil::Date) -> SqlDate {
+        let chrono_date =
+            chrono::NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)
+                .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)");
+        SqlDate::create((chrono_date.num_days_from_ce() - 1) as u32)
+            .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)")
+    }
+
+    fn time_to_sql(t: civil::Time) -> SqlTime {
+        let nanos_since_midnight = (t.hour() as u64) * 3_600_000_000_000
+            + (t.minute() as u64) * 60_000_000_000
+            + (t.second() as u64) * 1_000_000_000
+            + t.subsec_nanosecond() as u64;
+        SqlTime {
+            time_nanoseconds: nanos_since_midnight / 100,
+            scale: DEFAULT_VARTIME_SCALE,
+        }
+    }
+
+    fn datetime_to_sql(dt: civil::DateTime) -> SqlDateTime2 {
+        SqlDateTime2 {
+            days: date_to_sql(dt.date()).get_days(),
+            time: time_to_sql(dt.time()),
+        }
+    }
+
+    fn timestamp_to_sql(timestamp: Timestamp, offset_minutes: i16) -> SqlDateTimeOffset {
+        let utc = TimeZone::UTC.to_datetime(timestamp);
+        SqlDateTimeOffset {
+            datetime2: datetime_to_sql(utc),
+            offset: offset_minutes,
+        }
+    }
+
+    impl ToSql for civil::Date {
+        fn to_sql(&self) -> SqlType {
+            SqlType::Date(Some(date_to_sql(*self)))
+        }
+    }
+
+    impl ToSql for civil::Time {
+        fn to_sql(&self) -> SqlType {
+            SqlType::Time(Some(time_to_sql(*self)))
+        }
+    }
+
+    impl ToSql for civil::DateTime {
+        fn to_sql(&self) -> SqlType {
+            SqlType::DateTime2(Some(datetime_to_sql(*self)))
+        }
+    }
+
+    impl ToSql for Timestamp {
+        fn to_sql(&self) -> SqlType {
+            SqlType::DateTimeOffset(Some(timestamp_to_sql(*self, 0)))
+        }
+    }
+
+    impl ToSql for Zoned {
+        fn to_sql(&self) -> SqlType {
+            SqlType::DateTimeOffset(Some(timestamp_to_sql(
+                self.timestamp(),
+                (self.offset().seconds() / 60) as i16,
+            )))
+        }
+    }
+}
+
 fn encode_string_parameters(sql_type: SqlType, unicode: bool) -> SqlType {
     if unicode {
         return sql_type;
@@ -426,6 +635,35 @@ mod tests {
         let params = build_params(&[&1i32, &"test"]);
         assert_eq!(params.len(), 2);
         // name field is pub(crate) in mssql-tds, so we just verify count
+    }
+
+    #[test]
+    fn debug_params_formats_values() {
+        let none = None::<i32>;
+        let params: &[&dyn ToSql] = &[&1i32, &"test", &none];
+        assert_eq!(format!("{:?}", DebugParams(params)), r#"[1, "test", None]"#);
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn time_date_roundtrips_through_column_data() {
+        let date = time::Date::from_calendar_date(2024, time::Month::February, 29).unwrap();
+        let SqlType::Date(Some(sql_date)) = date.to_sql() else {
+            panic!("expected SQL date")
+        };
+        let value = ColumnValues::Date(sql_date);
+        assert_eq!(crate::FromSql::from_sql(&value), Some(date));
+    }
+
+    #[cfg(feature = "jiff")]
+    #[test]
+    fn jiff_date_roundtrips_through_column_data() {
+        let date = jiff::civil::date(2024, 2, 29);
+        let SqlType::Date(Some(sql_date)) = date.to_sql() else {
+            panic!("expected SQL date")
+        };
+        let value = ColumnValues::Date(sql_date);
+        assert_eq!(crate::FromSql::from_sql(&value), Some(date));
     }
 
     #[test]

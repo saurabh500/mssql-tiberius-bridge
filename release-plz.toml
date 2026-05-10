@@ -1,0 +1,52 @@
+[workspace]
+# Changelog: Keep-a-Changelog format, generated from conventional commits.
+changelog_update = true
+# Don't auto-publish from release-plz workflow; publish.yml stays the gate.
+# Set to true once you trust the pipeline end-to-end.
+publish = false
+# Auto-create a GitHub Release with notes when the Release PR merges.
+git_release_enable = true
+git_release_type = "auto"
+# Group commits by Conventional Commit type in CHANGELOG.md.
+git_tag_enable = true
+
+[changelog]
+# Keep-a-Changelog style with section grouping by commit type.
+header = """# Changelog
+
+All notable changes to this project will be documented in this file.
+
+The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
+and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+"""
+body = """
+## [{{ version }}]{% if release_link %}({{ release_link }}){% endif %} - {{ timestamp | date(format="%Y-%m-%d") }}
+{% for group, commits in commits | group_by(attribute="group") %}
+### {{ group | upper_first }}
+{% for commit in commits %}
+- {% if commit.scope %}*({{ commit.scope }})* {% endif %}\
+    {% if commit.breaking %}[**breaking**] {% endif %}\
+    {{ commit.message | upper_first }}\
+    {% if commit.links %} ({% for link in commit.links %}[{{ link.text }}]({{ link.href }}){% if not loop.last %}, {% endif %}{% endfor %}){% endif %}\
+{% endfor %}
+{% endfor %}
+"""
+trim = true
+commit_parsers = [
+    { message = "^feat", group = "Added" },
+    { message = "^fix", group = "Fixed" },
+    { message = "^perf", group = "Performance" },
+    { message = "^refactor", group = "Changed" },
+    { message = "^docs", group = "Documentation" },
+    { message = "^test", group = "Tests" },
+    { message = "^chore\\(deps\\)", group = "Dependencies" },
+    { message = "^chore\\(release\\)", skip = true },
+    { message = "^chore", skip = true },
+    { message = "^ci", skip = true },
+    { message = "^style", skip = true },
+    { body = ".*security", group = "Security" },
+]
+link_parsers = [
+    { pattern = "#(\\d+)", href = "https://github.com/saurabh500/mssql-tiberius-bridge/issues/$1", text = "#$1" },
+]

@@ -1,0 +1,64 @@
+name: Release-plz
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  pull-requests: write
+  contents: write
+
+jobs:
+  # Opens (or updates) a "Release PR" that bumps the version in Cargo.toml
+  # and regenerates CHANGELOG.md from conventional commits since the last release.
+  # Merge the PR to cut a release.
+  release-plz-pr:
+    name: Release-plz PR
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'saurabh500'
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz (release-pr)
+        uses: release-plz/action@v0.5
+        with:
+          command: release-pr
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # When a Release PR merges (Cargo.toml version bump lands on main),
+  # this job tags the release and creates the GitHub Release with notes.
+  # Crates.io publish is intentionally left to the existing publish.yml
+  # workflow (manual `workflow_dispatch`) until the pipeline is trusted
+  # end-to-end. To enable auto-publish, flip `publish = true` in release-plz.toml
+  # and add CARGO_REGISTRY_TOKEN to this job's env.
+  release-plz-release:
+    name: Release-plz tag + GH release
+    runs-on: ubuntu-latest
+    if: github.repository_owner == 'saurabh500'
+    concurrency:
+      group: release-plz-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Run release-plz (release)
+        uses: release-plz/action@v0.5
+        with:
+          command: release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -4,6 +4,16 @@
 //! Closes [#56](https://github.com/saurabh500/mssql-tiberius-bridge/issues/56)
 //! (mirrors upstream tiberius [#30](https://github.com/prisma/tiberius/issues/30)).
 //!
+//! # Status
+//!
+//! Prepared statements **with parameters** are currently blocked on upstream
+//! [saurabh500/mssql-rs#5](https://github.com/saurabh500/mssql-rs/issues/5):
+//! `execute_sp_prepare` attaches caller-supplied named params to the RPC,
+//! which causes `sp_prepare` to fail server-side and return a NULL handle.
+//! Integration tests in `tests/prepared_statement.rs` covering parameterized
+//! prepare are marked `#[ignore]` until the upstream fix lands. Parameterless
+//! prepared statements work today.
+//!
 //! # Why
 //!
 //! Sending a parameterized query through [`Client::query`](crate::Client::query)

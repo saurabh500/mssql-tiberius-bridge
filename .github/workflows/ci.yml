@@ -114,16 +114,18 @@ jobs:
           docker logs mssql || true
           exit 1
 
-      - name: Verify Strict-mode handshake works against the container
-        # Quick sanity check independent of the Rust suite: does sqlcmd
-        # using -N s (strict) accept the cert we just installed? This
-        # catches cert/conf mistakes before the Rust tests run.
+      - name: Verify SQL Server is presenting our cert
+        # `openssl s_client` against the TDS port speaks plain TLS thanks to
+        # forceencryption=0 (server still negotiates TLS for login). We dump
+        # the leaf cert subject/issuer to confirm SQL Server loaded the cert
+        # we generated, not its own auto-generated one.
         run: |
           set -eu
-          docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
-            -S localhost -U sa -P "$SA_PASSWORD" \
-            -N s -C \
-            -Q "SELECT CAST(encrypt_option AS varchar(10)) FROM sys.dm_exec_connections WHERE session_id = @@SPID"
+          echo | openssl s_client -connect localhost:1433 -showcerts -servername localhost 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -ext subjectAltName,basicConstraints \
+            | tee /tmp/server-cert-summary.txt
+          grep -q "subject=CN.*localhost" /tmp/server-cert-summary.txt
+          grep -q "CA:TRUE"               /tmp/server-cert-summary.txt
 
       - name: Check formatting
         run: cargo fmt --all -- --check

@@ -108,10 +108,13 @@ pub struct Config {
     auth: AuthMethod,
     trust_cert: bool,
     server_certificate: Option<String>,
+    host_name_in_certificate: Option<String>,
     readonly: bool,
     encryption: EncryptionLevel,
     application_name: Option<String>,
     instance_name: Option<String>,
+    client_name: Option<String>,
+    send_string_parameters_as_unicode: bool,
 }
 
 impl Config {
@@ -127,10 +130,13 @@ impl Config {
             },
             trust_cert: false,
             server_certificate: None,
+            host_name_in_certificate: None,
             readonly: false,
             encryption: EncryptionLevel::On,
             application_name: None,
             instance_name: None,
+            client_name: None,
+            send_string_parameters_as_unicode: true,
         }
     }
 
@@ -189,6 +195,30 @@ impl Config {
     pub fn trust_cert_ca(&mut self, path: impl Into<String>) -> &mut Self {
         self.server_certificate = Some(path.into());
         self
+    }
+
+    /// Override the hostname used for TLS certificate name validation.
+    pub fn host_name_in_certificate(&mut self, name: impl Into<String>) -> &mut Self {
+        self.host_name_in_certificate = Some(name.into());
+        self
+    }
+
+    /// Set the client workstation name sent in the Login7 packet.
+    pub fn client_name(&mut self, name: impl Into<String>) -> &mut Self {
+        self.client_name = Some(name.into());
+        self
+    }
+
+    /// Controls whether `&str` and `String` parameters are sent as NVARCHAR.
+    ///
+    /// Defaults to `true`. Set to `false` to send string parameters as VARCHAR.
+    pub fn send_string_parameters_as_unicode(&mut self, enabled: bool) -> &mut Self {
+        self.send_string_parameters_as_unicode = enabled;
+        self
+    }
+
+    pub(crate) fn string_parameters_as_unicode(&self) -> bool {
+        self.send_string_parameters_as_unicode
     }
 
     /// Send `ApplicationIntent=ReadOnly` in the login (mirrors tiberius'
@@ -275,6 +305,7 @@ impl Config {
 
         ctx.encryption_options.trust_server_certificate = self.trust_cert;
         ctx.encryption_options.server_certificate = self.server_certificate.clone();
+        ctx.encryption_options.host_name_in_cert = self.host_name_in_certificate.clone();
 
         match self.encryption {
             EncryptionLevel::Off => ctx.encryption_options.mode = EncryptionSetting::PreferOff,
@@ -288,6 +319,10 @@ impl Config {
 
         if let Some(ref app) = self.application_name {
             ctx.application_name = app.clone();
+        }
+
+        if let Some(ref client_name) = self.client_name {
+            ctx.workstation_id = client_name.clone();
         }
 
         // ── Driver identity ──
@@ -445,5 +480,42 @@ mod tests {
         // UserAgent feature extension fields
         assert_eq!(ctx.user_agent.library_name, "MS-TIB-BRID");
         assert_eq!(ctx.user_agent.driver_version, env!("CARGO_PKG_VERSION"));
+    }
+
+    #[test]
+    fn client_name_sets_workstation_id() {
+        let mut cfg = Config::new();
+        cfg.client_name("app-host-01");
+        assert_eq!(cfg.to_client_context().workstation_id, "app-host-01");
+    }
+
+    #[test]
+    fn default_client_name_comes_from_mssql_tds() {
+        let cfg = Config::new();
+        assert_eq!(
+            cfg.to_client_context().workstation_id,
+            ClientContext::default().workstation_id
+        );
+    }
+
+    #[test]
+    fn host_name_in_certificate_sets_tls_override() {
+        let mut cfg = Config::new();
+        cfg.host_name_in_certificate("sql.example.com");
+        assert_eq!(
+            cfg.to_client_context()
+                .encryption_options
+                .host_name_in_cert
+                .as_deref(),
+            Some("sql.example.com")
+        );
+    }
+
+    #[test]
+    fn send_string_parameters_as_unicode_defaults_to_true() {
+        let mut cfg = Config::new();
+        assert!(cfg.string_parameters_as_unicode());
+        cfg.send_string_parameters_as_unicode(false);
+        assert!(!cfg.string_parameters_as_unicode());
     }
 }

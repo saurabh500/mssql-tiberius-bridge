@@ -374,14 +374,37 @@ mod chrono_to_sql {
     }
 }
 
+fn encode_string_parameters(sql_type: SqlType, unicode: bool) -> SqlType {
+    if unicode {
+        return sql_type;
+    }
+
+    match sql_type {
+        SqlType::NVarchar(value, len) => SqlType::Varchar(value, len),
+        SqlType::NVarcharMax(value) => SqlType::VarcharMax(value),
+        other => other,
+    }
+}
+
 /// Build a Vec<RpcParameter> from a slice of ToSql values, using positional
 /// naming (@P1, @P2, ...) like tiberius.
 pub fn build_params(params: &[&dyn ToSql]) -> Vec<RpcParameter> {
+    build_params_with_string_encoding(params, true)
+}
+
+pub(crate) fn build_params_with_string_encoding(
+    params: &[&dyn ToSql],
+    unicode: bool,
+) -> Vec<RpcParameter> {
     params
         .iter()
         .enumerate()
         .map(|(i, p)| {
-            RpcParameter::new(Some(format!("@P{}", i + 1)), StatusFlags::NONE, p.to_sql())
+            RpcParameter::new(
+                Some(format!("@P{}", i + 1)),
+                StatusFlags::NONE,
+                encode_string_parameters(p.to_sql(), unicode),
+            )
         })
         .collect()
 }
@@ -403,6 +426,18 @@ mod tests {
         let params = build_params(&[&1i32, &"test"]);
         assert_eq!(params.len(), 2);
         // name field is pub(crate) in mssql-tds, so we just verify count
+    }
+
+    #[test]
+    fn string_parameter_encoding_can_use_varchar() {
+        let ty = encode_string_parameters("hello".to_sql(), false);
+        assert!(matches!(ty, SqlType::Varchar(_, 4000)));
+    }
+
+    #[test]
+    fn string_parameter_encoding_defaults_to_nvarchar() {
+        let ty = encode_string_parameters("hello".to_sql(), true);
+        assert!(matches!(ty, SqlType::NVarchar(_, 4000)));
     }
 
     #[test]

@@ -12,7 +12,7 @@ use mssql_tds::query::metadata::ColumnMetadata;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
-use crate::query::{build_params, ExecuteResult, QueryResult, ToSql};
+use crate::query::{build_params_with_string_encoding, ExecuteResult, QueryResult, ToSql};
 
 /// An async SQL Server client with tiberius-style query methods.
 ///
@@ -36,6 +36,7 @@ use crate::query::{build_params, ExecuteResult, QueryResult, ToSql};
 /// ```
 pub struct Client {
     inner: TdsClient,
+    send_string_parameters_as_unicode: bool,
 }
 
 impl Client {
@@ -57,7 +58,10 @@ impl Client {
             .create_client(ctx, &datasource, None)
             .await
             .map_err(Error::Tds)?;
-        Ok(Client { inner: client })
+        Ok(Client {
+            inner: client,
+            send_string_parameters_as_unicode: config.string_parameters_as_unicode(),
+        })
     }
 
     /// Execute a raw SQL query without parameters.
@@ -133,7 +137,8 @@ impl Client {
         }
 
         self.inner.close_query().await.map_err(Error::Tds)?;
-        let rpc_params = build_params(params);
+        let rpc_params =
+            build_params_with_string_encoding(params, self.send_string_parameters_as_unicode);
         self.inner
             .execute_sp_executesql(sql, rpc_params, None, None)
             .await
@@ -170,7 +175,8 @@ impl Client {
                 .await
                 .map_err(Error::Tds)?;
         } else {
-            let rpc_params = build_params(params);
+            let rpc_params =
+                build_params_with_string_encoding(params, self.send_string_parameters_as_unicode);
             self.inner
                 .execute_sp_executesql(sql, rpc_params, None, None)
                 .await
@@ -233,7 +239,10 @@ impl Client {
         let rpc_params = if params.is_empty() {
             None
         } else {
-            Some(build_params(params))
+            Some(build_params_with_string_encoding(
+                params,
+                self.send_string_parameters_as_unicode,
+            ))
         };
         Box::pin(async_stream::try_stream! {
             // Drain any leftover state from a prior query / dropped stream

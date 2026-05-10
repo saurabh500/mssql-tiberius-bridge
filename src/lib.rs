@@ -97,3 +97,6 @@ pub use mssql_tds::connection::tds_client::TdsClient;
 /// Raw column values from mssql-tds, exposed for low-level access
 /// via [`Row::raw_value()`].
 pub use mssql_tds::datatypes::column_values::ColumnValues;
+/// Decimal/Numeric value representation from mssql-tds.
+/// Returned inside `ColumnValues::Decimal` and `ColumnValues::Numeric`.
+pub use mssql_tds::datatypes::decoder::DecimalParts;

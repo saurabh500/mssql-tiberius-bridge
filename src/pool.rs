@@ -16,10 +16,9 @@
 
 use deadpool::managed::{Manager, Metrics, RecycleError, RecycleResult};
 
-use mssql_tds::connection::tds_client::{ResultSet, ResultSetClient, TdsClient};
-use mssql_tds::connection_provider::tds_connection_provider::TdsConnectionProvider;
-
+use crate::client::Client;
 use crate::config::Config;
+use crate::error::Error;
 
 /// A checked-out connection from the pool.
 pub type PooledConnection = deadpool::managed::Object<TdsManager>;
@@ -29,7 +28,7 @@ pub type Pool = deadpool::managed::Pool<TdsManager>;
 
 /// [`deadpool::managed::Manager`] implementation for mssql-tds connections.
 ///
-/// Creates and recycles `TdsClient` connections using the provided [`Config`].
+/// Creates and recycles [`Client`] connections using the provided [`Config`].
 #[derive(Debug, Clone)]
 pub struct TdsManager {
     config: Config,
@@ -56,35 +55,15 @@ impl TdsManager {
 }
 
 impl Manager for TdsManager {
-    type Type = TdsClient;
-    type Error = mssql_tds::error::Error;
+    type Type = Client;
+    type Error = Error;
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
-        let ctx = self.config.to_client_context();
-        let datasource = self.config.datasource_string();
-        let provider = TdsConnectionProvider {};
-        provider.create_client(ctx, &datasource, None).await
+        Client::connect(&self.config).await
     }
 
     async fn recycle(&self, conn: &mut Self::Type, _: &Metrics) -> RecycleResult<Self::Error> {
-        // Cheap ping to verify the connection is alive.
-        conn.execute("SELECT 1".to_string(), None, None)
-            .await
-            .map_err(RecycleError::Backend)?;
-
-        // Drain the result to reset state.
-        if let Some(rs) = conn.get_current_resultset() {
-            while rs
-                .next_row()
-                .await
-                .map_err(RecycleError::Backend)?
-                .is_some()
-            {}
-        }
-        // Move past any remaining result sets.
-        while conn.move_to_next().await.map_err(RecycleError::Backend)? {}
-
-        Ok(())
+        conn.ping().await.map_err(RecycleError::Backend)
     }
 }
 

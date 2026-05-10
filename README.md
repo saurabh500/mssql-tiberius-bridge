@@ -12,6 +12,7 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://github.c
 - `stream.into_first_result()` — collect results into `Vec<Row>`
 - `stream.into_row_stream()` — `Stream<Item = Result<Row>>` over a buffered `QueryResult` (rows pre-buffered)
 - `client.query_streamed(sql, params)` / `simple_query_streamed(sql)` — true wire-level row streaming for memory-bounded large result sets
+- `client.ping()` — lightweight liveness check for connection pools
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
 - `Config::new().host().port().trust_cert()` — fluent builder
 - `Config::trust_cert_ca("ca.pem")` — pin a CA certificate (mirrors tiberius)
@@ -56,6 +57,7 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
 | `Client::connect(config, tcp)` | `Client::connect(&config)` (handles TCP internally) |
 | `conn.simple_query(sql)` | `client.simple_query(sql)` |
 | `conn.query(sql, &[&p1])` | `client.query(sql, &[&p1])` |
+| connection-pool validation | `client.ping()` |
 | `stream.into_first_result()` | `.into_first_result()` |
 | `row.get::<&str, _>("col")` | `row.get::<&str, _>("col")` |
 | `tiberius::AuthMethod::sql_server` | `AuthMethod::sql_server` |

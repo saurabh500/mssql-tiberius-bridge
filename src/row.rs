@@ -94,26 +94,51 @@ impl Row {
         self.values.is_empty()
     }
 
-    /// Get a column value by name. Returns `None` if the column is NULL or
-    /// the type doesn't match. Panics if the column name doesn't exist.
+    /// Get a column value by name or index. Returns `None` if the column is NULL
+    /// or the type doesn't match. Panics if the column doesn't exist.
     pub fn get<'a, T: FromSql<'a>, I: ColumnIndex>(&'a self, col: I) -> Option<T> {
-        let idx = col.resolve(self).expect("column not found");
-        T::from_sql_with_str(&self.values[idx], self.decoded_strings[idx].as_deref())
+        self.try_get(col).expect("column not found")
     }
 
     /// Try to get a column value by name or index, returning a `Result`.
     pub fn try_get<'a, T: FromSql<'a>, I: ColumnIndex>(&'a self, col: I) -> Result<Option<T>> {
         let idx = col.resolve(self)?;
-        if idx >= self.values.len() {
-            return Err(Error::ColumnIndexOutOfBounds {
-                index: idx,
-                count: self.values.len(),
-            });
-        }
+        self.try_get_at(idx)
+    }
+
+    /// Get a column value by name using case-insensitive lookup. Returns `None`
+    /// if the column is NULL or the type doesn't match. Panics if the column
+    /// doesn't exist.
+    pub fn get_ci<'a, T: FromSql<'a>>(&'a self, name: &str) -> Option<T> {
+        self.try_get_ci(name).expect("column not found")
+    }
+
+    /// Try to get a column value by name using case-insensitive lookup.
+    pub fn try_get_ci<'a, T: FromSql<'a>>(&'a self, name: &str) -> Result<Option<T>> {
+        let idx = self.resolve_name_ci(name)?;
+        self.try_get_at(idx)
+    }
+
+    fn try_get_at<'a, T: FromSql<'a>>(&'a self, idx: usize) -> Result<Option<T>> {
+        let value = self.values.get(idx).ok_or(Error::ColumnIndexOutOfBounds {
+            index: idx,
+            count: self.values.len(),
+        })?;
         Ok(T::from_sql_with_str(
-            &self.values[idx],
-            self.decoded_strings[idx].as_deref(),
+            value,
+            self.decoded_strings.get(idx).and_then(|s| s.as_deref()),
         ))
+    }
+
+    fn resolve_name_ci(&self, name: &str) -> Result<usize> {
+        if let Some(idx) = self.column_index(name) {
+            return Ok(idx);
+        }
+        self.schema
+            .columns
+            .iter()
+            .position(|c| c.name.eq_ignore_ascii_case(name))
+            .ok_or_else(|| Error::ColumnNotFound(name.to_string()))
     }
 
     /// Raw access to the underlying ColumnValues at a given index.
@@ -306,6 +331,15 @@ impl<'a> FromSql<'a> for Vec<u8> {
     fn from_sql(val: &'a ColumnValues) -> Option<Self> {
         match val {
             ColumnValues::Bytes(b) => Some(b.clone()),
+            _ => None,
+        }
+    }
+}
+
+impl<'a> FromSql<'a> for &'a [u8] {
+    fn from_sql(val: &'a ColumnValues) -> Option<Self> {
+        match val {
+            ColumnValues::Bytes(b) => Some(b.as_slice()),
             _ => None,
         }
     }
@@ -514,6 +548,61 @@ mod tests {
     fn bytes_extraction() {
         let row = make_row(&["b"], vec![ColumnValues::Bytes(vec![1, 2, 3])]);
         assert_eq!(row.get::<Vec<u8>, _>("b"), Some(vec![1, 2, 3]));
+        assert_eq!(row.get::<&[u8], _>("b"), Some(&[1, 2, 3][..]));
+    }
+
+    #[test]
+    fn case_insensitive_lookup() {
+        let row = make_row(
+            &["UserName", "id"],
+            vec![
+                ColumnValues::String(SqlString::from_utf8_string("ada".into())),
+                ColumnValues::Int(7),
+            ],
+        );
+
+        assert_eq!(row.try_get_ci::<&str>("username").unwrap(), Some("ada"));
+        assert_eq!(row.get_ci::<String>("USERNAME"), Some("ada".into()));
+        assert_eq!(row.try_get_ci::<i32>("ID").unwrap(), Some(7));
+        assert!(matches!(
+            row.try_get_ci::<i32>("missing"),
+            Err(Error::ColumnNotFound(name)) if name == "missing"
+        ));
+    }
+
+    #[test]
+    fn try_get_errors_without_panicking() {
+        let row = make_row(
+            &["a"],
+            vec![ColumnValues::String(SqlString::from_utf8_string(
+                "x".into(),
+            ))],
+        );
+
+        assert!(matches!(
+            row.try_get::<i32, _>(1usize),
+            Err(Error::ColumnIndexOutOfBounds { index: 1, count: 1 })
+        ));
+        assert!(matches!(
+            row.try_get::<i32, _>("missing"),
+            Err(Error::ColumnNotFound(name)) if name == "missing"
+        ));
+        assert_eq!(row.try_get::<i32, _>("a").unwrap(), None);
+    }
+
+    #[test]
+    fn null_smallint_as_i32_returns_none_cleanly() {
+        let columns = vec![Column {
+            name: "small".to_string(),
+            column_type: crate::column::ColumnType::Int2,
+            nullable: true,
+        }];
+        let name_map = HashMap::from([("small".to_string(), 0)]);
+        let schema = Arc::new(RowSchema { columns, name_map });
+        let row = Row::from_schema(schema, vec![ColumnValues::Null]);
+
+        assert_eq!(row.try_get::<i32, _>("small").unwrap(), None);
+        assert_eq!(row.try_get::<Option<i32>, _>("small").unwrap(), Some(None));
     }
 
     #[test]

@@ -152,6 +152,42 @@ impl Row {
     }
 }
 
+/// Equality on `Row` compares **column types and cell values**. Names and
+/// other server-side metadata (nullability, identity, computed, collation,
+/// …) are intentionally ignored so that rows produced from different result
+/// sets — or built by tests with placeholder names — can be asserted equal
+/// when the data shape matches.
+///
+/// `Row` does **not** implement `Eq` because [`ColumnValues`] holds floats
+/// (`Float`/`Real`), which only satisfy `PartialEq`. Comparisons involving
+/// `NaN` follow IEEE-754 semantics: `NaN != NaN`.
+///
+/// Mirrors the request in prisma/tiberius#402.
+///
+/// # Example
+///
+/// ```rust,no_run
+/// # fn example(actual: mssql_tiberius_bridge::Row, expected: mssql_tiberius_bridge::Row) {
+/// assert_eq!(actual, expected);
+/// # }
+/// ```
+impl PartialEq for Row {
+    fn eq(&self, other: &Self) -> bool {
+        // Cheap pointer-equality fast path for rows that share an Arc<RowSchema>
+        // (the common case inside a single result set).
+        let schemas_match = Arc::ptr_eq(&self.schema, &other.schema)
+            || (self.schema.columns.len() == other.schema.columns.len()
+                && self
+                    .schema
+                    .columns
+                    .iter()
+                    .zip(other.schema.columns.iter())
+                    .all(|(a, b)| a.column_type == b.column_type));
+
+        schemas_match && self.values == other.values
+    }
+}
+
 // ---------------------------------------------------------------------------
 // ColumnIndex — resolve &str or usize to a positional index
 // ---------------------------------------------------------------------------
@@ -753,5 +789,93 @@ mod tests {
     fn str_non_string_column_returns_none() {
         let row = make_row(&["i"], vec![ColumnValues::Int(42)]);
         assert_eq!(row.get::<&str, _>("i"), None);
+    }
+
+    // ── PartialEq for Row (issue #65) ──
+
+    #[test]
+    fn eq_same_arc_schema_same_values() {
+        let columns = vec![Column::test_column(
+            "id",
+            crate::column::ColumnType::Int4,
+            4,
+        )];
+        let name_map: HashMap<String, usize> = [("id".to_string(), 0)].into();
+        let schema = Arc::new(RowSchema { columns, name_map });
+
+        let a = Row::from_schema(Arc::clone(&schema), vec![ColumnValues::Int(1)]);
+        let b = Row::from_schema(schema, vec![ColumnValues::Int(1)]);
+        assert_eq!(a, b);
+    }
+
+    #[test]
+    fn eq_independent_schemas_with_matching_types_and_values() {
+        let r1 = make_row(
+            &["id", "name"],
+            vec![
+                ColumnValues::Int(42),
+                ColumnValues::String(SqlString::from_utf8_string("hi".into())),
+            ],
+        );
+        let r2 = make_row(
+            &["different_id", "different_name"],
+            vec![
+                ColumnValues::Int(42),
+                ColumnValues::String(SqlString::from_utf8_string("hi".into())),
+            ],
+        );
+        assert_eq!(r1, r2, "names should not affect equality");
+    }
+
+    #[test]
+    fn ne_different_values() {
+        let a = make_row(&["v"], vec![ColumnValues::Int(1)]);
+        let b = make_row(&["v"], vec![ColumnValues::Int(2)]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn ne_different_arity() {
+        let a = make_row(&["v"], vec![ColumnValues::Int(1)]);
+        let b = make_row(
+            &["a", "b"],
+            vec![ColumnValues::Int(1), ColumnValues::Int(2)],
+        );
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn ne_different_column_types_same_arity() {
+        // Build two rows where the value types coincide on the wire (both
+        // are the bridge's "Int" carrier) but the schemas claim different
+        // column types — equality should reject the mismatch.
+        let cols_a = vec![Column::test_column("v", crate::column::ColumnType::Int4, 4)];
+        let cols_b = vec![Column::test_column("v", crate::column::ColumnType::Int8, 8)];
+        let schema_a = Arc::new(RowSchema {
+            name_map: [("v".to_string(), 0)].into(),
+            columns: cols_a,
+        });
+        let schema_b = Arc::new(RowSchema {
+            name_map: [("v".to_string(), 0)].into(),
+            columns: cols_b,
+        });
+        let a = Row::from_schema(schema_a, vec![ColumnValues::Int(1)]);
+        let b = Row::from_schema(schema_b, vec![ColumnValues::Int(1)]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn ne_nan_floats() {
+        // PartialEq follows IEEE-754 — NaN is never equal to itself.
+        let a = make_row(&["v"], vec![ColumnValues::Float(f64::NAN)]);
+        let b = make_row(&["v"], vec![ColumnValues::Float(f64::NAN)]);
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn eq_nulls() {
+        let a = make_row(&["x"], vec![ColumnValues::Null]);
+        let b = make_row(&["x"], vec![ColumnValues::Null]);
+        assert_eq!(a, b);
     }
 }

@@ -11,6 +11,21 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+## [0.1.0-preview.4](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.3...v0.1.0-preview.4) - 2026-05-10
+
+### Added
+
+- Implement Client::bulk_insert (BCP) — closes #53 ([#53](https://github.com/saurabh500/mssql-tiberius-bridge/issues/53), [#53](https://github.com/saurabh500/mssql-tiberius-bridge/issues/53))
+- *(row)* Add serde::Deserialize support behind 'serde' feature ([#57](https://github.com/saurabh500/mssql-tiberius-bridge/issues/57), [#57](https://github.com/saurabh500/mssql-tiberius-bridge/issues/57))
+
+### Fixed
+
+- *(row)* Gate pub(crate) decoded_str_at behind 'serde' feature
+
+### Tests
+
+- Cover all BulkInsert builder paths in integration tests
+
 ## [0.1.0-preview.3](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.2...v0.1.0-preview.3) - 2026-05-10
 
 ### Added

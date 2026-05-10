@@ -136,8 +136,14 @@ jobs:
       - name: Unit tests
         run: cargo test --lib
 
+      - name: Unit tests (serde feature)
+        run: cargo test --lib --features serde
+
       - name: Doc tests
         run: cargo test --doc
+
+      - name: Doc tests (serde feature)
+        run: cargo test --doc --features serde
 
       - name: Integration tests with coverage
         env:

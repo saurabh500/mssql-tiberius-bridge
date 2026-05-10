@@ -305,6 +305,37 @@ impl Client {
         self.query_streamed(sql, &[])
     }
 
+    /// Begin a bulk insert into `table`.
+    ///
+    /// Returns a [`BulkInsert`](crate::bulk::BulkInsert) builder. Configure it
+    /// with options ([`batch_size`](crate::bulk::BulkInsert::batch_size),
+    /// [`table_lock`](crate::bulk::BulkInsert::table_lock),
+    /// [`keep_identity`](crate::bulk::BulkInsert::keep_identity), …) then call
+    /// [`send`](crate::bulk::BulkInsert::send) to stream the rows.
+    ///
+    /// See the [`bulk`](crate::bulk) module for an end-to-end example.
+    pub fn bulk_insert<'a>(&'a mut self, table: impl Into<String>) -> crate::bulk::BulkInsert<'a> {
+        crate::bulk::BulkInsert::new(&mut self.inner, table)
+    }
+
+    /// Begin a bulk insert into `table` with explicit destination column names.
+    ///
+    /// Equivalent to calling [`Client::bulk_insert`] and then
+    /// [`map_column_by_ordinal`](crate::bulk::BulkInsert::map_column_by_ordinal)
+    /// for each column in order, so source row column 0 lands in `columns[0]`,
+    /// row column 1 in `columns[1]`, etc.
+    pub fn bulk_insert_with_columns<'a>(
+        &'a mut self,
+        table: impl Into<String>,
+        columns: &[&str],
+    ) -> crate::bulk::BulkInsert<'a> {
+        let mut bi = crate::bulk::BulkInsert::new(&mut self.inner, table);
+        for (ordinal, dest) in columns.iter().enumerate() {
+            bi = bi.map_column_by_ordinal(ordinal, *dest);
+        }
+        bi
+    }
+
     /// Access the underlying `mssql-tds` [`TdsClient`] for advanced operations.
     ///
     /// Use this escape hatch when you need functionality not yet exposed

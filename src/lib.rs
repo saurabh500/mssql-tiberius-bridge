@@ -76,6 +76,7 @@
 //! - `row.get::<&str, _>("col")` works (strings are pre-decoded from UTF-16)
 //! - Connection pooling via [`TdsManager`] + [`deadpool`]
 
+pub mod bulk;
 pub mod client;
 pub mod column;
 pub mod config;
@@ -87,6 +88,7 @@ pub mod row;
 pub mod serde_de;
 
 // Re-exports for ergonomic top-level access.
+pub use bulk::{BulkInsert, BulkLoadRow, ColumnMapping, ColumnMappingSource};
 pub use client::Client;
 pub use column::{Collation, Column, ColumnType, MultiPartName};
 pub use config::{AuthMethod, Config, EncryptionLevel, Transport};

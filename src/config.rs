@@ -69,6 +69,39 @@ pub enum EncryptionLevel {
     Strict,
 }
 
+/// Network transport used to reach SQL Server.
+///
+/// The bridge defaults to [`Transport::Tcp`]. Named Pipes and Shared Memory
+/// are exposed for parity with ODBC / .NET / tiberius and are only usable
+/// against a SQL Server that has the corresponding SNI provider enabled.
+///
+/// **Platform note:** Named Pipes and Shared Memory are Windows-only at the
+/// `mssql-tds` layer. The setters are available on all platforms so the same
+/// code compiles cross-platform, but `Client::connect()` will fail at runtime
+/// on Linux / macOS with a `ProtocolError` from `mssql-tds` when these
+/// transports are selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Transport {
+    /// TCP/IP — the default. Endpoint is built from
+    /// [`Config::host`] / [`Config::port`] / [`Config::instance_name`].
+    Tcp,
+    /// Named Pipes (Windows). The optional `pipe` field overrides the pipe
+    /// path; when `None`, the bridge synthesizes the standard path
+    /// `\\<host>\pipe\sql\query` for the default instance, or
+    /// `\\<host>\pipe\MSSQL$<instance>\sql\query` when
+    /// [`Config::instance_name`] is set. A leading `.` for `host` resolves
+    /// to the local machine, matching SQL Server convention.
+    NamedPipe {
+        /// Explicit pipe path (e.g. `\\\\.\\pipe\\sql\\query`). When `None`,
+        /// the bridge derives one from `host` and `instance_name`.
+        pipe: Option<String>,
+    },
+    /// Shared Memory / Local Procedure Call (Windows-only, local only).
+    /// Endpoint is built from [`Config::host`] (typically `.` or `localhost`)
+    /// plus optional [`Config::instance_name`].
+    SharedMemory,
+}
+
 /// Authentication method for SQL Server connections.
 ///
 /// # Variants
@@ -140,6 +173,7 @@ pub struct Config {
     client_name: Option<String>,
     send_string_parameters_as_unicode: bool,
     multi_subnet_failover: bool,
+    transport: Transport,
 }
 
 impl Config {
@@ -163,6 +197,7 @@ impl Config {
             client_name: None,
             send_string_parameters_as_unicode: true,
             multi_subnet_failover: false,
+            transport: Transport::Tcp,
         }
     }
 
@@ -298,6 +333,59 @@ impl Config {
         self.multi_subnet_failover
     }
 
+    /// Use the Named Pipes transport instead of TCP.
+    ///
+    /// Pass `Some("\\\\.\\pipe\\sql\\query")` to force a specific pipe path,
+    /// or `None` to let the bridge synthesize the standard pipe path from
+    /// [`host`](Self::host) and [`instance_name`](Self::instance_name):
+    ///
+    /// - default instance: `\\<host>\pipe\sql\query`
+    /// - named instance:   `\\<host>\pipe\MSSQL$<instance>\sql\query`
+    ///
+    /// When `host` is `.` it is mapped to the local machine, matching SQL
+    /// Server / SNI convention.
+    ///
+    /// **Windows-only** at the `mssql-tds` layer; calling
+    /// [`Client::connect`](crate::Client::connect) on Linux / macOS with
+    /// Named Pipes selected will fail at runtime. The setter compiles
+    /// everywhere for cross-platform code.
+    ///
+    /// Mirrors prisma/tiberius#131 / .NET's `np:` connection-string prefix.
+    pub fn named_pipe(&mut self, pipe: Option<impl Into<String>>) -> &mut Self {
+        self.transport = Transport::NamedPipe {
+            pipe: pipe.map(Into::into),
+        };
+        self
+    }
+
+    /// Use the Shared Memory (LPC) transport instead of TCP.
+    ///
+    /// Endpoint is built from [`host`](Self::host) (typically `.` or
+    /// `localhost`) plus optional [`instance_name`](Self::instance_name).
+    ///
+    /// **Windows-only and local-only** at the `mssql-tds` layer. Calling
+    /// [`Client::connect`](crate::Client::connect) on Linux / macOS, or with
+    /// a non-local `host`, will fail at runtime.
+    ///
+    /// Mirrors .NET's `lpc:` connection-string prefix.
+    pub fn shared_memory(&mut self) -> &mut Self {
+        self.transport = Transport::SharedMemory;
+        self
+    }
+
+    /// Set the transport explicitly. Most callers should use the
+    /// [`named_pipe`](Self::named_pipe) / [`shared_memory`](Self::shared_memory)
+    /// helpers, or leave it at the default [`Transport::Tcp`].
+    pub fn transport(&mut self, transport: Transport) -> &mut Self {
+        self.transport = transport;
+        self
+    }
+
+    /// Returns the configured transport (default [`Transport::Tcp`]).
+    pub fn get_transport(&self) -> &Transport {
+        &self.transport
+    }
+
     /// Set the application name reported to the server in `sys.dm_exec_sessions`.
     pub fn application_name(&mut self, name: impl Into<String>) -> &mut Self {
         self.application_name = Some(name.into());
@@ -319,21 +407,48 @@ impl Config {
 
     /// Build the TDS datasource string used by `TdsConnectionProvider`.
     ///
-    /// Format:
-    /// - `tcp:host,port` (default — explicit port)
-    /// - `tcp:host\instance` (when [`instance_name`](Self::instance_name) is
-    ///   set — port is omitted so `mssql-tds` runs SSRP / SQL Browser to
-    ///   resolve the instance's TCP port)
+    /// Format depends on [`get_transport`](Self::get_transport):
     ///
-    /// Per MDAC convention, including both an explicit port and an instance
-    /// name causes the instance to be silently ignored, so the bridge drops
-    /// the port whenever an instance is specified. If you need a fixed port,
-    /// don't call [`instance_name`](Self::instance_name).
+    /// - **TCP** (default):
+    ///   - `tcp:host,port` — explicit port
+    ///   - `tcp:host\instance` — when [`instance_name`](Self::instance_name)
+    ///     is set the port is omitted so `mssql-tds` runs SSRP / SQL Browser
+    ///   - Per MDAC convention, including both an explicit port and an
+    ///     instance name causes the instance to be silently ignored, so the
+    ///     bridge drops the port whenever an instance is specified.
+    /// - **Named Pipes**:
+    ///   - `np:<pipe-path>` — when an explicit pipe path was supplied
+    ///   - `np:\\host\pipe\sql\query` — derived (default instance)
+    ///   - `np:\\host\pipe\MSSQL$<instance>\sql\query` — derived (named instance)
+    ///   - `host` of `.` is rewritten to the local machine name token
+    ///     `\\.\pipe\…` per SQL Server convention.
+    /// - **Shared Memory**:
+    ///   - `lpc:host` (default instance) or `lpc:host\instance`
     pub fn datasource_string(&self) -> String {
-        if let Some(ref inst) = self.instance_name {
-            format!("tcp:{}\\{}", self.host, inst)
-        } else {
-            format!("tcp:{},{}", self.host, self.port)
+        match &self.transport {
+            Transport::Tcp => {
+                if let Some(ref inst) = self.instance_name {
+                    format!("tcp:{}\\{}", self.host, inst)
+                } else {
+                    format!("tcp:{},{}", self.host, self.port)
+                }
+            }
+            Transport::NamedPipe { pipe: Some(p) } => format!("np:{p}"),
+            Transport::NamedPipe { pipe: None } => {
+                let pipe_host = if self.host == "." || self.host == "localhost" {
+                    "."
+                } else {
+                    self.host.as_str()
+                };
+                match self.instance_name {
+                    Some(ref inst) => format!("np:\\\\{pipe_host}\\pipe\\MSSQL${inst}\\sql\\query"),
+                    None => format!("np:\\\\{pipe_host}\\pipe\\sql\\query"),
+                }
+            }
+            Transport::SharedMemory => match self.instance_name {
+                Some(ref inst) => format!("lpc:{}\\{}", self.host, inst),
+                None => format!("lpc:{}", self.host),
+            },
         }
     }
 
@@ -669,5 +784,78 @@ mod tests {
         cfg.multi_subnet_failover(false);
         assert!(!cfg.is_multi_subnet_failover());
         assert!(!cfg.to_client_context().multi_subnet_failover);
+    }
+
+    #[test]
+    fn transport_defaults_to_tcp() {
+        let cfg = Config::new();
+        assert_eq!(cfg.get_transport(), &Transport::Tcp);
+        assert_eq!(cfg.datasource_string(), "tcp:localhost,1433");
+    }
+
+    #[test]
+    fn named_pipe_with_explicit_path_uses_supplied_pipe() {
+        let mut cfg = Config::new();
+        cfg.named_pipe(Some("\\\\.\\pipe\\sql\\query"));
+        assert_eq!(
+            cfg.get_transport(),
+            &Transport::NamedPipe {
+                pipe: Some("\\\\.\\pipe\\sql\\query".to_string()),
+            }
+        );
+        assert_eq!(cfg.datasource_string(), "np:\\\\.\\pipe\\sql\\query");
+    }
+
+    #[test]
+    fn named_pipe_default_path_for_default_instance_uses_local_dot() {
+        let mut cfg = Config::new();
+        cfg.host("localhost").named_pipe(None::<String>);
+        assert_eq!(cfg.datasource_string(), "np:\\\\.\\pipe\\sql\\query");
+    }
+
+    #[test]
+    fn named_pipe_default_path_for_remote_host_uses_host() {
+        let mut cfg = Config::new();
+        cfg.host("dbhost.lab").named_pipe(None::<String>);
+        assert_eq!(
+            cfg.datasource_string(),
+            "np:\\\\dbhost.lab\\pipe\\sql\\query"
+        );
+    }
+
+    #[test]
+    fn named_pipe_default_path_for_named_instance() {
+        let mut cfg = Config::new();
+        cfg.host("dbhost.lab")
+            .instance_name("SQLEXPRESS")
+            .named_pipe(None::<String>);
+        assert_eq!(
+            cfg.datasource_string(),
+            "np:\\\\dbhost.lab\\pipe\\MSSQL$SQLEXPRESS\\sql\\query"
+        );
+    }
+
+    #[test]
+    fn shared_memory_default_instance() {
+        let mut cfg = Config::new();
+        cfg.host(".").shared_memory();
+        assert_eq!(cfg.get_transport(), &Transport::SharedMemory);
+        assert_eq!(cfg.datasource_string(), "lpc:.");
+    }
+
+    #[test]
+    fn shared_memory_named_instance() {
+        let mut cfg = Config::new();
+        cfg.host(".").instance_name("SQLEXPRESS").shared_memory();
+        assert_eq!(cfg.datasource_string(), "lpc:.\\SQLEXPRESS");
+    }
+
+    #[test]
+    fn transport_setter_round_trips() {
+        let mut cfg = Config::new();
+        cfg.transport(Transport::SharedMemory);
+        assert_eq!(cfg.get_transport(), &Transport::SharedMemory);
+        cfg.transport(Transport::Tcp);
+        assert_eq!(cfg.get_transport(), &Transport::Tcp);
     }
 }

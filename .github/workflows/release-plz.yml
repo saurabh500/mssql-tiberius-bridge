@@ -4,6 +4,9 @@ on:
   push:
     branches:
       - main
+  # Allow manual re-trigger from the Actions tab (useful if a run fails
+  # or the repo permissions for GITHUB_TOKEN change).
+  workflow_dispatch:
 
 permissions:
   pull-requests: write

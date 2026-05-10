@@ -33,11 +33,23 @@ const DRIVER_NAME: &str = "MS-TIB-BRID";
 /// Mirrors tiberius' `EncryptionLevel`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum EncryptionLevel {
-    /// Encrypt login only; data flows unencrypted.
+    /// Don't request encryption from the client side. The server may still
+    /// require it (TDS pre-login negotiation), in which case the connection
+    /// upgrades to TLS regardless.
+    ///
+    /// **Alias of [`NotSupported`](Self::NotSupported)**: both variants map to
+    /// the same underlying `EncryptionSetting::PreferOff` in `mssql-tds`. The
+    /// pair exists for parity with tiberius' `EncryptionLevel`; pick whichever
+    /// reads better at the call site.
     Off,
     /// Encrypt the entire connection (default).
     On,
-    /// Don't request encryption; server may still require it.
+    /// Advertise that the client does not support encryption. The server may
+    /// still force TLS on the connection.
+    ///
+    /// **Alias of [`Off`](Self::Off)**: both variants map to
+    /// `EncryptionSetting::PreferOff` in `mssql-tds`. Kept for tiberius API
+    /// parity.
     NotSupported,
     /// Require encryption; fail if the server doesn't support it.
     Required,
@@ -194,9 +206,19 @@ impl Config {
     /// performs an exact binary match between the file and the certificate
     /// presented by the server. Mirrors tiberius' `Config::trust_cert_ca`.
     ///
-    /// `trust_cert_ca` and [`trust_cert`](Self::trust_cert) are mutually
-    /// exclusive — `trust_cert_ca` takes precedence and `trust_cert` is
-    /// ignored if both are set.
+    /// # Interaction with [`trust_cert`](Self::trust_cert)
+    ///
+    /// `trust_cert_ca` **supersedes** `trust_cert`. The bridge forwards both
+    /// fields to `mssql-tds`, which logs a warning and uses the pinned
+    /// certificate (`ServerCertificate takes precedence`). Net effect:
+    /// validation is performed against the pinned cert, and `trust_cert` has
+    /// no observable effect when both are set.
+    ///
+    /// # Mutual exclusion with [`host_name_in_certificate`](Self::host_name_in_certificate)
+    ///
+    /// `trust_cert_ca` and `host_name_in_certificate` are **mutually
+    /// exclusive**: setting both causes `mssql-tds` to fail the TLS handshake
+    /// with a usage error. Pin a cert *or* override the SNI hostname, not both.
     ///
     /// # Example
     ///

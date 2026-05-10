@@ -4,38 +4,26 @@
 //! using ALPN with the `tds/8.0` protocol id. The cipher then wraps the entire
 //! TDS conversation, including pre-login.
 //!
-//! These tests reuse the same `TEST_DB_*` env vars as `tests/integration.rs`
-//! because a single SQL Server instance can accept both Strict and non-Strict
+//! These tests reuse the same `TEST_DB_*` env vars as `tests/integration.rs`.
+//! A single SQL Server instance can accept both Strict and non-Strict
 //! connections from the same listener (when `network.forceencryption=0` and a
-//! TLS cert is configured). See issue #74 for the matching test-infra setup.
+//! TLS cert is configured) — that provisioning is done by the CI workflow
+//! (`.github/workflows/ci.yml`) and documented for local dev in #74.
 //!
-//! Gates:
-//!   `BRIDGE_STRICT_READY=1` — opt-in flag asserting the test server has a
-//!                             TLS cert provisioned and is reachable at a
-//!                             hostname that matches a SAN on that cert.
-//!                             Without this flag the tests skip, because the
-//!                             default CI SQL Server container is *not* yet
-//!                             Strict-capable (tracked by #74). Same pattern
-//!                             as `BRIDGE_AAD_TOKEN`, `BRIDGE_SSRP_HOST`,
-//!                             `BRIDGE_CUSTOM_CA_PATH` in sibling tests.
-//!   `TEST_DB_PASSWORD`     — required (also required by every other live
-//!                             integration test).
+//! Required:
+//!   `TEST_DB_PASSWORD` — tests are skipped if unset (no live DB available).
 //! Optional:
 //!   `TEST_DB_HOST` (default: localhost), `TEST_DB_PORT` (1433),
 //!   `TEST_DB_USER` (sa), `TEST_DB_NAME` (master),
-//!   `TEST_DB_CA`   — path to a CA bundle (PEM). When unset the system trust
-//!                    store is used. Strict requires real cert validation, so
-//!                    `TEST_DB_HOST` must match a SAN on the server cert.
+//!   `TEST_DB_CA`   — path to the CA bundle (PEM) trusted by the client.
+//!                    The CI workflow points this at the self-signed cert it
+//!                    installs into the SQL Server container. When unset the
+//!                    system trust store is used. `TEST_DB_HOST` must match
+//!                    a SAN on the server cert.
 
 use mssql_tiberius_bridge::{AuthMethod, Client, Config, EncryptionLevel};
 
 fn strict_config() -> Option<Config> {
-    // Two gates, both must be satisfied:
-    //  1. BRIDGE_STRICT_READY — server is provisioned for Strict (#74).
-    //  2. TEST_DB_PASSWORD    — same secret the rest of the live suite uses.
-    if std::env::var("BRIDGE_STRICT_READY").ok().as_deref() != Some("1") {
-        return None;
-    }
     let password = std::env::var("TEST_DB_PASSWORD").ok()?;
 
     let mut cfg = Config::new();
@@ -62,9 +50,7 @@ fn strict_config() -> Option<Config> {
 
 fn skip_or(cfg: Option<Config>, name: &str) -> Option<Config> {
     if cfg.is_none() {
-        eprintln!(
-            "skipping {name}: requires BRIDGE_STRICT_READY=1 and TEST_DB_PASSWORD against a Strict-capable SQL Server (see #74)"
-        );
+        eprintln!("skipping {name}: TEST_DB_PASSWORD not set");
     }
     cfg
 }

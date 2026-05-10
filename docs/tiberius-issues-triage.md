@@ -282,15 +282,15 @@ Each agent owns one tiberius issue or a tightly-related cluster.
 
 ---
 
-_Last updated: 2026-05-09_
+_Last updated: 2026-05-10_
 
 ---
 
 ## Bridge Issues Filed (Cross-Reference)
 
-The following bridge issues were filed from this triage to track the work:
+The following bridge issues were filed from this triage to track the work.
 
-### Implemented (PRs landed or open)
+### ✅ Shipped (closed)
 
 | Bridge | PR | Tiberius | What |
 |--------|----|----------|------|
@@ -304,29 +304,51 @@ The following bridge issues were filed from this triage to track the work:
 | #47 | #50 | #340 | `Config::host_name_in_certificate` |
 | #49 | #50 | #367 | `Config::send_string_parameters_as_unicode` |
 | —  | #51 | #368, #316, #160, #380, #371, #282, #221, #333 | Tier-2 repro tests |
+| #53 | #84 | #311, #302, #410, #358, #322, #307, #319, #352, #373 | `Client::bulk_insert` (BCP) + options |
+| #57 | #82 | #115 | Serde `Deserialize` for `Row` |
+| #60 | —  | #131, #53 | Named pipe + shared-memory transport |
+| #61 | —  | #337 | MultiSubnetFailover |
+| #62 | —  | #412 | TDS 8.0 Strict encryption (verify wiring) |
+| #63 | —  | #397, #403, #217 | Full column metadata (Identity, nullable, size, scale, collation) |
+| #64 | —  | #404 | `Debug` for `ToSql` |
+| #65 | —  | #402 | `PartialEq`/`Eq` for `Row` |
+| #67 | —  | #277 | `time` crate `ToSql`/`IntoSql` |
+| #68 | —  | #354 | `jiff` crate support |
+| #74 | —  | (infra) | Strict-encryption CI test infra |
+| #85 | #86 | (new) | Apache Arrow `RecordBatch` input to `bulk_insert` (`arrow` feature) |
 
-### Filed as tracking issues (work pending)
+### 🟡 Open tracking issues (work pending)
 
 | Bridge | Tiberius | Topic |
 |--------|----------|-------|
-| #48 | #224 | `accept_invalid_hostnames` (blocked on mssql-tds) |
+| #1  | —    | `execute()` returns 0 affected rows for DML (needs mssql-tds DONE token row count) |
+| #48 | #224 | `Config::accept_invalid_hostnames` (blocked on mssql-tds) |
 | #52 | #299 | `Client::reset_session()` / `sp_reset_connection` (blocked on mssql-tds) |
-| #53 | #311, #302, #410, #358, #322, #307, #319, #352, #373 | `Client::bulk_insert` (BCP) + options |
-| #55 | #28  | Transactions API |
-| #56 | #30  | Prepared Statements (`sp_prepare`/`sp_execute`) |
-| #57 | #115 | Serde `Deserialize` for `Row` |
+| #55 | #28  | Transactions API (`Client::transaction` / `Transaction` wrapper) |
+| #56 | #30  | Prepared Statements (`sp_prepare` / `sp_execute`) |
 | #58 | #54  | Always Encrypted (CEK) |
 | #59 | #289 | Service Broker / `SqlDependency` |
-| #60 | #131, #53 | Named pipe + shared-memory transport |
-| #61 | #337 | MultiSubnetFailover |
-| #62 | #412 | TDS 8.0 Strict encryption (verify wiring) |
-| #63 | #397, #403, #217 | Full column metadata (Identity, nullable, size, scale, collation) |
-| #64 | #404 | `Debug` for `ToSql` |
-| #65 | #402 | `PartialEq`/`Eq` for `Row` |
 | #66 | #407, #276, #97 | NTLM on Linux/macOS without Kerberos |
-| #67 | #277 | `time` crate `ToSql`/`IntoSql` |
-| #68 | #354 | `jiff` crate support |
-| #69 | #257 | `geography`/`geometry` spatial types |
+| #69 | #257 | `geography` / `geometry` spatial types |
 | #70 | #381 | openssl backend for TLS 1.0/1.1 (legacy SQL Server) |
+| #87 | #401 | `ToSql for rust_decimal::Decimal` (confirmed missing impl) |
+| #88 | #300, #79 | Cancel-safety audit under `tokio::time::timeout` |
+| #89 | #320, #274 | Verify `EncryptionLevel::Off` connect doesn't stall on TLS-capable servers |
+| #90 | #325 | Regression test: malformed UTF-16 NVARCHAR returns U+FFFD, not error |
 
-**Total: 14 PRs/issues already implemented + 19 tracking issues filed = 33 bridge work items derived from the triage.**
+### ⚪ Not filed (intentionally skipped)
+
+| Tib# | Reason |
+|------|--------|
+| #364 | Environment-specific (macOS 15 + SQL Server 2014) — needs that exact combo to repro. |
+| #375 | Environment-specific (azure-sql-edge on macOS) — same. |
+| #343 | Bridge's libgssapi dependency already includes the upstream fix. |
+| #382 | N/A — bridge has no `IntoRow` derive macro. |
+| #263 | N/A — bridge's `FromSql for i32` already widens from `SmallInt`/`TinyInt`; null handled via `Option<i32>`. |
+
+### Totals (as of 2026-05-10)
+
+- **22 shipped** (PRs landed or issues closed) covering ~36 distinct tiberius issues.
+- **14 open** tracking issues (4 just filed: #87, #88, #89, #90).
+- **5 explicitly skipped** with rationale.
+- ⇒ **41 bridge work items** derived from this triage.

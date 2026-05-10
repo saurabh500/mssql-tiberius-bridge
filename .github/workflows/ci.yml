@@ -139,11 +139,17 @@ jobs:
       - name: Unit tests (serde feature)
         run: cargo test --lib --features serde
 
+      - name: Unit tests (arrow feature)
+        run: cargo test --lib --features arrow
+
       - name: Doc tests
         run: cargo test --doc
 
       - name: Doc tests (serde feature)
         run: cargo test --doc --features serde
+
+      - name: Doc tests (arrow feature)
+        run: cargo test --doc --features arrow
 
       - name: Integration tests with coverage
         env:
@@ -156,7 +162,7 @@ jobs:
           # Strict-mode tests. The cert was generated with CA:TRUE above so
           # rustls accepts it as a root.
           TEST_DB_CA: ${{ runner.temp }}/mssql-tls/mssql.pem
-        run: cargo llvm-cov --all-targets --lcov --output-path lcov.info
+        run: cargo llvm-cov --all-targets --features arrow --lcov --output-path lcov.info
 
       - name: SQL Server logs (on failure)
         if: failure()

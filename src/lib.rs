@@ -56,6 +56,7 @@
 //! | `time` | off | Enables `time` crate support for [`FromSql`] and [`ToSql`] |
 //! | `jiff` | off | Enables `jiff` crate support for [`FromSql`] and [`ToSql`] |
 //! | `serde` | off | Enables `serde::Deserialize` for [`Row`] (see [`serde_de`]) |
+//! | `arrow` | off | Enables [`BulkInsert::send_arrow`](crate::bulk::BulkInsert::send_arrow) for Apache Arrow `RecordBatch` input (see [`bulk_arrow`]) |
 //!
 //! # Modules
 //!
@@ -77,6 +78,8 @@
 //! - Connection pooling via [`TdsManager`] + [`deadpool`]
 
 pub mod bulk;
+#[cfg(feature = "arrow")]
+pub mod bulk_arrow;
 pub mod client;
 pub mod column;
 pub mod config;

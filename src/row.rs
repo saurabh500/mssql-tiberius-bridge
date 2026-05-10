@@ -598,11 +598,7 @@ mod tests {
     fn make_row(names: &[&str], values: Vec<ColumnValues>) -> Row {
         let columns: Vec<Column> = names
             .iter()
-            .map(|n| Column {
-                name: n.to_string(),
-                column_type: crate::column::ColumnType::Null,
-                nullable: true,
-            })
+            .map(|n| Column::test_column(n, crate::column::ColumnType::Null, 0))
             .collect();
         let name_map: HashMap<String, usize> = columns
             .iter()
@@ -722,11 +718,11 @@ mod tests {
 
     #[test]
     fn null_smallint_as_i32_returns_none_cleanly() {
-        let columns = vec![Column {
-            name: "small".to_string(),
-            column_type: crate::column::ColumnType::Int2,
-            nullable: true,
-        }];
+        let columns = vec![Column::test_column(
+            "small",
+            crate::column::ColumnType::Int2,
+            2,
+        )];
         let name_map = HashMap::from([("small".to_string(), 0)]);
         let schema = Arc::new(RowSchema { columns, name_map });
         let row = Row::from_schema(schema, vec![ColumnValues::Null]);

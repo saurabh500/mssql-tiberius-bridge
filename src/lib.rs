@@ -85,7 +85,7 @@ pub mod row;
 
 // Re-exports for ergonomic top-level access.
 pub use client::Client;
-pub use column::{Column, ColumnType};
+pub use column::{Collation, Column, ColumnType, MultiPartName};
 pub use config::{AuthMethod, Config, EncryptionLevel};
 pub use error::{Error, Result};
 pub use pool::{Pool, PooledConnection, TdsManager};

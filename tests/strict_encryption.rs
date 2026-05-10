@@ -9,8 +9,17 @@
 //! connections from the same listener (when `network.forceencryption=0` and a
 //! TLS cert is configured). See issue #74 for the matching test-infra setup.
 //!
-//! Required:
-//!   `TEST_DB_PASSWORD` — tests are skipped if unset.
+//! Gates:
+//!   `BRIDGE_STRICT_READY=1` — opt-in flag asserting the test server has a
+//!                             TLS cert provisioned and is reachable at a
+//!                             hostname that matches a SAN on that cert.
+//!                             Without this flag the tests skip, because the
+//!                             default CI SQL Server container is *not* yet
+//!                             Strict-capable (tracked by #74). Same pattern
+//!                             as `BRIDGE_AAD_TOKEN`, `BRIDGE_SSRP_HOST`,
+//!                             `BRIDGE_CUSTOM_CA_PATH` in sibling tests.
+//!   `TEST_DB_PASSWORD`     — required (also required by every other live
+//!                             integration test).
 //! Optional:
 //!   `TEST_DB_HOST` (default: localhost), `TEST_DB_PORT` (1433),
 //!   `TEST_DB_USER` (sa), `TEST_DB_NAME` (master),
@@ -21,6 +30,12 @@
 use mssql_tiberius_bridge::{AuthMethod, Client, Config, EncryptionLevel};
 
 fn strict_config() -> Option<Config> {
+    // Two gates, both must be satisfied:
+    //  1. BRIDGE_STRICT_READY — server is provisioned for Strict (#74).
+    //  2. TEST_DB_PASSWORD    — same secret the rest of the live suite uses.
+    if std::env::var("BRIDGE_STRICT_READY").ok().as_deref() != Some("1") {
+        return None;
+    }
     let password = std::env::var("TEST_DB_PASSWORD").ok()?;
 
     let mut cfg = Config::new();
@@ -48,7 +63,7 @@ fn strict_config() -> Option<Config> {
 fn skip_or(cfg: Option<Config>, name: &str) -> Option<Config> {
     if cfg.is_none() {
         eprintln!(
-            "skipping {name}: TEST_DB_PASSWORD not set; see issue #74 for the Strict-capable test-server setup"
+            "skipping {name}: requires BRIDGE_STRICT_READY=1 and TEST_DB_PASSWORD against a Strict-capable SQL Server (see #74)"
         );
     }
     cfg

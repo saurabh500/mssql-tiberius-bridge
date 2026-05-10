@@ -41,7 +41,19 @@ pub enum EncryptionLevel {
     NotSupported,
     /// Require encryption; fail if the server doesn't support it.
     Required,
-    /// TDS 8.0 strict mode — encrypts the entire stream including pre-login.
+    /// TDS 8.0 strict mode — performs the TLS handshake **before** the TDS
+    /// pre-login packet, so the entire wire conversation (including pre-login)
+    /// runs inside TLS. This eliminates the pre-login downgrade window and is
+    /// required by some Azure SQL configurations (e.g. `Encrypt=Strict` in the
+    /// .NET driver).
+    ///
+    /// Notes specific to `Strict`:
+    /// - The TLS handshake uses ALPN with the `tds/8.0` protocol id, as
+    ///   required by the TDS 8.0 specification.
+    /// - Server certificate validation is **always enforced**; calling
+    ///   [`Config::trust_cert`] is ignored under `Strict` mode.
+    /// - [`Config::trust_cert_ca`] (custom CA bundle) and
+    ///   [`Config::host_name_in_certificate`] (SNI override) still apply.
     Strict,
 }
 
@@ -517,5 +529,75 @@ mod tests {
         assert!(cfg.string_parameters_as_unicode());
         cfg.send_string_parameters_as_unicode(false);
         assert!(!cfg.string_parameters_as_unicode());
+    }
+
+    #[test]
+    fn encryption_level_strict_maps_to_strict() {
+        use mssql_tds::core::EncryptionSetting;
+        let mut cfg = Config::new();
+        cfg.encryption(EncryptionLevel::Strict);
+        assert_eq!(
+            cfg.to_client_context().encryption_options.mode,
+            EncryptionSetting::Strict
+        );
+    }
+
+    #[test]
+    fn encryption_level_required_maps_to_required() {
+        use mssql_tds::core::EncryptionSetting;
+        let mut cfg = Config::new();
+        cfg.encryption(EncryptionLevel::Required);
+        assert_eq!(
+            cfg.to_client_context().encryption_options.mode,
+            EncryptionSetting::Required
+        );
+    }
+
+    #[test]
+    fn encryption_level_on_maps_to_on() {
+        use mssql_tds::core::EncryptionSetting;
+        let mut cfg = Config::new();
+        cfg.encryption(EncryptionLevel::On);
+        assert_eq!(
+            cfg.to_client_context().encryption_options.mode,
+            EncryptionSetting::On
+        );
+    }
+
+    #[test]
+    fn encryption_level_off_maps_to_prefer_off() {
+        use mssql_tds::core::EncryptionSetting;
+        let mut cfg = Config::new();
+        cfg.encryption(EncryptionLevel::Off);
+        assert_eq!(
+            cfg.to_client_context().encryption_options.mode,
+            EncryptionSetting::PreferOff
+        );
+    }
+
+    #[test]
+    fn encryption_level_not_supported_maps_to_prefer_off() {
+        use mssql_tds::core::EncryptionSetting;
+        let mut cfg = Config::new();
+        cfg.encryption(EncryptionLevel::NotSupported);
+        assert_eq!(
+            cfg.to_client_context().encryption_options.mode,
+            EncryptionSetting::PreferOff
+        );
+    }
+
+    #[test]
+    fn strict_preserves_host_name_in_certificate_and_ca() {
+        // Strict mode must still honour SNI override and custom CA bundle —
+        // only `trust_cert` (TrustServerCertificate) is ignored by mssql-tds
+        // under Strict.
+        let mut cfg = Config::new();
+        cfg.encryption(EncryptionLevel::Strict)
+            .host_name_in_certificate("sql.example.com")
+            .trust_cert_ca("/etc/ssl/ca.pem");
+        let opts = cfg.to_client_context().encryption_options;
+        assert_eq!(opts.mode, mssql_tds::core::EncryptionSetting::Strict);
+        assert_eq!(opts.host_name_in_cert.as_deref(), Some("sql.example.com"));
+        assert_eq!(opts.server_certificate.as_deref(), Some("/etc/ssl/ca.pem"));
     }
 }

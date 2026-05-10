@@ -15,21 +15,6 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
 
-    services:
-      mssql:
-        image: mcr.microsoft.com/mssql/server:2025-latest
-        env:
-          ACCEPT_EULA: "Y"
-          MSSQL_SA_PASSWORD: "Strong!Pass123"
-        ports:
-          - 1433:1433
-        options: >-
-          --health-cmd "/opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P 'Strong!Pass123' -C -Q 'SELECT 1'"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 10
-          --health-start-period 30s
-
     steps:
       - uses: actions/checkout@v4
 
@@ -55,6 +40,93 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cargo-
 
+      # ── TLS provisioning for the SQL Server container ──
+      #
+      # We generate a self-signed cert with basicConstraints=CA:TRUE so the
+      # same PEM works both as the server's leaf cert *and* as the trust
+      # anchor we hand the bridge client via TEST_DB_CA. SAN covers
+      # `localhost` and `127.0.0.1` so the cert matches whatever the test
+      # uses for TEST_DB_HOST.
+      #
+      # Service containers (`services:`) start before steps run and cannot
+      # see runtime-generated files, so we launch SQL Server with `docker
+      # run` after the cert is on disk.
+      - name: Generate TLS cert for SQL Server
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/mssql-tls"
+          cd "$RUNNER_TEMP/mssql-tls"
+
+          openssl req -x509 -nodes -newkey rsa:2048 \
+            -keyout mssql.key -out mssql.pem \
+            -days 30 \
+            -subj "/CN=localhost" \
+            -addext "subjectAltName=DNS:localhost,IP:127.0.0.1" \
+            -addext "basicConstraints=critical,CA:TRUE" \
+            -addext "keyUsage=critical,digitalSignature,keyEncipherment,keyCertSign" \
+            -addext "extendedKeyUsage=serverAuth"
+
+          # Write mssql.conf so SQL Server picks up the cert at startup. We
+          # bind-mount this single file into /var/opt/mssql/mssql.conf so
+          # we don't clobber the rest of /var/opt/mssql.
+          cat > mssql.conf <<'EOF'
+          [network]
+          tlscert = /etc/ssl/mssql/mssql.pem
+          tlskey = /etc/ssl/mssql/mssql.key
+          tlsprotocols = 1.2
+          forceencryption = 0
+          EOF
+
+          # The SQL Server container runs as uid 10001 (the `mssql` user).
+          # The private key must be readable by that uid; root-only 0600
+          # would leave SQL Server unable to load it.
+          sudo chown -R 10001:0 .
+          sudo chmod 0640 mssql.key
+          sudo chmod 0644 mssql.pem mssql.conf
+
+          openssl x509 -in mssql.pem -noout -subject -issuer -ext subjectAltName,basicConstraints
+
+      - name: Start SQL Server with TLS
+        run: |
+          set -euo pipefail
+          docker run -d --name mssql \
+            -e ACCEPT_EULA=Y \
+            -e MSSQL_SA_PASSWORD="$SA_PASSWORD" \
+            -e MSSQL_PID=Developer \
+            -p 1433:1433 \
+            -v "$RUNNER_TEMP/mssql-tls":/etc/ssl/mssql:ro \
+            -v "$RUNNER_TEMP/mssql-tls/mssql.conf":/var/opt/mssql/mssql.conf:ro \
+            mcr.microsoft.com/mssql/server:2025-latest
+
+      - name: Wait for SQL Server
+        run: |
+          set -eu
+          for i in $(seq 1 60); do
+            if docker exec mssql /opt/mssql-tools18/bin/sqlcmd \
+                -S localhost -U sa -P "$SA_PASSWORD" -C \
+                -Q 'SELECT 1' >/dev/null 2>&1; then
+              echo "SQL Server is ready (attempt $i)"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "SQL Server failed to become ready"
+          docker logs mssql || true
+          exit 1
+
+      - name: Verify SQL Server is presenting our cert
+        # `openssl s_client` against the TDS port speaks plain TLS thanks to
+        # forceencryption=0 (server still negotiates TLS for login). We dump
+        # the leaf cert subject/issuer to confirm SQL Server loaded the cert
+        # we generated, not its own auto-generated one.
+        run: |
+          set -eu
+          echo | openssl s_client -connect localhost:1433 -showcerts -servername localhost 2>/dev/null \
+            | openssl x509 -noout -subject -issuer -ext subjectAltName,basicConstraints \
+            | tee /tmp/server-cert-summary.txt
+          grep -q "subject=CN.*localhost" /tmp/server-cert-summary.txt
+          grep -q "CA:TRUE"               /tmp/server-cert-summary.txt
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -72,9 +144,17 @@ jobs:
           TEST_DB_HOST: localhost
           TEST_DB_PORT: 1433
           TEST_DB_USER: sa
-          TEST_DB_PASSWORD: "Strong!Pass123"
+          TEST_DB_PASSWORD: ${{ env.SA_PASSWORD }}
           TEST_DB_NAME: master
+          # Hand the bridge our self-signed cert as a trust anchor for the
+          # Strict-mode tests. The cert was generated with CA:TRUE above so
+          # rustls accepts it as a root.
+          TEST_DB_CA: ${{ runner.temp }}/mssql-tls/mssql.pem
         run: cargo llvm-cov --all-targets --lcov --output-path lcov.info
+
+      - name: SQL Server logs (on failure)
+        if: failure()
+        run: docker logs mssql || true
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4

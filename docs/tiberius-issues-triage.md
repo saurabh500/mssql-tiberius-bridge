@@ -330,18 +330,24 @@ The following bridge issues were filed from this triage to track the work.
 | #59 | #289 | Service Broker / `SqlDependency` |
 | #66 | #407, #276, #97 | NTLM on Linux/macOS without Kerberos |
 | #69 | #257 | `geography` / `geometry` spatial types |
-| #70 | #381 | openssl backend for TLS 1.0/1.1 (legacy SQL Server) |
 | #87 | #401 | `ToSql for rust_decimal::Decimal` (confirmed missing impl) |
 | #88 | #300, #79 | Cancel-safety audit under `tokio::time::timeout` |
 | #89 | #320, #274 | Verify `EncryptionLevel::Off` connect doesn't stall on TLS-capable servers |
 | #90 | #325 | Regression test: malformed UTF-16 NVARCHAR returns U+FFFD, not error |
 
-### ⚪ Not filed (intentionally skipped)
+### ⚪ Not filed / closed as out-of-scope
+
+The bridge supports **SQL Server 2016 and newer**. Issues that exist only to
+support older releases (2014, 2012, 2008 R2, 2008, 2005, 2000) are out of
+scope and not tracked.
 
 | Tib# | Reason |
 |------|--------|
-| #364 | Environment-specific (macOS 15 + SQL Server 2014) — needs that exact combo to repro. |
-| #375 | Environment-specific (azure-sql-edge on macOS) — same. |
+| #364 | Environment-specific (macOS 15 + **SQL Server 2014**) — out of support; not tracked. |
+| #344 | **SQL Server 2000** invalid token — out of support; not tracked. |
+| #381 | openssl backend for TLS 1.0/1.1 — only needed for **SQL Server 2008 R2 / 2012** (out of support). Bridge issue #70 closed as wontfix. |
+| #218 | tiberius 0.9 crashing on macOS — old tiberius version; N/A. |
+| #375 | Environment-specific (azure-sql-edge on macOS) — needs that exact combo to repro. |
 | #343 | Bridge's libgssapi dependency already includes the upstream fix. |
 | #382 | N/A — bridge has no `IntoRow` derive macro. |
 | #263 | N/A — bridge's `FromSql for i32` already widens from `SmallInt`/`TinyInt`; null handled via `Option<i32>`. |
@@ -349,6 +355,7 @@ The following bridge issues were filed from this triage to track the work.
 ### Totals (as of 2026-05-10)
 
 - **22 shipped** (PRs landed or issues closed) covering ~36 distinct tiberius issues.
-- **14 open** tracking issues (4 just filed: #87, #88, #89, #90).
-- **5 explicitly skipped** with rationale.
-- ⇒ **41 bridge work items** derived from this triage.
+- **13 open** tracking issues (4 just filed: #87, #88, #89, #90).
+- **1 closed wontfix** for legacy SQL Server (#70).
+- **8 explicitly skipped** with rationale.
+- ⇒ **44 bridge work items** classified from this triage.

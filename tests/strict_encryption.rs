@@ -4,41 +4,41 @@
 //! using ALPN with the `tds/8.0` protocol id. The cipher then wraps the entire
 //! TDS conversation, including pre-login.
 //!
-//! These tests are gated on a Strict-capable endpoint (Azure SQL, or any local
-//! SQL Server 2022 configured with a publicly-trusted certificate). Set:
+//! These tests reuse the same `TEST_DB_*` env vars as `tests/integration.rs`
+//! because a single SQL Server instance can accept both Strict and non-Strict
+//! connections from the same listener (when `network.forceencryption=0` and a
+//! TLS cert is configured). See issue #74 for the matching test-infra setup.
 //!
-//!   STRICT_TEST_HOST     — server hostname that matches the cert CN/SAN
-//!   STRICT_TEST_PORT     — defaults to 1433
-//!   STRICT_TEST_DB       — defaults to master
-//!   STRICT_TEST_USER     — defaults to sa
-//!   STRICT_TEST_PASSWORD — required; tests are skipped if unset
-//!   STRICT_TEST_CA       — optional path to a CA bundle (PEM); when unset the
-//!                          system trust store is used (which is what an Azure
-//!                          SQL endpoint requires).
-//!
-//! Without `STRICT_TEST_PASSWORD` the tests print a skip notice and exit
-//! successfully so CI without a Strict endpoint stays green.
+//! Required:
+//!   `TEST_DB_PASSWORD` — tests are skipped if unset.
+//! Optional:
+//!   `TEST_DB_HOST` (default: localhost), `TEST_DB_PORT` (1433),
+//!   `TEST_DB_USER` (sa), `TEST_DB_NAME` (master),
+//!   `TEST_DB_CA`   — path to a CA bundle (PEM). When unset the system trust
+//!                    store is used. Strict requires real cert validation, so
+//!                    `TEST_DB_HOST` must match a SAN on the server cert.
 
 use mssql_tiberius_bridge::{AuthMethod, Client, Config, EncryptionLevel};
 
 fn strict_config() -> Option<Config> {
-    let password = std::env::var("STRICT_TEST_PASSWORD").ok()?;
-    let host = std::env::var("STRICT_TEST_HOST").ok()?;
-    let port: u16 = std::env::var("STRICT_TEST_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-        .unwrap_or(1433);
-    let database = std::env::var("STRICT_TEST_DB").unwrap_or_else(|_| "master".into());
-    let user = std::env::var("STRICT_TEST_USER").unwrap_or_else(|_| "sa".into());
+    let password = std::env::var("TEST_DB_PASSWORD").ok()?;
 
     let mut cfg = Config::new();
-    cfg.host(host)
-        .port(port)
-        .database(database)
-        .authentication(AuthMethod::sql_server(user, password))
+    cfg.host(std::env::var("TEST_DB_HOST").unwrap_or_else(|_| "localhost".into()))
+        .port(
+            std::env::var("TEST_DB_PORT")
+                .ok()
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(1433),
+        )
+        .database(std::env::var("TEST_DB_NAME").unwrap_or_else(|_| "master".into()))
+        .authentication(AuthMethod::sql_server(
+            std::env::var("TEST_DB_USER").unwrap_or_else(|_| "sa".into()),
+            password,
+        ))
         .encryption(EncryptionLevel::Strict);
 
-    if let Ok(ca) = std::env::var("STRICT_TEST_CA") {
+    if let Ok(ca) = std::env::var("TEST_DB_CA") {
         cfg.trust_cert_ca(ca);
     }
 
@@ -48,7 +48,7 @@ fn strict_config() -> Option<Config> {
 fn skip_or(cfg: Option<Config>, name: &str) -> Option<Config> {
     if cfg.is_none() {
         eprintln!(
-            "skipping {name}: set STRICT_TEST_HOST and STRICT_TEST_PASSWORD to enable Strict-mode integration tests"
+            "skipping {name}: TEST_DB_PASSWORD not set; see issue #74 for the Strict-capable test-server setup"
         );
     }
     cfg

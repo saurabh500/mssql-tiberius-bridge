@@ -147,7 +147,8 @@ impl Row {
     }
 
     /// Pre-decoded UTF-8 string at the given index, if any. Used by the
-    /// `serde` deserializer and by `&str`-typed FromSql.
+    /// `serde` deserializer.
+    #[cfg(feature = "serde")]
     #[inline]
     pub(crate) fn decoded_str_at(&self, idx: usize) -> Option<&str> {
         self.decoded_strings.get(idx).and_then(|s| s.as_deref())

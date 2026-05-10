@@ -754,7 +754,7 @@ dependencies = [
 
 [[package]]
 name = "mssql-tiberius-bridge"
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 dependencies = [
  "async-stream",
  "async-trait",

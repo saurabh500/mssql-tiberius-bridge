@@ -11,6 +11,21 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+## [0.1.0-preview.3](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.2...v0.1.0-preview.3) - 2026-05-10
+
+### Added
+
+- *(row)* Impl PartialEq for Row (closes #65) ([#65](https://github.com/saurabh500/mssql-tiberius-bridge/issues/65), [#402](https://github.com/saurabh500/mssql-tiberius-bridge/issues/402), [#65](https://github.com/saurabh500/mssql-tiberius-bridge/issues/65), [#402](https://github.com/saurabh500/mssql-tiberius-bridge/issues/402))
+- *(config)* Add Named Pipes and Shared Memory transports (closes #60) ([#60](https://github.com/saurabh500/mssql-tiberius-bridge/issues/60), [#131](https://github.com/saurabh500/mssql-tiberius-bridge/issues/131), [#53](https://github.com/saurabh500/mssql-tiberius-bridge/issues/53), [#60](https://github.com/saurabh500/mssql-tiberius-bridge/issues/60), [#131](https://github.com/saurabh500/mssql-tiberius-bridge/issues/131), [#53](https://github.com/saurabh500/mssql-tiberius-bridge/issues/53))
+- *(config)* Add MultiSubnetFailover (closes #61) ([#61](https://github.com/saurabh500/mssql-tiberius-bridge/issues/61), [#61](https://github.com/saurabh500/mssql-tiberius-bridge/issues/61))
+- *(config)* Verify and test TDS 8.0 Strict encryption (closes #62) ([#62](https://github.com/saurabh500/mssql-tiberius-bridge/issues/62), [#62](https://github.com/saurabh500/mssql-tiberius-bridge/issues/62))
+
+### Tests
+
+- *(strict)* Gate on BRIDGE_STRICT_READY=1 so default CI skips ([#74](https://github.com/saurabh500/mssql-tiberius-bridge/issues/74), [#74](https://github.com/saurabh500/mssql-tiberius-bridge/issues/74))
+- *(strict)* Reuse TEST_DB_* env vars; track infra in #74 ([#74](https://github.com/saurabh500/mssql-tiberius-bridge/issues/74), [#74](https://github.com/saurabh500/mssql-tiberius-bridge/issues/74), [#74](https://github.com/saurabh500/mssql-tiberius-bridge/issues/74), [#74](https://github.com/saurabh500/mssql-tiberius-bridge/issues/74))
+- Add tier-2 tiberius repro coverage
+
 ## [0.1.0-preview.2] - 2026-05-09
 
 ### Added

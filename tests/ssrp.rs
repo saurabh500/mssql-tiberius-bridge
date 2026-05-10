@@ -43,5 +43,5 @@ async fn ssrp_named_instance_connect() {
         .into_first_result();
     let server_name = row[0].get::<&str, _>(0usize);
     assert!(server_name.is_some());
-    eprintln!("SSRP-resolved @@SERVERNAME: {:?}", server_name);
+    eprintln!("SSRP-resolved @@SERVERNAME: {server_name:?}");
 }

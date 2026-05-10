@@ -52,5 +52,23 @@ jobs:
       - name: Tag release
         if: "!inputs.dry_run"
         run: |
-          git tag "v${{ steps.version.outputs.version }}"
-          git push origin "v${{ steps.version.outputs.version }}"
+          VERSION="${{ steps.version.outputs.version }}"
+          TAG="v${VERSION}"
+          # release-plz.yml may have already pushed this tag; in that case
+          # the publish step above still needs to run, but tagging is a
+          # no-op. Only fail if the tag exists locally/remotely AND points
+          # at a different commit than HEAD.
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            REMOTE_SHA=$(git ls-remote --tags origin "refs/tags/${TAG}" | awk '{print $1}')
+            HEAD_SHA=$(git rev-parse HEAD)
+            if [ "${REMOTE_SHA}" = "${HEAD_SHA}" ]; then
+              echo "ℹ️  Tag ${TAG} already exists at ${REMOTE_SHA} (matches HEAD); skipping."
+              exit 0
+            else
+              echo "::error::Tag ${TAG} already exists at ${REMOTE_SHA} but HEAD is ${HEAD_SHA}. Refusing to overwrite."
+              exit 1
+            fi
+          fi
+          git tag "${TAG}"
+          git push origin "${TAG}"
+          echo "🏷️  Tagged ${TAG}"

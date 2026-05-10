@@ -55,6 +55,7 @@
 //! | `json` | off | Enables [`serde_json::Value`] support for [`FromSql`] and [`ToSql`] |
 //! | `time` | off | Enables `time` crate support for [`FromSql`] and [`ToSql`] |
 //! | `jiff` | off | Enables `jiff` crate support for [`FromSql`] and [`ToSql`] |
+//! | `serde` | off | Enables `serde::Deserialize` for [`Row`] (see [`serde_de`]) |
 //!
 //! # Modules
 //!
@@ -82,6 +83,8 @@ pub mod error;
 pub mod pool;
 pub mod query;
 pub mod row;
+#[cfg(feature = "serde")]
+pub mod serde_de;
 
 // Re-exports for ergonomic top-level access.
 pub use client::Client;

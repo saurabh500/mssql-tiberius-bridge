@@ -146,6 +146,52 @@ impl Row {
         self.values.get(idx)
     }
 
+    /// Pre-decoded UTF-8 string at the given index, if any. Used by the
+    /// `serde` deserializer and by `&str`-typed FromSql.
+    #[inline]
+    pub(crate) fn decoded_str_at(&self, idx: usize) -> Option<&str> {
+        self.decoded_strings.get(idx).and_then(|s| s.as_deref())
+    }
+
+    /// Deserialize this row into a `T` using `serde`. Consumes the row.
+    ///
+    /// Requires the `serde` cargo feature. See the
+    /// [`serde_de`](crate::serde_de) module for the field/type mapping rules.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # #[cfg(feature = "serde")]
+    /// # async fn ex(client: &mut mssql_tiberius_bridge::Client)
+    /// #     -> mssql_tiberius_bridge::Result<()> {
+    /// use serde::Deserialize;
+    /// use mssql_tiberius_bridge::Row;
+    ///
+    /// #[derive(Deserialize)]
+    /// struct User { id: i64, name: String }
+    ///
+    /// let users: Vec<User> = client.query("SELECT id, name FROM users", &[])
+    ///     .await?
+    ///     .into_first_result()
+    ///     .into_iter()
+    ///     .map(Row::deserialize)
+    ///     .collect::<mssql_tiberius_bridge::Result<Vec<_>>>()?;
+    /// # Ok(()) }
+    /// ```
+    #[cfg(feature = "serde")]
+    pub fn deserialize<T: serde::de::DeserializeOwned>(self) -> Result<T> {
+        T::deserialize(crate::serde_de::RowDeserializer::new(&self))
+    }
+
+    /// Borrowed-deserialize variant: the resulting value can borrow `&str`
+    /// and `&[u8]` cells directly out of this row.
+    ///
+    /// Requires the `serde` cargo feature.
+    #[cfg(feature = "serde")]
+    pub fn deserialize_borrowed<'de, T: serde::Deserialize<'de>>(&'de self) -> Result<T> {
+        T::deserialize(crate::serde_de::RowDeserializer::new(self))
+    }
+
     /// Look up a column index by name (case-sensitive).
     pub fn column_index(&self, name: &str) -> Option<usize> {
         self.schema.name_map.get(name).copied()

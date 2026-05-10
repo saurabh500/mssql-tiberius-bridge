@@ -144,7 +144,7 @@ jobs:
           TEST_DB_HOST: localhost
           TEST_DB_PORT: 1433
           TEST_DB_USER: sa
-          TEST_DB_PASSWORD: "Strong!Pass123"
+          TEST_DB_PASSWORD: ${{ env.SA_PASSWORD }}
           TEST_DB_NAME: master
           # Hand the bridge our self-signed cert as a trust anchor for the
           # Strict-mode tests. The cert was generated with CA:TRUE above so

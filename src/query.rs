@@ -342,7 +342,25 @@ impl<T: ToSql + Default> ToSql for Option<T> {
 
 impl ToSql for serde_json::Value {
     fn to_sql(&self) -> SqlType {
-        SqlType::NVarchar(Some(SqlString::from_utf8_string(self.to_string())), 4000)
+        match self {
+            serde_json::Value::Null => SqlType::NVarchar(None, 4000),
+            serde_json::Value::Bool(value) => SqlType::Bit(Some(*value)),
+            serde_json::Value::Number(number) => {
+                if let Some(value) = number.as_i64() {
+                    SqlType::BigInt(Some(value))
+                } else if let Some(value) = number.as_f64() {
+                    SqlType::Float(Some(value))
+                } else {
+                    SqlType::Float(Some(f64::NAN))
+                }
+            }
+            serde_json::Value::String(value) => {
+                SqlType::NVarchar(Some(SqlString::from_utf8_string(value.clone())), 4000)
+            }
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                SqlType::NVarchar(Some(SqlString::from_utf8_string(self.to_string())), 4000)
+            }
+        }
     }
 }
 
@@ -621,6 +639,7 @@ pub(crate) fn build_params_with_string_encoding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn to_sql_primitives() {
@@ -683,5 +702,33 @@ mod tests {
         let qr = QueryResult::empty();
         assert_eq!(qr.result_set_count(), 0);
         assert!(qr.into_first_result().is_empty());
+    }
+
+    #[test]
+    fn json_value_to_sql_dispatches_by_variant() {
+        assert!(matches!(serde_json::Value::Null.to_sql(), SqlType::NVarchar(None, 4000)));
+        assert!(matches!(json!(true).to_sql(), SqlType::Bit(Some(true))));
+        assert!(matches!(json!(42).to_sql(), SqlType::BigInt(Some(42))));
+        assert!(matches!(json!(3.14).to_sql(), SqlType::Float(Some(v)) if (v - 3.14).abs() < f64::EPSILON));
+
+        let ty = json!("alice").to_sql();
+        assert!(matches!(ty, SqlType::NVarchar(_, 4000)));
+        if let SqlType::NVarchar(Some(value), 4000) = ty {
+            assert_eq!(value.to_utf8_string(), "alice");
+        }
+
+        let array = json!([1, 2, 3]);
+        if let SqlType::NVarchar(Some(value), 4000) = array.to_sql() {
+            assert_eq!(value.to_utf8_string(), array.to_string());
+        } else {
+            panic!("expected NVarchar JSON text for array");
+        }
+
+        let object = json!({"name":"alice"});
+        if let SqlType::NVarchar(Some(value), 4000) = object.to_sql() {
+            assert_eq!(value.to_utf8_string(), object.to_string());
+        } else {
+            panic!("expected NVarchar JSON text for object");
+        }
     }
 }

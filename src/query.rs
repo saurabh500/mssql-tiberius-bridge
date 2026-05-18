@@ -317,38 +317,35 @@ impl ToSql for uuid::Uuid {
 // rust_decimal
 // ---------------------------------------------------------------------------
 
+/// Converts a decimal string to `SqlType::Numeric` with the given precision/scale.
+/// Falls back to max precision (38) if the initial precision is insufficient, or
+/// returns `SqlType::Numeric(None)` if all attempts fail.
+fn decimal_to_sql_type(decimal_str: &str, precision: u8, scale: u8) -> SqlType {
+    use mssql_tds::datatypes::decoder::DecimalParts;
+
+    match DecimalParts::from_string(decimal_str, precision, scale) {
+        Ok(dp) => SqlType::Numeric(Some(dp)),
+        Err(_) => DecimalParts::from_string(decimal_str, 38, scale)
+            .map(|dp| SqlType::Numeric(Some(dp)))
+            .unwrap_or_else(|_| SqlType::Numeric(None)),
+    }
+}
+
 impl ToSql for rust_decimal::Decimal {
     fn to_sql(&self) -> SqlType {
-        use mssql_tds::datatypes::decoder::DecimalParts;
-
-        // Convert Decimal to string, then parse via DecimalParts::from_string
         let decimal_str = self.to_string();
         let scale = self.scale() as u8;
 
-        // Calculate precision from the number of significant digits.
-        // We count digits in the mantissa after removing the sign.
         let mantissa = self.mantissa().abs();
         let precision = if mantissa == 0 {
             1
         } else {
-            // Count digits: log10(mantissa) + 1, but we compute it safely
             ((mantissa as f64).log10().floor() as u32 + 1) as u8
         };
 
-        // Ensure precision is at least equal to scale (required for valid DECIMAL)
         let precision = precision.max(scale);
 
-        // from_string expects string representation and precision/scale.
-        // It returns DecimalParts which can fail, so we unwrap with a fallback.
-        match DecimalParts::from_string(&decimal_str, precision, scale) {
-            Ok(dp) => SqlType::Numeric(Some(dp)),
-            Err(_) => {
-                // Fallback: if precision calculation fails, try with max precision
-                DecimalParts::from_string(&decimal_str, 28, scale)
-                    .map(|dp| SqlType::Numeric(Some(dp)))
-                    .unwrap_or_else(|_| SqlType::Numeric(None))
-            }
-        }
+        decimal_to_sql_type(&decimal_str, precision, scale)
     }
 
     fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -765,6 +762,54 @@ mod tests {
         let column_val = ColumnValues::Numeric(decimal_parts);
         let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
         assert_eq!(roundtripped, Some(original));
+    }
+
+    #[test]
+    fn decimal_debug_fmt_displays_value() {
+        use rust_decimal::Decimal;
+
+        let d = Decimal::new(12345, 2);
+        let params: Vec<&dyn ToSql> = vec![&d];
+        let output = format!("{:?}", DebugParams(&params));
+        assert!(output.contains("123.45"));
+    }
+
+    #[test]
+    fn decimal_precision_boundary_uses_fallback() {
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
+
+        // A value with 28 significant digits — the maximum for rust_decimal.
+        let d = Decimal::from_str("9999999999999999999999999999").unwrap();
+        let sql_type = d.to_sql();
+        assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
+    }
+
+    #[test]
+    fn decimal_to_sql_type_fallback_on_low_precision() {
+        // Call with deliberately too-low precision to trigger the fallback path
+        let result = super::decimal_to_sql_type("12345.67", 3, 2);
+        // The initial from_string(precision=3) fails because 7 digits > 3,
+        // then the fallback with precision=38 succeeds.
+        assert!(matches!(result, SqlType::Numeric(Some(_))));
+    }
+
+    #[test]
+    fn decimal_to_sql_type_total_failure_returns_none() {
+        // Invalid decimal string that can't be parsed at all
+        let result = super::decimal_to_sql_type("not_a_number", 10, 2);
+        assert!(matches!(result, SqlType::Numeric(None)));
+    }
+
+    #[test]
+    fn decimal_scale_exceeds_precision_handled() {
+        use rust_decimal::Decimal;
+
+        // Scale=28, mantissa=1 → "0.0000000000000000000000000001"
+        // precision from log10(1)=0 → 1, but scale=28, so precision.max(28)=28
+        let d = Decimal::new(1, 28);
+        let sql_type = d.to_sql();
+        assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
     }
 
     #[cfg(feature = "time")]

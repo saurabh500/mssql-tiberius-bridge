@@ -6,8 +6,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use mssql_tds::datatypes::column_values::ColumnValues;
+use mssql_tds::datatypes::column_values::{
+    ColumnValues, SqlDate, SqlDateTime, SqlDateTime2, SqlDateTimeOffset, SqlMoney,
+    SqlSmallDateTime, SqlSmallMoney, SqlTime, SqlXml,
+};
+use mssql_tds::datatypes::decoder::DecimalParts;
+use mssql_tds::datatypes::row_writer::RowWriter;
+use mssql_tds::datatypes::sql_json::SqlJson;
+use mssql_tds::datatypes::sql_string::SqlString;
+use mssql_tds::datatypes::sql_vector::SqlVector;
 use mssql_tds::query::metadata::ColumnMetadata;
+use uuid::Uuid;
 
 use crate::column::Column;
 use crate::error::{Error, Result};
@@ -668,6 +677,171 @@ impl<'a> FromSql<'a> for rust_decimal::Decimal {
             }
             _ => None,
         }
+    }
+}
+
+/// A [`RowWriter`] that builds a [`Row`] directly during TDS wire decode,
+/// avoiding the intermediate `Vec<ColumnValues>` allocation and the second
+/// pass over values to decode strings.
+pub(crate) struct BridgeRowWriter {
+    schema: Arc<RowSchema>,
+    values: Vec<ColumnValues>,
+    decoded_strings: Vec<Option<String>>,
+    col_count: usize,
+}
+
+impl BridgeRowWriter {
+    pub(crate) fn new(schema: Arc<RowSchema>) -> Self {
+        let col_count = schema.columns.len();
+        Self {
+            schema,
+            values: Vec::with_capacity(col_count),
+            decoded_strings: Vec::with_capacity(col_count),
+            col_count,
+        }
+    }
+
+    /// Takes the completed [`Row`], resetting the writer for the next row.
+    pub(crate) fn take_row(&mut self) -> Row {
+        let values = std::mem::replace(&mut self.values, Vec::with_capacity(self.col_count));
+        let decoded_strings = std::mem::replace(
+            &mut self.decoded_strings,
+            Vec::with_capacity(self.col_count),
+        );
+        Row {
+            schema: self.schema.clone(),
+            values,
+            decoded_strings,
+        }
+    }
+}
+
+impl RowWriter for BridgeRowWriter {
+    fn write_null(&mut self, _col: usize) {
+        self.values.push(ColumnValues::Null);
+        self.decoded_strings.push(None);
+    }
+
+    fn write_bool(&mut self, _col: usize, val: bool) {
+        self.values.push(ColumnValues::Bit(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_u8(&mut self, _col: usize, val: u8) {
+        self.values.push(ColumnValues::TinyInt(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_i16(&mut self, _col: usize, val: i16) {
+        self.values.push(ColumnValues::SmallInt(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_i32(&mut self, _col: usize, val: i32) {
+        self.values.push(ColumnValues::Int(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_i64(&mut self, _col: usize, val: i64) {
+        self.values.push(ColumnValues::BigInt(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_f32(&mut self, _col: usize, val: f32) {
+        self.values.push(ColumnValues::Real(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_f64(&mut self, _col: usize, val: f64) {
+        self.values.push(ColumnValues::Float(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_string(&mut self, _col: usize, val: SqlString) {
+        let decoded = val.to_utf8_string();
+        self.values.push(ColumnValues::String(val));
+        self.decoded_strings.push(Some(decoded));
+    }
+
+    fn write_bytes(&mut self, _col: usize, val: Vec<u8>) {
+        self.values.push(ColumnValues::Bytes(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_decimal(&mut self, _col: usize, val: DecimalParts) {
+        self.values.push(ColumnValues::Decimal(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_numeric(&mut self, _col: usize, val: DecimalParts) {
+        self.values.push(ColumnValues::Numeric(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_date(&mut self, _col: usize, val: SqlDate) {
+        self.values.push(ColumnValues::Date(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_time(&mut self, _col: usize, val: SqlTime) {
+        self.values.push(ColumnValues::Time(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_datetime(&mut self, _col: usize, val: SqlDateTime) {
+        self.values.push(ColumnValues::DateTime(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_smalldatetime(&mut self, _col: usize, val: SqlSmallDateTime) {
+        self.values.push(ColumnValues::SmallDateTime(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_datetime2(&mut self, _col: usize, val: SqlDateTime2) {
+        self.values.push(ColumnValues::DateTime2(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_datetimeoffset(&mut self, _col: usize, val: SqlDateTimeOffset) {
+        self.values.push(ColumnValues::DateTimeOffset(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_money(&mut self, _col: usize, val: SqlMoney) {
+        self.values.push(ColumnValues::Money(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_smallmoney(&mut self, _col: usize, val: SqlSmallMoney) {
+        self.values.push(ColumnValues::SmallMoney(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_uuid(&mut self, _col: usize, val: Uuid) {
+        self.values.push(ColumnValues::Uuid(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn write_xml(&mut self, _col: usize, val: SqlXml) {
+        let decoded = val.as_string();
+        self.values.push(ColumnValues::Xml(val));
+        self.decoded_strings.push(Some(decoded));
+    }
+
+    fn write_json(&mut self, _col: usize, val: SqlJson) {
+        let decoded = val.as_string();
+        self.values.push(ColumnValues::Json(val));
+        self.decoded_strings.push(Some(decoded));
+    }
+
+    fn write_vector(&mut self, _col: usize, val: SqlVector) {
+        self.values.push(ColumnValues::Vector(val));
+        self.decoded_strings.push(None);
+    }
+
+    fn end_row(&mut self) {
+        // No-op — row is taken via take_row().
     }
 }
 

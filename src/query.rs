@@ -4,11 +4,9 @@
 //! [`into_first_result()`](QueryResult::into_first_result) (single result set)
 //! and [`into_results()`](QueryResult::into_results) (multiple result sets).
 
-use mssql_tds::datatypes::column_values::ColumnValues;
 use mssql_tds::datatypes::sql_string::SqlString;
 use mssql_tds::datatypes::sqltypes::SqlType;
 use mssql_tds::message::parameters::rpc_parameters::{RpcParameter, StatusFlags};
-use mssql_tds::query::metadata::ColumnMetadata;
 
 use crate::row::Row;
 
@@ -37,7 +35,7 @@ impl ExecuteResult {
 /// queries (most common), or [`into_results()`](Self::into_results) for
 /// multi-statement batches.
 pub struct QueryResult {
-    pub(crate) result_sets: Vec<(Vec<ColumnMetadata>, Vec<Vec<ColumnValues>>)>,
+    pub(crate) result_sets: Vec<Vec<Row>>,
 }
 
 impl QueryResult {
@@ -52,11 +50,7 @@ impl QueryResult {
         if sets.is_empty() {
             return Vec::new();
         }
-        let (meta, rows) = sets.remove(0);
-        let schema = crate::row::RowSchema::from_metadata(&meta);
-        rows.into_iter()
-            .map(|values| Row::from_schema(schema.clone(), values))
-            .collect()
+        sets.remove(0)
     }
 
     /// Consume all result sets into a `Vec<Vec<Row>>`.
@@ -64,14 +58,6 @@ impl QueryResult {
     /// Use for multi-statement batches like `SELECT 1; SELECT 2`.
     pub fn into_results(self) -> Vec<Vec<Row>> {
         self.result_sets
-            .into_iter()
-            .map(|(meta, rows)| {
-                let schema = crate::row::RowSchema::from_metadata(&meta);
-                rows.into_iter()
-                    .map(|values| Row::from_schema(schema.clone(), values))
-                    .collect()
-            })
-            .collect()
     }
 
     /// Number of result sets.
@@ -115,17 +101,13 @@ impl QueryResult {
     /// # }
     /// ```
     pub fn into_row_stream(self) -> RowStream {
-        let rows: Vec<Row> = self
-            .result_sets
-            .into_iter()
-            .flat_map(|(meta, rows)| {
-                let schema = crate::row::RowSchema::from_metadata(&meta);
-                rows.into_iter()
-                    .map(move |values| Row::from_schema(schema.clone(), values))
-            })
-            .collect();
+        let total: usize = self.result_sets.iter().map(|s| s.len()).sum();
+        let mut sets = self.result_sets.into_iter();
+        let current = sets.next().unwrap_or_default().into_iter();
         RowStream {
-            rows: rows.into_iter(),
+            sets,
+            current,
+            remaining: total,
         }
     }
 
@@ -149,7 +131,9 @@ impl QueryResult {
 /// **Note:** rows are pre-buffered (see
 /// [`QueryResult::into_row_stream`] for the limitation and roadmap).
 pub struct RowStream {
-    rows: std::vec::IntoIter<Row>,
+    sets: std::vec::IntoIter<Vec<Row>>,
+    current: std::vec::IntoIter<Row>,
+    remaining: usize,
 }
 
 impl futures_core::Stream for RowStream {
@@ -159,12 +143,22 @@ impl futures_core::Stream for RowStream {
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        std::task::Poll::Ready(self.rows.next().map(Ok))
+        loop {
+            if let Some(row) = self.current.next() {
+                self.remaining -= 1;
+                return std::task::Poll::Ready(Some(Ok(row)));
+            }
+            match self.sets.next() {
+                Some(next_set) => {
+                    self.current = next_set.into_iter();
+                }
+                None => return std::task::Poll::Ready(None),
+            }
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.rows.len();
-        (n, Some(n))
+        (self.remaining, Some(self.remaining))
     }
 }
 
@@ -834,6 +828,7 @@ mod tests {
     #[cfg(feature = "time")]
     #[test]
     fn time_date_roundtrips_through_column_data() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
         let date = time::Date::from_calendar_date(2024, time::Month::February, 29).unwrap();
         let SqlType::Date(Some(sql_date)) = date.to_sql() else {
             panic!("expected SQL date")
@@ -845,6 +840,7 @@ mod tests {
     #[cfg(feature = "jiff")]
     #[test]
     fn jiff_date_roundtrips_through_column_data() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
         let date = jiff::civil::date(2024, 2, 29);
         let SqlType::Date(Some(sql_date)) = date.to_sql() else {
             panic!("expected SQL date")

@@ -275,16 +275,16 @@ impl Client {
                 .get_current_resultset()
                 .map(|rs| crate::row::RowSchema::from_metadata(rs.get_metadata()))
             {
+                let mut writer = crate::row::BridgeRowWriter::new(schema);
                 loop {
-                    let next = match self.inner.get_current_resultset() {
-                        Some(rs) => rs.next_row().await.map_err(Error::Tds)?,
-                        None => None,
+                    let has_row = match self.inner.get_current_resultset() {
+                        Some(rs) => rs.next_row_into(&mut writer).await.map_err(Error::Tds)?,
+                        None => false,
                     };
-                    match next {
-                        Some(values) => {
-                            yield crate::row::Row::from_schema(schema.clone(), values)
-                        }
-                        None => break,
+                    if has_row {
+                        yield writer.take_row();
+                    } else {
+                        break;
                     }
                 }
                 if !self.inner.move_to_next().await.map_err(Error::Tds)? {

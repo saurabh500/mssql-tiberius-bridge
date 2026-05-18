@@ -36,3 +36,9 @@ async-stream = "0.3"
 [dev-dependencies]
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+tokio = { version = "1", features = ["full"] }
+
+[[bench]]
+name = "row_streaming"
+harness = false

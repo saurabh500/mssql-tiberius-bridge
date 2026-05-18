@@ -617,7 +617,6 @@ pub(crate) fn build_params_with_string_encoding(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mssql_tds::datatypes::column_values::ColumnValues;
     use serde_json::json;
 
     #[test]
@@ -645,6 +644,7 @@ mod tests {
     #[cfg(feature = "time")]
     #[test]
     fn time_date_roundtrips_through_column_data() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
         let date = time::Date::from_calendar_date(2024, time::Month::February, 29).unwrap();
         let SqlType::Date(Some(sql_date)) = date.to_sql() else {
             panic!("expected SQL date")
@@ -656,6 +656,7 @@ mod tests {
     #[cfg(feature = "jiff")]
     #[test]
     fn jiff_date_roundtrips_through_column_data() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
         let date = jiff::civil::date(2024, 2, 29);
         let SqlType::Date(Some(sql_date)) = date.to_sql() else {
             panic!("expected SQL date")

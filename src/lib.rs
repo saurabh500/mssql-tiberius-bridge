@@ -66,6 +66,7 @@
 //! - [`query`] — [`QueryResult`], [`ToSql`] trait, [`ExecuteResult`]
 //! - [`column`] — [`Column`] metadata, [`ColumnType`] enum
 //! - [`pool`] — Connection pooling via [`deadpool`]
+//! - [`prepared`] — [`PreparedStatement`] for server-side `sp_prepare`/`sp_execute`
 //! - [`error`] — [`Error`] and [`Result`] types
 //!
 //! # Migration from tiberius
@@ -85,6 +86,7 @@ pub mod column;
 pub mod config;
 pub mod error;
 pub mod pool;
+pub mod prepared;
 pub mod query;
 pub mod row;
 #[cfg(feature = "serde")]
@@ -97,6 +99,7 @@ pub use column::{Collation, Column, ColumnType, MultiPartName};
 pub use config::{AuthMethod, Config, EncryptionLevel, Transport};
 pub use error::{Error, Result};
 pub use pool::{Pool, PooledConnection, TdsManager};
+pub use prepared::PreparedStatement;
 pub use query::{DebugParams, ExecuteResult, QueryResult, ToSql};
 pub use row::{ColumnIndex, FromSql, Row};
 

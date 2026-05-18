@@ -706,10 +706,15 @@ mod tests {
 
     #[test]
     fn json_value_to_sql_dispatches_by_variant() {
-        assert!(matches!(serde_json::Value::Null.to_sql(), SqlType::NVarchar(None, 4000)));
+        assert!(matches!(
+            serde_json::Value::Null.to_sql(),
+            SqlType::NVarchar(None, 4000)
+        ));
         assert!(matches!(json!(true).to_sql(), SqlType::Bit(Some(true))));
         assert!(matches!(json!(42).to_sql(), SqlType::BigInt(Some(42))));
-        assert!(matches!(json!(3.14).to_sql(), SqlType::Float(Some(v)) if (v - 3.14).abs() < f64::EPSILON));
+        assert!(
+            matches!(json!(2.5).to_sql(), SqlType::Float(Some(v)) if (v - 2.5).abs() < f64::EPSILON)
+        );
 
         let ty = json!("alice").to_sql();
         assert!(matches!(ty, SqlType::NVarchar(_, 4000)));

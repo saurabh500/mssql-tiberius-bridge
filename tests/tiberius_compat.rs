@@ -534,14 +534,14 @@ async fn serde_json_value_param_variant_dispatch() {
         .into_first_result();
     assert_eq!(rows[0].get::<i64, _>(0usize), Some(42));
 
-    let float_value = json!(3.14);
+    let float_value = json!(2.5);
     let rows = client
         .query("SELECT @P1", &[&float_value])
         .await
         .unwrap()
         .into_first_result();
     let got_float = rows[0].get::<f64, _>(0usize).unwrap();
-    assert!((got_float - 3.14).abs() < f64::EPSILON);
+    assert!((got_float - 2.5).abs() < f64::EPSILON);
 
     let string_value = json!("alice");
     let rows = client

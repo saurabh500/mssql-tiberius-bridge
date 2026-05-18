@@ -4,11 +4,9 @@
 //! [`into_first_result()`](QueryResult::into_first_result) (single result set)
 //! and [`into_results()`](QueryResult::into_results) (multiple result sets).
 
-use mssql_tds::datatypes::column_values::ColumnValues;
 use mssql_tds::datatypes::sql_string::SqlString;
 use mssql_tds::datatypes::sqltypes::SqlType;
 use mssql_tds::message::parameters::rpc_parameters::{RpcParameter, StatusFlags};
-use mssql_tds::query::metadata::ColumnMetadata;
 
 use crate::row::Row;
 
@@ -37,7 +35,7 @@ impl ExecuteResult {
 /// queries (most common), or [`into_results()`](Self::into_results) for
 /// multi-statement batches.
 pub struct QueryResult {
-    pub(crate) result_sets: Vec<(Vec<ColumnMetadata>, Vec<Vec<ColumnValues>>)>,
+    pub(crate) result_sets: Vec<Vec<Row>>,
 }
 
 impl QueryResult {
@@ -52,11 +50,7 @@ impl QueryResult {
         if sets.is_empty() {
             return Vec::new();
         }
-        let (meta, rows) = sets.remove(0);
-        let schema = crate::row::RowSchema::from_metadata(&meta);
-        rows.into_iter()
-            .map(|values| Row::from_schema(schema.clone(), values))
-            .collect()
+        sets.remove(0)
     }
 
     /// Consume all result sets into a `Vec<Vec<Row>>`.
@@ -64,14 +58,6 @@ impl QueryResult {
     /// Use for multi-statement batches like `SELECT 1; SELECT 2`.
     pub fn into_results(self) -> Vec<Vec<Row>> {
         self.result_sets
-            .into_iter()
-            .map(|(meta, rows)| {
-                let schema = crate::row::RowSchema::from_metadata(&meta);
-                rows.into_iter()
-                    .map(|values| Row::from_schema(schema.clone(), values))
-                    .collect()
-            })
-            .collect()
     }
 
     /// Number of result sets.
@@ -115,15 +101,7 @@ impl QueryResult {
     /// # }
     /// ```
     pub fn into_row_stream(self) -> RowStream {
-        let rows: Vec<Row> = self
-            .result_sets
-            .into_iter()
-            .flat_map(|(meta, rows)| {
-                let schema = crate::row::RowSchema::from_metadata(&meta);
-                rows.into_iter()
-                    .map(move |values| Row::from_schema(schema.clone(), values))
-            })
-            .collect();
+        let rows: Vec<Row> = self.result_sets.into_iter().flatten().collect();
         RowStream {
             rows: rows.into_iter(),
         }
@@ -639,6 +617,7 @@ pub(crate) fn build_params_with_string_encoding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mssql_tds::datatypes::column_values::ColumnValues;
     use serde_json::json;
 
     #[test]

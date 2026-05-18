@@ -7,8 +7,6 @@
 
 use mssql_tds::connection::tds_client::{ResultSet, ResultSetClient, TdsClient};
 use mssql_tds::connection_provider::tds_connection_provider::TdsConnectionProvider;
-use mssql_tds::datatypes::column_values::ColumnValues;
-use mssql_tds::query::metadata::ColumnMetadata;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -483,17 +481,18 @@ impl Client {
 
     /// Collect all result sets from the current execution into a [`QueryResult`].
     async fn collect_results(&mut self) -> Result<QueryResult> {
-        let mut result_sets: Vec<(Vec<ColumnMetadata>, Vec<Vec<ColumnValues>>)> = Vec::new();
+        let mut result_sets: Vec<Vec<crate::row::Row>> = Vec::new();
 
         while let Some(rs) = self.inner.get_current_resultset() {
-            let metadata = rs.get_metadata().clone();
-            let mut rows: Vec<Vec<ColumnValues>> = Vec::new();
+            let schema = crate::row::RowSchema::from_metadata(rs.get_metadata());
+            let mut writer = crate::row::BridgeRowWriter::new(schema);
+            let mut rows: Vec<crate::row::Row> = Vec::new();
 
-            while let Some(row) = rs.next_row().await.map_err(Error::Tds)? {
-                rows.push(row);
+            while rs.next_row_into(&mut writer).await.map_err(Error::Tds)? {
+                rows.push(writer.take_row());
             }
 
-            result_sets.push((metadata, rows));
+            result_sets.push(rows);
 
             if !self.inner.move_to_next().await.map_err(Error::Tds)? {
                 break;

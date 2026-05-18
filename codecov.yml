@@ -1,0 +1,18 @@
+coverage:
+  precision: 2
+  round: down
+  range: "70..100"
+
+patch:
+  default:
+    # Allow lower patch coverage for features blocked on upstream dependencies
+    target: 60%
+    threshold: 5%
+
+comment:
+  layout: "reach,diff,flags,tree"
+  behavior: default
+  require_changes: false
+  require_base: false
+  require_head: true
+  show_carryforward_flags: false

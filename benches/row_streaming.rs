@@ -128,5 +128,60 @@ fn bench_buffered_rows(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_streaming_rows, bench_buffered_rows);
+fn bench_into_row_stream(c: &mut Criterion) {
+    let rt = Runtime::new().unwrap();
+
+    rt.block_on(async {
+        let cfg = test_config();
+        let mut client = Client::connect(&cfg).await.expect("connect failed");
+        client
+            .simple_query(DROP_SQL)
+            .await
+            .expect("drop failed")
+            .into_first_result();
+        client
+            .simple_query(CREATE_SQL)
+            .await
+            .expect("create failed")
+            .into_first_result();
+        client
+            .simple_query(INSERT_SQL)
+            .await
+            .expect("insert failed")
+            .into_first_result();
+    });
+
+    c.bench_function("into_row_stream_100k_rows", |b| {
+        b.iter_custom(|iters| {
+            rt.block_on(async {
+                let cfg = test_config();
+                let mut client = Client::connect(&cfg).await.unwrap();
+                let mut total = std::time::Duration::ZERO;
+                for _ in 0..iters {
+                    let start = Instant::now();
+                    let result = client
+                        .simple_query("SELECT id, name, value, created_at FROM dbo.bench_rows")
+                        .await
+                        .unwrap();
+                    let mut stream = result.into_row_stream();
+                    let mut count = 0u64;
+                    while let Some(row) = stream.next().await {
+                        let _ = row.unwrap();
+                        count += 1;
+                    }
+                    total += start.elapsed();
+                    assert_eq!(count, 100000);
+                }
+                total
+            })
+        });
+    });
+}
+
+criterion_group!(
+    benches,
+    bench_streaming_rows,
+    bench_buffered_rows,
+    bench_into_row_stream
+);
 criterion_main!(benches);

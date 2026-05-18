@@ -101,9 +101,13 @@ impl QueryResult {
     /// # }
     /// ```
     pub fn into_row_stream(self) -> RowStream {
-        let rows: Vec<Row> = self.result_sets.into_iter().flatten().collect();
+        let total: usize = self.result_sets.iter().map(|s| s.len()).sum();
+        let mut sets = self.result_sets.into_iter();
+        let current = sets.next().unwrap_or_default().into_iter();
         RowStream {
-            rows: rows.into_iter(),
+            sets,
+            current,
+            remaining: total,
         }
     }
 
@@ -127,7 +131,9 @@ impl QueryResult {
 /// **Note:** rows are pre-buffered (see
 /// [`QueryResult::into_row_stream`] for the limitation and roadmap).
 pub struct RowStream {
-    rows: std::vec::IntoIter<Row>,
+    sets: std::vec::IntoIter<Vec<Row>>,
+    current: std::vec::IntoIter<Row>,
+    remaining: usize,
 }
 
 impl futures_core::Stream for RowStream {
@@ -137,12 +143,22 @@ impl futures_core::Stream for RowStream {
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        std::task::Poll::Ready(self.rows.next().map(Ok))
+        loop {
+            if let Some(row) = self.current.next() {
+                self.remaining -= 1;
+                return std::task::Poll::Ready(Some(Ok(row)));
+            }
+            match self.sets.next() {
+                Some(next_set) => {
+                    self.current = next_set.into_iter();
+                }
+                None => return std::task::Poll::Ready(None),
+            }
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.rows.len();
-        (n, Some(n))
+        (self.remaining, Some(self.remaining))
     }
 }
 

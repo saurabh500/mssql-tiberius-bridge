@@ -698,8 +698,8 @@ mod tests {
 
     #[test]
     fn decimal_roundtrips_through_column_data() {
-        use rust_decimal::Decimal;
         use mssql_tds::datatypes::column_values::ColumnValues;
+        use rust_decimal::Decimal;
 
         let original = Decimal::new(12345, 2); // 123.45
         let sql_type = original.to_sql();
@@ -720,8 +720,8 @@ mod tests {
 
     #[test]
     fn decimal_zero_roundtrips() {
-        use rust_decimal::Decimal;
         use mssql_tds::datatypes::column_values::ColumnValues;
+        use rust_decimal::Decimal;
 
         let original = Decimal::new(0, 0);
         let sql_type = original.to_sql();
@@ -736,8 +736,8 @@ mod tests {
 
     #[test]
     fn decimal_negative_roundtrips() {
-        use rust_decimal::Decimal;
         use mssql_tds::datatypes::column_values::ColumnValues;
+        use rust_decimal::Decimal;
 
         let original = Decimal::new(-99999, 4); // -9.9999
         let sql_type = original.to_sql();
@@ -752,8 +752,8 @@ mod tests {
 
     #[test]
     fn decimal_high_precision_roundtrips() {
-        use rust_decimal::Decimal;
         use mssql_tds::datatypes::column_values::ColumnValues;
+        use rust_decimal::Decimal;
 
         // rust_decimal supports up to 28 digits of precision with i64 mantissa
         let original = Decimal::new(9223372036854775807i64, 10); // i64::MAX

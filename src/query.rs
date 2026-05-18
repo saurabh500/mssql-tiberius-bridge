@@ -313,6 +313,49 @@ impl ToSql for uuid::Uuid {
     }
 }
 
+// ---------------------------------------------------------------------------
+// rust_decimal
+// ---------------------------------------------------------------------------
+
+impl ToSql for rust_decimal::Decimal {
+    fn to_sql(&self) -> SqlType {
+        use mssql_tds::datatypes::decoder::DecimalParts;
+
+        // Convert Decimal to string, then parse via DecimalParts::from_string
+        let decimal_str = self.to_string();
+        let scale = self.scale() as u8;
+
+        // Calculate precision from the number of significant digits.
+        // We count digits in the mantissa after removing the sign.
+        let mantissa = self.mantissa().abs();
+        let precision = if mantissa == 0 {
+            1
+        } else {
+            // Count digits: log10(mantissa) + 1, but we compute it safely
+            ((mantissa as f64).log10().floor() as u32 + 1) as u8
+        };
+
+        // Ensure precision is at least equal to scale (required for valid DECIMAL)
+        let precision = precision.max(scale);
+
+        // from_string expects string representation and precision/scale.
+        // It returns DecimalParts which can fail, so we unwrap with a fallback.
+        match DecimalParts::from_string(&decimal_str, precision, scale) {
+            Ok(dp) => SqlType::Numeric(Some(dp)),
+            Err(_) => {
+                // Fallback: if precision calculation fails, try with max precision
+                DecimalParts::from_string(&decimal_str, 28, scale)
+                    .map(|dp| SqlType::Numeric(Some(dp)))
+                    .unwrap_or_else(|_| SqlType::Numeric(None))
+            }
+        }
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
 // Option<T>: None becomes the SQL NULL of the same type
 impl<T: ToSql + Default> ToSql for Option<T> {
     fn to_sql(&self) -> SqlType {
@@ -642,6 +685,86 @@ mod tests {
         let none = None::<i32>;
         let params: &[&dyn ToSql] = &[&1i32, &"test", &none];
         assert_eq!(format!("{:?}", DebugParams(params)), r#"[1, "test", None]"#);
+    }
+
+    #[test]
+    fn decimal_to_sql_basic() {
+        use rust_decimal::Decimal;
+        let d = Decimal::new(12345, 2); // 123.45
+        let sql_type = d.to_sql();
+        // Should be Numeric type
+        assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
+    }
+
+    #[test]
+    fn decimal_roundtrips_through_column_data() {
+        use rust_decimal::Decimal;
+        use mssql_tds::datatypes::column_values::ColumnValues;
+
+        let original = Decimal::new(12345, 2); // 123.45
+        let sql_type = original.to_sql();
+
+        // Extract DecimalParts from SqlType
+        let decimal_parts = match sql_type {
+            SqlType::Numeric(Some(dp)) => dp,
+            _ => panic!("expected SqlType::Numeric with DecimalParts"),
+        };
+
+        // Wrap in ColumnValues::Numeric
+        let column_val = ColumnValues::Numeric(decimal_parts);
+
+        // Convert back using FromSql
+        let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
+        assert_eq!(roundtripped, Some(original));
+    }
+
+    #[test]
+    fn decimal_zero_roundtrips() {
+        use rust_decimal::Decimal;
+        use mssql_tds::datatypes::column_values::ColumnValues;
+
+        let original = Decimal::new(0, 0);
+        let sql_type = original.to_sql();
+        let decimal_parts = match sql_type {
+            SqlType::Numeric(Some(dp)) => dp,
+            _ => panic!("expected SqlType::Numeric"),
+        };
+        let column_val = ColumnValues::Numeric(decimal_parts);
+        let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
+        assert_eq!(roundtripped, Some(original));
+    }
+
+    #[test]
+    fn decimal_negative_roundtrips() {
+        use rust_decimal::Decimal;
+        use mssql_tds::datatypes::column_values::ColumnValues;
+
+        let original = Decimal::new(-99999, 4); // -9.9999
+        let sql_type = original.to_sql();
+        let decimal_parts = match sql_type {
+            SqlType::Numeric(Some(dp)) => dp,
+            _ => panic!("expected SqlType::Numeric"),
+        };
+        let column_val = ColumnValues::Numeric(decimal_parts);
+        let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
+        assert_eq!(roundtripped, Some(original));
+    }
+
+    #[test]
+    fn decimal_high_precision_roundtrips() {
+        use rust_decimal::Decimal;
+        use mssql_tds::datatypes::column_values::ColumnValues;
+
+        // rust_decimal supports up to 28 digits of precision with i64 mantissa
+        let original = Decimal::new(9223372036854775807i64, 10); // i64::MAX
+        let sql_type = original.to_sql();
+        let decimal_parts = match sql_type {
+            SqlType::Numeric(Some(dp)) => dp,
+            _ => panic!("expected SqlType::Numeric"),
+        };
+        let column_val = ColumnValues::Numeric(decimal_parts);
+        let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
+        assert_eq!(roundtripped, Some(original));
     }
 
     #[cfg(feature = "time")]

@@ -22,6 +22,7 @@ use mssql_tds::connection::client_context::{
     ClientContext, DriverVersion, TdsAuthenticationMethod,
 };
 use mssql_tds::core::EncryptionSetting;
+use std::path::PathBuf;
 
 /// The driver name sent in the TDS Login7 packet and UserAgent feature extension.
 /// Follows the MS driver naming convention (e.g., `MS-TDS`, `MS-PYTHON`).
@@ -164,7 +165,7 @@ pub struct Config {
     database: String,
     auth: AuthMethod,
     trust_cert: bool,
-    server_certificate: Option<String>,
+    server_certificate: Option<PathBuf>,
     host_name_in_certificate: Option<String>,
     readonly: bool,
     encryption: EncryptionLevel,
@@ -263,7 +264,7 @@ impl Config {
     /// let mut cfg = Config::new();
     /// cfg.host("db.internal").trust_cert_ca("/etc/ssl/private-ca.pem");
     /// ```
-    pub fn trust_cert_ca(&mut self, path: impl Into<String>) -> &mut Self {
+    pub fn trust_cert_ca(&mut self, path: impl Into<PathBuf>) -> &mut Self {
         self.server_certificate = Some(path.into());
         self
     }
@@ -563,25 +564,29 @@ mod tests {
 
     #[test]
     fn trust_cert_ca_sets_server_certificate() {
+        use std::path::Path;
+
         let mut cfg = Config::new();
         cfg.trust_cert_ca("/etc/ssl/ca.pem");
         let ctx = cfg.to_client_context();
         assert_eq!(
             ctx.encryption_options.server_certificate.as_deref(),
-            Some("/etc/ssl/ca.pem")
+            Some(Path::new("/etc/ssl/ca.pem"))
         );
         assert!(!ctx.encryption_options.trust_server_certificate);
     }
 
     #[test]
     fn trust_cert_ca_independent_of_trust_cert() {
+        use std::path::Path;
+
         let mut cfg = Config::new();
         cfg.trust_cert().trust_cert_ca("/tmp/ca.pem");
         let ctx = cfg.to_client_context();
         assert!(ctx.encryption_options.trust_server_certificate);
         assert_eq!(
             ctx.encryption_options.server_certificate.as_deref(),
-            Some("/tmp/ca.pem")
+            Some(Path::new("/tmp/ca.pem"))
         );
     }
 
@@ -754,6 +759,8 @@ mod tests {
 
     #[test]
     fn strict_preserves_host_name_in_certificate_and_ca() {
+        use std::path::Path;
+
         // Strict mode must still honour SNI override and custom CA bundle —
         // only `trust_cert` (TrustServerCertificate) is ignored by mssql-tds
         // under Strict.
@@ -764,7 +771,10 @@ mod tests {
         let opts = cfg.to_client_context().encryption_options;
         assert_eq!(opts.mode, mssql_tds::core::EncryptionSetting::Strict);
         assert_eq!(opts.host_name_in_cert.as_deref(), Some("sql.example.com"));
-        assert_eq!(opts.server_certificate.as_deref(), Some("/etc/ssl/ca.pem"));
+        assert_eq!(
+            opts.server_certificate.as_deref(),
+            Some(Path::new("/etc/ssl/ca.pem"))
+        );
     }
 
     #[test]

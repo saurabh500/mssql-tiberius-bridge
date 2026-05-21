@@ -313,6 +313,32 @@ impl ToSql for uuid::Uuid {
     }
 }
 
+impl ToSql for rust_decimal::Decimal {
+    fn to_sql(&self) -> SqlType {
+        use mssql_tds::datatypes::decoder::DecimalParts;
+
+        let s = self.to_string();
+        let scale = self.scale() as u8;
+        let digits_only: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
+        let significant = digits_only.trim_start_matches('0');
+        let precision = (if significant.is_empty() {
+            1
+        } else {
+            significant.len()
+        }) as u8;
+        let precision = precision.max(scale).min(38);
+
+        let parts = DecimalParts::from_string(&s, precision, scale)
+            .or_else(|_| DecimalParts::from_string(&s, 38, scale))
+            .expect("failed to convert rust_decimal::Decimal to DecimalParts");
+        SqlType::Numeric(Some(parts))
+    }
+
+    fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(self, f)
+    }
+}
+
 // Option<T>: None becomes the SQL NULL of the same type
 impl<T: ToSql + Default> ToSql for Option<T> {
     fn to_sql(&self) -> SqlType {
@@ -642,6 +668,29 @@ mod tests {
         let none = None::<i32>;
         let params: &[&dyn ToSql] = &[&1i32, &"test", &none];
         assert_eq!(format!("{:?}", DebugParams(params)), r#"[1, "test", None]"#);
+    }
+
+    #[test]
+    fn decimal_to_sql_basic() {
+        let d = rust_decimal::Decimal::new(12345, 2); // 123.45
+        let sql_type = d.to_sql();
+        assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
+    }
+
+    #[test]
+    fn decimal_roundtrips_through_column_data() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
+
+        let original = rust_decimal::Decimal::new(12345, 2); // 123.45
+        let sql_type = original.to_sql();
+        let decimal_parts = match sql_type {
+            SqlType::Numeric(Some(dp)) => dp,
+            _ => panic!("expected SqlType::Numeric with DecimalParts"),
+        };
+
+        let column_val = ColumnValues::Numeric(decimal_parts);
+        let roundtripped: Option<rust_decimal::Decimal> = crate::FromSql::from_sql(&column_val);
+        assert_eq!(roundtripped, Some(original));
     }
 
     #[cfg(feature = "time")]

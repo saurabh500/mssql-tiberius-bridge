@@ -11,6 +11,12 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+## [0.1.0-preview.6](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.5...v0.1.0-preview.6) - 2026-05-21
+
+### Added
+
+- *(prepared)* Server-side prepared statements via sp_prepare/sp_execute ([#94](https://github.com/saurabh500/mssql-tiberius-bridge/pull/94)) ([#94](https://github.com/saurabh500/mssql-tiberius-bridge/issues/94), [#56](https://github.com/saurabh500/mssql-tiberius-bridge/issues/56), [#30](https://github.com/saurabh500/mssql-tiberius-bridge/issues/30), [#5](https://github.com/saurabh500/mssql-tiberius-bridge/issues/5), [#5](https://github.com/saurabh500/mssql-tiberius-bridge/issues/5), [#94](https://github.com/saurabh500/mssql-tiberius-bridge/issues/94), [#56](https://github.com/saurabh500/mssql-tiberius-bridge/issues/56), [#30](https://github.com/saurabh500/mssql-tiberius-bridge/issues/30), [#5](https://github.com/saurabh500/mssql-tiberius-bridge/issues/5), [#5](https://github.com/saurabh500/mssql-tiberius-bridge/issues/5))
+
 ## [0.1.0-preview.5](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.4...v0.1.0-preview.5) - 2026-05-18
 
 ### Documentation

@@ -1,5 +1,6 @@
 use chrono::TimeZone;
 use mssql_tiberius_bridge::{AuthMethod, Client, Config};
+use serde_json::json;
 
 fn test_config() -> Config {
     let password = match std::env::var("TEST_DB_PASSWORD") {
@@ -503,6 +504,74 @@ async fn datetime_utc_param_sends_offset_zero() {
         .unwrap();
     assert_eq!(got.naive_utc(), dt_utc.naive_utc());
     assert_eq!(got.offset().local_minus_utc(), 0);
+}
+
+#[tokio::test]
+async fn serde_json_value_param_variant_dispatch() {
+    let mut client = connect().await;
+
+    let null_value = serde_json::Value::Null;
+    let rows = client
+        .query("SELECT @P1", &[&null_value])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(rows[0].get::<Option<String>, _>(0usize), Some(None));
+
+    let bool_value = json!(true);
+    let rows = client
+        .query("SELECT @P1", &[&bool_value])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(rows[0].get::<bool, _>(0usize), Some(true));
+
+    let int_value = json!(42);
+    let rows = client
+        .query("SELECT @P1", &[&int_value])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(rows[0].get::<i64, _>(0usize), Some(42));
+
+    let float_value = json!(2.5);
+    let rows = client
+        .query("SELECT @P1", &[&float_value])
+        .await
+        .unwrap()
+        .into_first_result();
+    let got_float = rows[0].get::<f64, _>(0usize).unwrap();
+    assert!((got_float - 2.5).abs() < f64::EPSILON);
+
+    let string_value = json!("alice");
+    let rows = client
+        .query("SELECT @P1", &[&string_value])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(rows[0].get::<String, _>(0usize), Some("alice".to_string()));
+
+    let array_value = json!([1, 2, 3]);
+    let rows = client
+        .query("SELECT @P1", &[&array_value])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(
+        rows[0].get::<String, _>(0usize),
+        Some(array_value.to_string())
+    );
+
+    let object_value = json!({"id": 1, "name": "alice"});
+    let rows = client
+        .query("SELECT @P1", &[&object_value])
+        .await
+        .unwrap()
+        .into_first_result();
+    assert_eq!(
+        rows[0].get::<String, _>(0usize),
+        Some(object_value.to_string())
+    );
 }
 
 // =============================================================================

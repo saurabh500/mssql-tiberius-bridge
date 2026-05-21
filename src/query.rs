@@ -4,11 +4,9 @@
 //! [`into_first_result()`](QueryResult::into_first_result) (single result set)
 //! and [`into_results()`](QueryResult::into_results) (multiple result sets).
 
-use mssql_tds::datatypes::column_values::ColumnValues;
 use mssql_tds::datatypes::sql_string::SqlString;
 use mssql_tds::datatypes::sqltypes::SqlType;
 use mssql_tds::message::parameters::rpc_parameters::{RpcParameter, StatusFlags};
-use mssql_tds::query::metadata::ColumnMetadata;
 
 use crate::row::Row;
 
@@ -37,7 +35,7 @@ impl ExecuteResult {
 /// queries (most common), or [`into_results()`](Self::into_results) for
 /// multi-statement batches.
 pub struct QueryResult {
-    pub(crate) result_sets: Vec<(Vec<ColumnMetadata>, Vec<Vec<ColumnValues>>)>,
+    pub(crate) result_sets: Vec<Vec<Row>>,
 }
 
 impl QueryResult {
@@ -52,11 +50,7 @@ impl QueryResult {
         if sets.is_empty() {
             return Vec::new();
         }
-        let (meta, rows) = sets.remove(0);
-        let schema = crate::row::RowSchema::from_metadata(&meta);
-        rows.into_iter()
-            .map(|values| Row::from_schema(schema.clone(), values))
-            .collect()
+        sets.remove(0)
     }
 
     /// Consume all result sets into a `Vec<Vec<Row>>`.
@@ -64,14 +58,6 @@ impl QueryResult {
     /// Use for multi-statement batches like `SELECT 1; SELECT 2`.
     pub fn into_results(self) -> Vec<Vec<Row>> {
         self.result_sets
-            .into_iter()
-            .map(|(meta, rows)| {
-                let schema = crate::row::RowSchema::from_metadata(&meta);
-                rows.into_iter()
-                    .map(|values| Row::from_schema(schema.clone(), values))
-                    .collect()
-            })
-            .collect()
     }
 
     /// Number of result sets.
@@ -115,17 +101,13 @@ impl QueryResult {
     /// # }
     /// ```
     pub fn into_row_stream(self) -> RowStream {
-        let rows: Vec<Row> = self
-            .result_sets
-            .into_iter()
-            .flat_map(|(meta, rows)| {
-                let schema = crate::row::RowSchema::from_metadata(&meta);
-                rows.into_iter()
-                    .map(move |values| Row::from_schema(schema.clone(), values))
-            })
-            .collect();
+        let total: usize = self.result_sets.iter().map(|s| s.len()).sum();
+        let mut sets = self.result_sets.into_iter();
+        let current = sets.next().unwrap_or_default().into_iter();
         RowStream {
-            rows: rows.into_iter(),
+            sets,
+            current,
+            remaining: total,
         }
     }
 
@@ -149,7 +131,9 @@ impl QueryResult {
 /// **Note:** rows are pre-buffered (see
 /// [`QueryResult::into_row_stream`] for the limitation and roadmap).
 pub struct RowStream {
-    rows: std::vec::IntoIter<Row>,
+    sets: std::vec::IntoIter<Vec<Row>>,
+    current: std::vec::IntoIter<Row>,
+    remaining: usize,
 }
 
 impl futures_core::Stream for RowStream {
@@ -159,12 +143,22 @@ impl futures_core::Stream for RowStream {
         mut self: std::pin::Pin<&mut Self>,
         _cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Option<Self::Item>> {
-        std::task::Poll::Ready(self.rows.next().map(Ok))
+        loop {
+            if let Some(row) = self.current.next() {
+                self.remaining -= 1;
+                return std::task::Poll::Ready(Some(Ok(row)));
+            }
+            match self.sets.next() {
+                Some(next_set) => {
+                    self.current = next_set.into_iter();
+                }
+                None => return std::task::Poll::Ready(None),
+            }
+        }
     }
 
     fn size_hint(&self) -> (usize, Option<usize>) {
-        let n = self.rows.len();
-        (n, Some(n))
+        (self.remaining, Some(self.remaining))
     }
 }
 
@@ -313,25 +307,39 @@ impl ToSql for uuid::Uuid {
     }
 }
 
+// ---------------------------------------------------------------------------
+// rust_decimal
+// ---------------------------------------------------------------------------
+
+/// Converts a decimal string to `SqlType::Numeric` with the given precision/scale.
+/// Falls back to max precision (38) if the initial precision is insufficient, or
+/// returns `SqlType::Numeric(None)` if all attempts fail.
+fn decimal_to_sql_type(decimal_str: &str, precision: u8, scale: u8) -> SqlType {
+    use mssql_tds::datatypes::decoder::DecimalParts;
+
+    match DecimalParts::from_string(decimal_str, precision, scale) {
+        Ok(dp) => SqlType::Numeric(Some(dp)),
+        Err(_) => DecimalParts::from_string(decimal_str, 38, scale)
+            .map(|dp| SqlType::Numeric(Some(dp)))
+            .unwrap_or_else(|_| SqlType::Numeric(None)),
+    }
+}
+
 impl ToSql for rust_decimal::Decimal {
     fn to_sql(&self) -> SqlType {
-        use mssql_tds::datatypes::decoder::DecimalParts;
-
-        let s = self.to_string();
+        let decimal_str = self.to_string();
         let scale = self.scale() as u8;
-        let digits_only: String = s.chars().filter(|c| c.is_ascii_digit()).collect();
-        let significant = digits_only.trim_start_matches('0');
-        let precision = (if significant.is_empty() {
+
+        let mantissa = self.mantissa().abs();
+        let precision = if mantissa == 0 {
             1
         } else {
-            significant.len()
-        }) as u8;
-        let precision = precision.max(scale).min(38);
+            ((mantissa as f64).log10().floor() as u32 + 1) as u8
+        };
 
-        let parts = DecimalParts::from_string(&s, precision, scale)
-            .or_else(|_| DecimalParts::from_string(&s, 38, scale))
-            .expect("failed to convert rust_decimal::Decimal to DecimalParts");
-        SqlType::Numeric(Some(parts))
+        let precision = precision.max(scale);
+
+        decimal_to_sql_type(&decimal_str, precision, scale)
     }
 
     fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -368,7 +376,25 @@ impl<T: ToSql + Default> ToSql for Option<T> {
 
 impl ToSql for serde_json::Value {
     fn to_sql(&self) -> SqlType {
-        SqlType::NVarchar(Some(SqlString::from_utf8_string(self.to_string())), 4000)
+        match self {
+            serde_json::Value::Null => SqlType::NVarchar(None, 4000),
+            serde_json::Value::Bool(value) => SqlType::Bit(Some(*value)),
+            serde_json::Value::Number(number) => {
+                if let Some(value) = number.as_i64() {
+                    SqlType::BigInt(Some(value))
+                } else if let Some(value) = number.as_f64() {
+                    SqlType::Float(Some(value))
+                } else {
+                    SqlType::Float(Some(f64::NAN))
+                }
+            }
+            serde_json::Value::String(value) => {
+                SqlType::NVarchar(Some(SqlString::from_utf8_string(value.clone())), 4000)
+            }
+            serde_json::Value::Array(_) | serde_json::Value::Object(_) => {
+                SqlType::NVarchar(Some(SqlString::from_utf8_string(self.to_string())), 4000)
+            }
+        }
     }
 }
 
@@ -647,6 +673,7 @@ pub(crate) fn build_params_with_string_encoding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     #[test]
     fn to_sql_primitives() {
@@ -672,30 +699,136 @@ mod tests {
 
     #[test]
     fn decimal_to_sql_basic() {
-        let d = rust_decimal::Decimal::new(12345, 2); // 123.45
+        use rust_decimal::Decimal;
+        let d = Decimal::new(12345, 2); // 123.45
         let sql_type = d.to_sql();
+        // Should be Numeric type
         assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
     }
 
     #[test]
     fn decimal_roundtrips_through_column_data() {
         use mssql_tds::datatypes::column_values::ColumnValues;
+        use rust_decimal::Decimal;
 
-        let original = rust_decimal::Decimal::new(12345, 2); // 123.45
+        let original = Decimal::new(12345, 2); // 123.45
         let sql_type = original.to_sql();
+
+        // Extract DecimalParts from SqlType
         let decimal_parts = match sql_type {
             SqlType::Numeric(Some(dp)) => dp,
             _ => panic!("expected SqlType::Numeric with DecimalParts"),
         };
 
+        // Wrap in ColumnValues::Numeric
         let column_val = ColumnValues::Numeric(decimal_parts);
-        let roundtripped: Option<rust_decimal::Decimal> = crate::FromSql::from_sql(&column_val);
+
+        // Convert back using FromSql
+        let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
         assert_eq!(roundtripped, Some(original));
+    }
+
+    #[test]
+    fn decimal_zero_roundtrips() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
+        use rust_decimal::Decimal;
+
+        let original = Decimal::new(0, 0);
+        let sql_type = original.to_sql();
+        let decimal_parts = match sql_type {
+            SqlType::Numeric(Some(dp)) => dp,
+            _ => panic!("expected SqlType::Numeric"),
+        };
+        let column_val = ColumnValues::Numeric(decimal_parts);
+        let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
+        assert_eq!(roundtripped, Some(original));
+    }
+
+    #[test]
+    fn decimal_negative_roundtrips() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
+        use rust_decimal::Decimal;
+
+        let original = Decimal::new(-99999, 4); // -9.9999
+        let sql_type = original.to_sql();
+        let decimal_parts = match sql_type {
+            SqlType::Numeric(Some(dp)) => dp,
+            _ => panic!("expected SqlType::Numeric"),
+        };
+        let column_val = ColumnValues::Numeric(decimal_parts);
+        let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
+        assert_eq!(roundtripped, Some(original));
+    }
+
+    #[test]
+    fn decimal_high_precision_roundtrips() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
+        use rust_decimal::Decimal;
+
+        // rust_decimal supports up to 28 digits of precision with i64 mantissa
+        let original = Decimal::new(9223372036854775807i64, 10); // i64::MAX
+        let sql_type = original.to_sql();
+        let decimal_parts = match sql_type {
+            SqlType::Numeric(Some(dp)) => dp,
+            _ => panic!("expected SqlType::Numeric"),
+        };
+        let column_val = ColumnValues::Numeric(decimal_parts);
+        let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
+        assert_eq!(roundtripped, Some(original));
+    }
+
+    #[test]
+    fn decimal_debug_fmt_displays_value() {
+        use rust_decimal::Decimal;
+
+        let d = Decimal::new(12345, 2);
+        let params: Vec<&dyn ToSql> = vec![&d];
+        let output = format!("{:?}", DebugParams(&params));
+        assert!(output.contains("123.45"));
+    }
+
+    #[test]
+    fn decimal_precision_boundary_uses_fallback() {
+        use rust_decimal::Decimal;
+        use std::str::FromStr;
+
+        // A value with 28 significant digits — the maximum for rust_decimal.
+        let d = Decimal::from_str("9999999999999999999999999999").unwrap();
+        let sql_type = d.to_sql();
+        assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
+    }
+
+    #[test]
+    fn decimal_to_sql_type_fallback_on_low_precision() {
+        // Call with deliberately too-low precision to trigger the fallback path
+        let result = super::decimal_to_sql_type("12345.67", 3, 2);
+        // The initial from_string(precision=3) fails because 7 digits > 3,
+        // then the fallback with precision=38 succeeds.
+        assert!(matches!(result, SqlType::Numeric(Some(_))));
+    }
+
+    #[test]
+    fn decimal_to_sql_type_total_failure_returns_none() {
+        // Invalid decimal string that can't be parsed at all
+        let result = super::decimal_to_sql_type("not_a_number", 10, 2);
+        assert!(matches!(result, SqlType::Numeric(None)));
+    }
+
+    #[test]
+    fn decimal_scale_exceeds_precision_handled() {
+        use rust_decimal::Decimal;
+
+        // Scale=28, mantissa=1 → "0.0000000000000000000000000001"
+        // precision from log10(1)=0 → 1, but scale=28, so precision.max(28)=28
+        let d = Decimal::new(1, 28);
+        let sql_type = d.to_sql();
+        assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
     }
 
     #[cfg(feature = "time")]
     #[test]
     fn time_date_roundtrips_through_column_data() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
         let date = time::Date::from_calendar_date(2024, time::Month::February, 29).unwrap();
         let SqlType::Date(Some(sql_date)) = date.to_sql() else {
             panic!("expected SQL date")
@@ -707,6 +840,7 @@ mod tests {
     #[cfg(feature = "jiff")]
     #[test]
     fn jiff_date_roundtrips_through_column_data() {
+        use mssql_tds::datatypes::column_values::ColumnValues;
         let date = jiff::civil::date(2024, 2, 29);
         let SqlType::Date(Some(sql_date)) = date.to_sql() else {
             panic!("expected SQL date")
@@ -732,5 +866,38 @@ mod tests {
         let qr = QueryResult::empty();
         assert_eq!(qr.result_set_count(), 0);
         assert!(qr.into_first_result().is_empty());
+    }
+
+    #[test]
+    fn json_value_to_sql_dispatches_by_variant() {
+        assert!(matches!(
+            serde_json::Value::Null.to_sql(),
+            SqlType::NVarchar(None, 4000)
+        ));
+        assert!(matches!(json!(true).to_sql(), SqlType::Bit(Some(true))));
+        assert!(matches!(json!(42).to_sql(), SqlType::BigInt(Some(42))));
+        assert!(
+            matches!(json!(2.5).to_sql(), SqlType::Float(Some(v)) if (v - 2.5).abs() < f64::EPSILON)
+        );
+
+        let ty = json!("alice").to_sql();
+        assert!(matches!(ty, SqlType::NVarchar(_, 4000)));
+        if let SqlType::NVarchar(Some(value), 4000) = ty {
+            assert_eq!(value.to_utf8_string(), "alice");
+        }
+
+        let array = json!([1, 2, 3]);
+        if let SqlType::NVarchar(Some(value), 4000) = array.to_sql() {
+            assert_eq!(value.to_utf8_string(), array.to_string());
+        } else {
+            panic!("expected NVarchar JSON text for array");
+        }
+
+        let object = json!({"name":"alice"});
+        if let SqlType::NVarchar(Some(value), 4000) = object.to_sql() {
+            assert_eq!(value.to_utf8_string(), object.to_string());
+        } else {
+            panic!("expected NVarchar JSON text for object");
+        }
     }
 }

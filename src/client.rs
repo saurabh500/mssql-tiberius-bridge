@@ -7,8 +7,6 @@
 
 use mssql_tds::connection::tds_client::{ResultSet, ResultSetClient, TdsClient};
 use mssql_tds::connection_provider::tds_connection_provider::TdsConnectionProvider;
-use mssql_tds::datatypes::column_values::ColumnValues;
-use mssql_tds::query::metadata::ColumnMetadata;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -275,16 +273,16 @@ impl Client {
                 .get_current_resultset()
                 .map(|rs| crate::row::RowSchema::from_metadata(rs.get_metadata()))
             {
+                let mut writer = crate::row::BridgeRowWriter::new(schema);
                 loop {
-                    let next = match self.inner.get_current_resultset() {
-                        Some(rs) => rs.next_row().await.map_err(Error::Tds)?,
-                        None => None,
+                    let has_row = match self.inner.get_current_resultset() {
+                        Some(rs) => rs.next_row_into(&mut writer).await.map_err(Error::Tds)?,
+                        None => false,
                     };
-                    match next {
-                        Some(values) => {
-                            yield crate::row::Row::from_schema(schema.clone(), values)
-                        }
-                        None => break,
+                    if has_row {
+                        yield writer.take_row();
+                    } else {
+                        break;
                     }
                 }
                 if !self.inner.move_to_next().await.map_err(Error::Tds)? {
@@ -344,19 +342,157 @@ impl Client {
         &mut self.inner
     }
 
+    /// Prepare a parameterized statement server-side via `sp_prepare`.
+    ///
+    /// Returns a [`PreparedStatement`](crate::prepared::PreparedStatement)
+    /// handle that can be executed many times via
+    /// [`PreparedStatement::query`](crate::prepared::PreparedStatement::query)
+    /// or [`PreparedStatement::execute`](crate::prepared::PreparedStatement::execute)
+    /// without re-parsing or re-compiling the plan on the server.
+    ///
+    /// The `param_types` slice supplies **sample values** whose
+    /// [`ToSql`] mapping is used to derive the parameter declaration string
+    /// (e.g., `@P1 INT, @P2 NVARCHAR(MAX)`). Their *runtime* values are
+    /// not bound — pass placeholders like `&0i32`, `&""`, etc.
+    ///
+    /// Closes [#56](https://github.com/saurabh500/mssql-tiberius-bridge/issues/56).
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// # use mssql_tiberius_bridge::{Client, Config, AuthMethod};
+    /// # async fn run() -> mssql_tiberius_bridge::Result<()> {
+    /// # let mut cfg = Config::new();
+    /// # cfg.authentication(AuthMethod::sql_server("sa", "p"));
+    /// # let mut client = Client::connect(&cfg).await?;
+    /// let stmt = client.prepare("SELECT @P1 * @P2 AS p", &[&0i32, &0i32]).await?;
+    /// for (a, b) in [(2i32, 3i32), (5, 7)] {
+    ///     let rows = stmt.query(&mut client, &[&a, &b]).await?.into_first_result();
+    ///     let p: i32 = rows[0].get("p").unwrap();
+    ///     println!("{a}*{b} = {p}");
+    /// }
+    /// stmt.close(&mut client).await?;
+    /// # Ok(()) }
+    /// ```
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Tds`] on SQL errors, connection issues, or if the
+    /// server returns an unexpected response from `sp_prepare`.
+    pub async fn prepare(
+        &mut self,
+        sql: impl Into<String>,
+        param_types: &[&dyn ToSql],
+    ) -> Result<crate::prepared::PreparedStatement> {
+        let sql = sql.into();
+        self.inner.close_query().await.map_err(Error::Tds)?;
+        let rpc_params =
+            build_params_with_string_encoding(param_types, self.send_string_parameters_as_unicode);
+        let handle = self
+            .inner
+            .execute_sp_prepare(sql.clone(), rpc_params, None, None)
+            .await
+            .map_err(Error::Tds)?;
+        Ok(crate::prepared::PreparedStatement::new(handle, sql))
+    }
+
+    /// Execute a previously prepared statement and collect all result sets.
+    ///
+    /// The `params` slice must match (in count and type) the `param_types`
+    /// supplied to [`Client::prepare`]. Usually called via
+    /// [`PreparedStatement::query`](crate::prepared::PreparedStatement::query).
+    pub async fn query_prepared(
+        &mut self,
+        stmt: &crate::prepared::PreparedStatement,
+        params: &[&dyn ToSql],
+    ) -> Result<QueryResult> {
+        self.inner.close_query().await.map_err(Error::Tds)?;
+        let rpc_params = if params.is_empty() {
+            None
+        } else {
+            Some(build_params_with_string_encoding(
+                params,
+                self.send_string_parameters_as_unicode,
+            ))
+        };
+        self.inner
+            .execute_sp_execute(stmt.handle(), None, rpc_params, None, None)
+            .await
+            .map_err(Error::Tds)?;
+        self.collect_results().await
+    }
+
+    /// Execute a previously prepared DML statement and return row counts.
+    ///
+    /// Same caveat as [`Client::execute`]: row counts are currently `0`
+    /// pending [#1](https://github.com/saurabh500/mssql-tiberius-bridge/issues/1).
+    /// Usually called via
+    /// [`PreparedStatement::execute`](crate::prepared::PreparedStatement::execute).
+    pub async fn execute_prepared(
+        &mut self,
+        stmt: &crate::prepared::PreparedStatement,
+        params: &[&dyn ToSql],
+    ) -> Result<ExecuteResult> {
+        self.inner.close_query().await.map_err(Error::Tds)?;
+        let rpc_params = if params.is_empty() {
+            None
+        } else {
+            Some(build_params_with_string_encoding(
+                params,
+                self.send_string_parameters_as_unicode,
+            ))
+        };
+        self.inner
+            .execute_sp_execute(stmt.handle(), None, rpc_params, None, None)
+            .await
+            .map_err(Error::Tds)?;
+
+        let mut counts: Vec<u64> = Vec::new();
+        while let Some(rs) = self.inner.get_current_resultset() {
+            let mut count = 0u64;
+            while let Some(_row) = rs.next_row().await.map_err(Error::Tds)? {
+                count += 1;
+            }
+            counts.push(count);
+            if !self.inner.move_to_next().await.map_err(Error::Tds)? {
+                break;
+            }
+        }
+        Ok(ExecuteResult { counts })
+    }
+
+    /// Release a prepared-statement handle via `sp_unprepare`.
+    ///
+    /// Consumes the [`PreparedStatement`](crate::prepared::PreparedStatement).
+    /// Usually called via
+    /// [`PreparedStatement::close`](crate::prepared::PreparedStatement::close).
+    ///
+    /// Dropping the [`Client`] also releases all prepared handles for the
+    /// connection, so calling this is optional unless you want to free
+    /// server-side memory while keeping the connection alive.
+    pub async fn unprepare(&mut self, stmt: crate::prepared::PreparedStatement) -> Result<()> {
+        self.inner.close_query().await.map_err(Error::Tds)?;
+        self.inner
+            .execute_sp_unprepare(stmt.handle(), None, None)
+            .await
+            .map_err(Error::Tds)?;
+        Ok(())
+    }
+
     /// Collect all result sets from the current execution into a [`QueryResult`].
     async fn collect_results(&mut self) -> Result<QueryResult> {
-        let mut result_sets: Vec<(Vec<ColumnMetadata>, Vec<Vec<ColumnValues>>)> = Vec::new();
+        let mut result_sets: Vec<Vec<crate::row::Row>> = Vec::new();
 
         while let Some(rs) = self.inner.get_current_resultset() {
-            let metadata = rs.get_metadata().clone();
-            let mut rows: Vec<Vec<ColumnValues>> = Vec::new();
+            let schema = crate::row::RowSchema::from_metadata(rs.get_metadata());
+            let mut writer = crate::row::BridgeRowWriter::new(schema);
+            let mut rows: Vec<crate::row::Row> = Vec::new();
 
-            while let Some(row) = rs.next_row().await.map_err(Error::Tds)? {
-                rows.push(row);
+            while rs.next_row_into(&mut writer).await.map_err(Error::Tds)? {
+                rows.push(writer.take_row());
             }
 
-            result_sets.push((metadata, rows));
+            result_sets.push(rows);
 
             if !self.inner.move_to_next().await.map_err(Error::Tds)? {
                 break;

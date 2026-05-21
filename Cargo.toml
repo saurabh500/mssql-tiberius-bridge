@@ -1,6 +1,6 @@
 [package]
 name = "mssql-tiberius-bridge"
-version = "0.1.0-preview.4"
+version = "0.1.0-preview.5"
 edition = "2021"
 description = "A tiberius-compatible API bridge over Microsoft's mssql-tds crate. Migrate from tiberius with minimal code changes."
 repository = "https://github.com/saurabh500/mssql-tiberius-bridge"
@@ -14,6 +14,7 @@ time = ["dep:time"]
 jiff = ["dep:jiff"]
 serde = ["dep:serde"]
 arrow = ["dep:arrow-array", "dep:arrow-schema"]
+_bench = []
 
 [dependencies]
 mssql-tds = { package = "mssql-tds-preview", version = "=0.1.0-preview.5", default-features = false }
@@ -36,3 +37,10 @@ async-stream = "0.3"
 [dev-dependencies]
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
+criterion = { version = "0.5", features = ["async_tokio"] }
+tokio = { version = "1", features = ["full"] }
+
+[[bench]]
+name = "row_streaming"
+harness = false
+required-features = ["_bench"]

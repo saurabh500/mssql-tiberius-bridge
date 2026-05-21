@@ -1001,9 +1001,9 @@ dependencies = [
 
 [[package]]
 name = "mssql-tds-preview"
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "454957bed59024ea56acb311e8c0b74369182f1a3256d9e036d4b46f687d0462"
+checksum = "0e88e1ab8a57f9ddfb43cd8ecab7bc4d388f7c234f8ed5334b1e35e94c7f9d7d"
 dependencies = [
  "async-trait",
  "bigdecimal",
@@ -1013,6 +1013,7 @@ dependencies = [
  "dns-lookup",
  "encoding_rs",
  "futures",
+ "half",
  "hostname",
  "libc",
  "native-tls",
@@ -1798,7 +1799,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.4.2",
+ "getrandom 0.3.4",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

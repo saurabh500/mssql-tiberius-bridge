@@ -31,7 +31,6 @@ fn test_config() -> Config {
 }
 
 #[tokio::test]
-#[ignore = "Blocked on upstream mssql-rs#5: execute_sp_prepare attaches user named_params to the RPC, causing sp_prepare to return NULL handle. Re-enable when fixed."]
 async fn prepare_select_arithmetic_runs_many_times_with_single_plan() {
     let cfg = test_config();
     let mut client = Client::connect(&cfg).await.expect("connect");
@@ -75,7 +74,6 @@ async fn prepare_select_arithmetic_runs_many_times_with_single_plan() {
 }
 
 #[tokio::test]
-#[ignore = "Blocked on upstream mssql-rs#5: execute_sp_prepare attaches user named_params to the RPC, causing sp_prepare to return NULL handle. Re-enable when fixed."]
 async fn prepare_with_string_param_and_multiple_executions() {
     let cfg = test_config();
     let mut client = Client::connect(&cfg).await.expect("connect");
@@ -121,7 +119,6 @@ async fn prepare_with_no_params_works() {
 }
 
 #[tokio::test]
-#[ignore = "Blocked on upstream mssql-rs#5: execute_sp_prepare attaches user named_params to the RPC, causing sp_prepare to return NULL handle. Re-enable when fixed."]
 async fn prepared_execute_against_dml() {
     let cfg = test_config();
     let mut client = Client::connect(&cfg).await.expect("connect");
@@ -141,6 +138,17 @@ async fn prepared_execute_against_dml() {
         )
         .await
         .expect("prepare INSERT");
+
+    let rows = client
+        .simple_query("SELECT COUNT(*) AS c FROM #t_prep_exec")
+        .await
+        .expect("count before execution")
+        .into_first_result();
+    assert_eq!(
+        rows[0].get::<i32, _>("c"),
+        Some(0),
+        "prepare must not execute sample values"
+    );
 
     for (id, name) in [(1i32, "Alice"), (2, "Bob"), (3, "Carol")] {
         stmt.execute(&mut client, &[&id, &name])

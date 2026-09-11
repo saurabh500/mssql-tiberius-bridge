@@ -651,7 +651,6 @@ async fn empty_result_set() {
 // =============================================================================
 
 #[tokio::test]
-#[ignore = "Blocked on mssql-tds exposing DONE token row counts. See GitHub issue."]
 async fn execute_insert_update_delete() {
     let mut client = connect().await;
     client
@@ -682,6 +681,43 @@ async fn execute_insert_update_delete() {
         .await
         .unwrap();
     assert_eq!(result.total(), 1);
+}
+
+#[tokio::test]
+async fn mixed_statement_results_and_counts() {
+    let mut client = connect().await;
+    client
+        .simple_query("CREATE TABLE #mixed_results (id int)")
+        .await
+        .unwrap();
+    let results = client
+        .simple_query(
+            "INSERT INTO #mixed_results VALUES (1); \
+             SELECT id FROM #mixed_results WHERE 1 = 0; \
+             PRINT 'between results'; \
+             SELECT id FROM #mixed_results; \
+             DELETE FROM #mixed_results",
+        )
+        .await
+        .unwrap()
+        .into_results();
+    assert_eq!(results.len(), 2);
+    assert!(results[0].is_empty());
+    assert_eq!(results[1][0].get::<i32, _>(0usize), Some(1));
+
+    let result = client
+        .execute(
+            "INSERT INTO #mixed_results VALUES (1), (2); \
+             PRINT 'between counts'; \
+             UPDATE #mixed_results SET id = id + 1; \
+             DELETE FROM #mixed_results WHERE id = 99; \
+             DELETE FROM #mixed_results",
+            &[],
+        )
+        .await
+        .unwrap();
+    assert_eq!(result.into_iter().collect::<Vec<_>>(), vec![2, 2, 0, 2]);
+    client.ping().await.unwrap();
 }
 
 #[tokio::test]

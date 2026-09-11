@@ -3,6 +3,7 @@
 //! A [`Row`] is returned from [`QueryResult::into_first_result()`](crate::QueryResult::into_first_result)
 //! and provides typed access to column values via [`get()`](Row::get).
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -13,7 +14,7 @@ use mssql_tds::datatypes::column_values::{
 use mssql_tds::datatypes::decoder::DecimalParts;
 use mssql_tds::datatypes::row_writer::RowWriter;
 use mssql_tds::datatypes::sql_json::SqlJson;
-use mssql_tds::datatypes::sql_string::SqlString;
+use mssql_tds::datatypes::sql_string::{EncodingType, SqlString};
 use mssql_tds::datatypes::sql_vector::SqlVector;
 use mssql_tds::query::metadata::ColumnMetadata;
 use uuid::Uuid;
@@ -757,14 +758,15 @@ impl RowWriter for BridgeRowWriter {
         self.decoded_strings.push(None);
     }
 
-    fn write_string(&mut self, _col: usize, val: SqlString) {
+    fn write_string(&mut self, _col: usize, val: Cow<'_, [u8]>, encoding: EncodingType) {
+        let val = SqlString::new(val.into_owned(), encoding);
         let decoded = val.to_utf8_string();
         self.values.push(ColumnValues::String(val));
         self.decoded_strings.push(Some(decoded));
     }
 
-    fn write_bytes(&mut self, _col: usize, val: Vec<u8>) {
-        self.values.push(ColumnValues::Bytes(val));
+    fn write_bytes(&mut self, _col: usize, val: Cow<'_, [u8]>) {
+        self.values.push(ColumnValues::Bytes(val.into_owned()));
         self.decoded_strings.push(None);
     }
 
@@ -932,6 +934,28 @@ mod tests {
         let row = make_row(&["b"], vec![ColumnValues::Bytes(vec![1, 2, 3])]);
         assert_eq!(row.get::<Vec<u8>, _>("b"), Some(vec![1, 2, 3]));
         assert_eq!(row.get::<&[u8], _>("b"), Some(&[1, 2, 3][..]));
+    }
+
+    #[test]
+    fn writer_owns_borrowed_wire_values() {
+        let schema = make_row(&["text", "bytes"], vec![]).schema;
+        let mut writer = BridgeRowWriter::new(schema);
+        let mut text: Vec<u8> = "héllo".encode_utf16().flat_map(u16::to_le_bytes).collect();
+        let mut bytes = vec![1, 2, 3];
+        writer.write_string(0, Cow::Borrowed(&text), EncodingType::Utf16);
+        writer.write_bytes(1, Cow::Borrowed(&bytes));
+        let first = writer.take_row();
+        text.fill(0);
+        bytes.fill(0);
+
+        writer.write_string(0, Cow::Owned(b"next".to_vec()), EncodingType::Utf8);
+        writer.write_bytes(1, Cow::Owned(vec![4, 5]));
+        let second = writer.take_row();
+
+        assert_eq!(first.get::<&str, _>("text"), Some("héllo"));
+        assert_eq!(first.get::<&[u8], _>("bytes"), Some(&[1, 2, 3][..]));
+        assert_eq!(second.get::<&str, _>("text"), Some("next"));
+        assert_eq!(second.get::<&[u8], _>("bytes"), Some(&[4, 5][..]));
     }
 
     #[test]

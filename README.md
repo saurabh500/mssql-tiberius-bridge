@@ -1,6 +1,6 @@
 # mssql-tiberius-bridge
 
-A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://github.com/microsoft/mssql-rs) crate. Migrate from tiberius with minimal code changes.
+A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.io/crates/mssql-tds) crate. Migrate from tiberius with minimal code changes.
 
 ## Why?
 
@@ -20,6 +20,9 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://github.c
 - deadpool connection pooling out of the box
 
 ## Quick Start
+
+Add `mssql-tiberius-bridge = "0.1.0"` to your Cargo dependencies. The bridge
+uses `mssql-tds` 0.1.0 from crates.io, replacing `mssql-tds-preview`.
 
 ```rust
 use mssql_tiberius_bridge::{Config, AuthMethod, Client};

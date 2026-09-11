@@ -1,6 +1,6 @@
 [package]
 name = "mssql-tiberius-bridge"
-version = "0.1.0-preview.5"
+version = "0.1.0"
 edition = "2021"
 description = "A tiberius-compatible API bridge over Microsoft's mssql-tds crate. Migrate from tiberius with minimal code changes."
 repository = "https://github.com/saurabh500/mssql-tiberius-bridge"
@@ -17,7 +17,7 @@ arrow = ["dep:arrow-array", "dep:arrow-schema"]
 _bench = []
 
 [dependencies]
-mssql-tds = { package = "mssql-tds-preview", version = "=0.1.0-preview.5", default-features = false }
+mssql-tds = { version = "0.1.0", default-features = false }
 deadpool = "0.12"
 chrono = "0.4"
 rust_decimal = "1"

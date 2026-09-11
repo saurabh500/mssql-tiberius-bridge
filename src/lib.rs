@@ -1,6 +1,6 @@
 //! # mssql-tiberius-bridge
 //!
-//! A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://github.com/microsoft/mssql-rs) crate.
+//! A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.io/crates/mssql-tds) crate.
 //! Migrate from tiberius with minimal code changes.
 //!
 //! This crate wraps `mssql-tds` (Microsoft's official Rust TDS protocol implementation)

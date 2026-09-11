@@ -171,6 +171,32 @@ async fn query_streamed_flattens_multiple_result_sets() {
 }
 
 #[tokio::test]
+async fn query_streamed_skips_no_row_statements() {
+    let mut client = connect().await;
+    client
+        .simple_query("CREATE TABLE #stream_results (id int)")
+        .await
+        .unwrap();
+    let rows: Vec<Row> = client
+        .query_streamed(
+            "INSERT INTO #stream_results VALUES (@P1); \
+             SELECT id FROM #stream_results WHERE 1 = 0; \
+             PRINT 'between results'; \
+             SELECT id FROM #stream_results; \
+             DELETE FROM #stream_results; \
+             SELECT @P1 + 1 AS id",
+            &[&7i32],
+        )
+        .try_collect()
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 2);
+    assert_eq!(rows[0].get::<i32, _>("id"), Some(7));
+    assert_eq!(rows[1].get::<i32, _>("id"), Some(8));
+    client.ping().await.unwrap();
+}
+
+#[tokio::test]
 async fn query_streamed_pulls_lazily_one_at_a_time() {
     // Pull only the first row, then drop. Because we yield row-by-row,
     // the first .next() must not have to materialize all rows. We can't

@@ -117,7 +117,7 @@ These are bugs in tiberius's TDS implementation. The bridge uses `mssql-tds`, an
 | 348 | Send ReadOnlyIntent (already merged in tiberius PR #297) | ✅ | `Config::readonly` (PR [#24](../../pull/24)) | Bridge already has `Config::readonly` (PR #24). |
 | 335 | Read-only routing examples | ⚪ | — | how-to. |
 | 375 | azure-sql-edge on macOS hangs | ⚪ | environment-specific (azure-sql-edge on macOS) | **Repro**: try connecting bridge to an azure-sql-edge container. |
-| 198 | Check if TCP connection is alive | ✅ | [#44](../../issues/44) (PR [#45](../../pull/45)) — `Client::ping()` | Feature: `Client::ping` or `is_connected`. |
+| 198 | Check if TCP connection is alive | ✅ | [#44](../../issues/44) (PR [#45](../../pull/45)) — `Client::ping()` | Uses cached `is_connection_dead()` status without I/O; success is not proof of server responsiveness. |
 | 299 | Reset connection (`sp_reset_connection`) | ✅ | `reset_session()` implemented for [#52](../../issues/52); native reset is the default pool recycling policy | Explicit `READ COMMITTED` baseline; ping-only compatibility mode remains available. |
 | 301 | How do I call `ping`? | ✅ | [#44](../../issues/44) — `Client::ping()` | how-to. |
 | 131 | Named pipes support | ✅ | [#60](../../issues/60) — Named pipe transport | Feature. mssql-tds may not support named pipes. |

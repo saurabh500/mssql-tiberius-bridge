@@ -596,6 +596,328 @@ mod tests {
         ColumnValues::String(SqlString::from_utf8_string(v.into()))
     }
 
+    fn cell<'de, T: Deserialize<'de>>(
+        value: &'de ColumnValues,
+        decoded: Option<&'de str>,
+    ) -> Result<T> {
+        T::deserialize(ColumnValueDeserializer {
+            val: value,
+            decoded,
+        })
+    }
+
+    #[test]
+    fn integer_coercion_checks_bounds_and_rejects_non_integers() {
+        macro_rules! check {
+            ($($ty:ty),+ $(,)?) => {$(
+                for value in [
+                    ColumnValues::TinyInt(1), ColumnValues::SmallInt(1),
+                    ColumnValues::Int(1), ColumnValues::BigInt(1), ColumnValues::Bit(true),
+                ] {
+                    assert_eq!(cell::<$ty>(&value, None).unwrap(), 1);
+                }
+                let error = cell::<$ty>(&s("1"), Some("1")).unwrap_err();
+                assert!(error.to_string().contains(concat!("as ", stringify!($ty))));
+            )+};
+        }
+        check!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
+        assert_eq!(
+            cell::<i64>(&ColumnValues::BigInt(i64::MIN), None).unwrap(),
+            i64::MIN
+        );
+        assert_eq!(cell::<u8>(&ColumnValues::TinyInt(255), None).unwrap(), 255);
+        assert!(cell::<i8>(&ColumnValues::TinyInt(128), None)
+            .unwrap_err()
+            .to_string()
+            .contains("128 out of range for i8"));
+        assert!(cell::<u64>(&ColumnValues::Int(-1), None)
+            .unwrap_err()
+            .to_string()
+            .contains("-1 out of range for u64"));
+        assert!(cell::<i32>(&ColumnValues::BigInt(i64::MAX), None).is_err());
+        assert!(cell::<bool>(&ColumnValues::Int(1), None)
+            .unwrap_err()
+            .to_string()
+            .contains("as bool"));
+    }
+
+    #[test]
+    fn floating_coercion_includes_money_and_integer_sources() {
+        use mssql_tds::datatypes::column_values::{SqlMoney, SqlSmallMoney};
+        for (value, expected) in [
+            (ColumnValues::Real(1.5), 1.5),
+            (ColumnValues::Float(-2.5), -2.5),
+            (ColumnValues::TinyInt(255), 255.0),
+            (ColumnValues::SmallInt(-12), -12.0),
+            (ColumnValues::Int(123), 123.0),
+            (ColumnValues::BigInt(-456), -456.0),
+            (
+                ColumnValues::Money(SqlMoney {
+                    msb_part: 0,
+                    lsb_part: 12500,
+                }),
+                1.25,
+            ),
+            (
+                ColumnValues::SmallMoney(SqlSmallMoney { int_val: -12500 }),
+                -1.25,
+            ),
+        ] {
+            assert_eq!(cell::<f32>(&value, None).unwrap(), expected as f32);
+            assert_eq!(cell::<f64>(&value, None).unwrap(), expected);
+            assert_eq!(
+                cell::<serde_json::Value>(&value, None).unwrap().as_f64(),
+                Some(expected)
+            );
+        }
+        assert!(cell::<f32>(&ColumnValues::Null, None).is_err());
+        assert!(cell::<f64>(&ColumnValues::Bit(true), None).is_err());
+    }
+
+    #[test]
+    fn dynamic_values_and_temporal_strings_have_stable_representations() {
+        use mssql_tds::datatypes::column_values::{
+            SqlDate, SqlDateTime, SqlDateTime2, SqlDateTimeOffset, SqlSmallDateTime, SqlTime,
+        };
+        use mssql_tds::datatypes::decoder::DecimalParts;
+        let time = || SqlTime {
+            time_nanoseconds: 12_345_678,
+            scale: 7,
+        };
+        let cases = [
+            (
+                ColumnValues::Date(SqlDate::create(0).unwrap()),
+                "0001-01-01",
+            ),
+            (ColumnValues::Time(time()), "00:00:01.234567800"),
+            (
+                ColumnValues::DateTime(SqlDateTime { days: 0, time: 300 }),
+                "1900-01-01T00:00:01",
+            ),
+            (
+                ColumnValues::SmallDateTime(SqlSmallDateTime { days: 0, time: 61 }),
+                "1900-01-01T01:01:00",
+            ),
+            (
+                ColumnValues::DateTime2(SqlDateTime2 {
+                    days: 0,
+                    time: time(),
+                }),
+                "0001-01-01T00:00:01.234567800",
+            ),
+            (
+                ColumnValues::DateTimeOffset(SqlDateTimeOffset {
+                    datetime2: SqlDateTime2 {
+                        days: 0,
+                        time: time(),
+                    },
+                    offset: 60,
+                }),
+                "0001-01-01T01:00:01.234567800+01:00",
+            ),
+            (
+                ColumnValues::Decimal(DecimalParts::from_string("-12.50", 4, 2).unwrap()),
+                "-12.50",
+            ),
+            (
+                ColumnValues::Numeric(DecimalParts::from_string("12.50", 4, 2).unwrap()),
+                "12.50",
+            ),
+            (
+                ColumnValues::Uuid(uuid::Uuid::nil()),
+                "00000000-0000-0000-0000-000000000000",
+            ),
+        ];
+        for (value, expected) in cases {
+            assert_eq!(cell::<String>(&value, None).unwrap(), expected);
+            assert_eq!(
+                cell::<serde_json::Value>(&value, None).unwrap(),
+                serde_json::json!(expected)
+            );
+        }
+        assert_eq!(
+            cell::<serde_json::Value>(&ColumnValues::Null, None).unwrap(),
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            cell::<serde_json::Value>(&ColumnValues::Bit(true), None).unwrap(),
+            serde_json::json!(true)
+        );
+        assert_eq!(
+            cell::<serde_json::Value>(&s("héllo"), Some("héllo")).unwrap(),
+            serde_json::json!("héllo")
+        );
+        let invalid = ColumnValues::Time(SqlTime {
+            time_nanoseconds: 864_000_000_000,
+            scale: 7,
+        });
+        for error in [
+            cell::<String>(&invalid, None).unwrap_err(),
+            cell::<serde_json::Value>(&invalid, None).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("invalid temporal value"));
+        }
+        assert!(cell::<String>(&ColumnValues::Int(1), None)
+            .unwrap_err()
+            .to_string()
+            .contains("as &str"));
+    }
+
+    #[test]
+    fn characters_and_binary_values_validate_shape_and_borrow_storage() {
+        assert_eq!(cell::<char>(&s("🦀"), Some("🦀")).unwrap(), '🦀');
+        for text in ["", "ab"] {
+            assert!(cell::<char>(&s(text), Some(text))
+                .unwrap_err()
+                .to_string()
+                .contains("multi-char"));
+        }
+        assert!(cell::<char>(&ColumnValues::Int(1), None)
+            .unwrap_err()
+            .to_string()
+            .contains("as char"));
+        let bytes = ColumnValues::Bytes(vec![0, 255, 42]);
+        let borrowed: &[u8] = cell(&bytes, None).unwrap();
+        let ColumnValues::Bytes(original) = &bytes else {
+            unreachable!()
+        };
+        assert_eq!(borrowed, original);
+        assert_eq!(borrowed.as_ptr(), original.as_ptr());
+        let id = uuid::Uuid::from_bytes([42; 16]);
+        let value = ColumnValues::Uuid(id);
+        assert_eq!(cell::<&[u8]>(&value, None).unwrap(), id.as_bytes());
+        assert!(cell::<&[u8]>(&ColumnValues::Int(1), None)
+            .unwrap_err()
+            .to_string()
+            .contains("as bytes"));
+
+        struct OwnedBytesVisitor;
+        impl<'de> Visitor<'de> for OwnedBytesVisitor {
+            type Value = Vec<u8>;
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str("owned binary data")
+            }
+            fn visit_byte_buf<E: de::Error>(
+                self,
+                v: Vec<u8>,
+            ) -> std::result::Result<Self::Value, E> {
+                Ok(v)
+            }
+        }
+        for (value, expected) in [(&bytes, vec![0, 255, 42]), (&value, vec![42; 16])] {
+            assert_eq!(
+                ColumnValueDeserializer {
+                    val: value,
+                    decoded: None
+                }
+                .deserialize_byte_buf(OwnedBytesVisitor)
+                .unwrap(),
+                expected
+            );
+        }
+        assert!(ColumnValueDeserializer {
+            val: &ColumnValues::Null,
+            decoded: None
+        }
+        .deserialize_byte_buf(OwnedBytesVisitor)
+        .unwrap_err()
+        .to_string()
+        .contains("as byte buf"));
+    }
+
+    #[test]
+    fn row_maps_sequences_and_newtypes_preserve_shape() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Pair(i32, String);
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Wrapped(Pair);
+        let row = make_row(vec![
+            ("n", ColumnType::Int4, ColumnValues::Int(7)),
+            ("text", ColumnType::NVarchar, s("seven")),
+        ]);
+        assert_eq!(
+            row.clone().deserialize::<Wrapped>().unwrap(),
+            Wrapped(Pair(7, "seven".into()))
+        );
+        let dynamic = row.deserialize::<serde_json::Value>().unwrap();
+        assert_eq!(dynamic, serde_json::json!({"n": 7, "text": "seven"}));
+        let row = make_row(vec![
+            ("a", ColumnType::Int4, ColumnValues::Int(1)),
+            ("b", ColumnType::Int4, ColumnValues::Int(2)),
+        ]);
+        assert_eq!(row.clone().deserialize::<Vec<i32>>().unwrap(), vec![1, 2]);
+        assert_eq!(
+            row.deserialize::<HashMap<String, i32>>().unwrap(),
+            HashMap::from([("a".into(), 1), ("b".into(), 2)])
+        );
+        assert!(make_row(vec![])
+            .deserialize::<Vec<i32>>()
+            .unwrap()
+            .is_empty());
+
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Number(i32);
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Unit;
+        assert_eq!(
+            cell::<Number>(&ColumnValues::Int(7), None).unwrap(),
+            Number(7)
+        );
+        assert_eq!(cell::<Unit>(&ColumnValues::Null, None).unwrap(), Unit);
+    }
+
+    #[test]
+    fn column_containers_and_data_carrying_enum_variants_are_rejected() {
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        enum State {
+            Ready,
+            Number(i32),
+            Pair(i32, i32),
+            Named { value: i32 },
+        }
+        assert!(matches!(
+            cell::<State>(&s("Ready"), Some("Ready")).unwrap(),
+            State::Ready
+        ));
+        for (variant, expected) in [
+            ("Number", "newtype enum"),
+            ("Pair", "tuple enum"),
+            ("Named", "struct enum"),
+        ] {
+            assert!(cell::<State>(&s(variant), Some(variant))
+                .unwrap_err()
+                .to_string()
+                .contains(expected));
+        }
+        assert!(cell::<State>(&s("Unknown"), Some("Unknown"))
+            .unwrap_err()
+            .to_string()
+            .contains("unknown variant"));
+        let value = ColumnValues::Int(1);
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct Pair(i32, i32);
+        #[derive(Debug, Deserialize)]
+        #[allow(dead_code)]
+        struct Record {
+            value: i32,
+        }
+        for error in [
+            cell::<Vec<i32>>(&value, None).unwrap_err(),
+            cell::<(i32, i32)>(&value, None).unwrap_err(),
+            cell::<Pair>(&value, None).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("as a sequence"));
+        }
+        for error in [
+            cell::<HashMap<String, i32>>(&value, None).unwrap_err(),
+            cell::<Record>(&value, None).unwrap_err(),
+        ] {
+            assert!(error.to_string().contains("as a map"));
+        }
+    }
+
     #[test]
     fn deserialize_basic_struct() {
         #[derive(Deserialize, Debug, PartialEq)]

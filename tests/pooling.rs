@@ -108,6 +108,59 @@ async fn native_pool_reset_isolates_borrowers_on_the_same_connection() {
 }
 
 #[tokio::test]
+async fn repeated_pool_reuse_does_not_leak_validation_result_sets() {
+    let Some(config) = test_config() else {
+        return;
+    };
+    let pool = TdsManager::create_pool(config, 1).unwrap();
+    for cycle in 0..256 {
+        let mut conn = pool.get().await.unwrap();
+        assert_eq!(Object::metrics(&conn).recycle_count, cycle);
+        let value = i32::try_from(cycle).unwrap() + 1;
+        for step in 0..3 {
+            let expected = value * 10 + step;
+            let results = conn
+                .query(
+                    "SELECT @P1 AS expected_value, \
+                     CAST('application' AS nvarchar(16)) AS result_source",
+                    &[&expected],
+                )
+                .await
+                .unwrap()
+                .into_results();
+            assert_eq!(
+                results.len(),
+                1,
+                "unexpected result set on checkout {cycle}"
+            );
+            assert_eq!(results[0].len(), 1);
+            let row = &results[0][0];
+            assert_eq!(row.columns().len(), 2);
+            assert_eq!(row.get::<i32, _>("expected_value"), Some(expected));
+            assert_eq!(row.get::<&str, _>("result_source"), Some("application"));
+        }
+
+        // A legitimate unnamed integer result must not be filtered out (#104).
+        let results = conn
+            .query("SELECT @P1; SELECT @P1 + 1 AS next_value", &[&value])
+            .await
+            .unwrap()
+            .into_results();
+        assert_eq!(results.len(), 2);
+        assert_eq!(results[0].len(), 1);
+        assert_eq!(results[0][0].columns()[0].name(), "");
+        assert_eq!(results[0][0].get::<i32, _>(0), Some(value));
+        assert_eq!(results[1].len(), 1);
+        assert_eq!(results[1][0].get::<i32, _>("next_value"), Some(value + 1));
+
+        if cycle % 8 == 0 {
+            let mut stream = conn.simple_query_streamed("SELECT 7 UNION ALL SELECT 8; SELECT 9");
+            assert!(stream.next().await.unwrap().is_ok());
+        }
+    }
+}
+
+#[tokio::test]
 async fn reset_rejects_stale_prepared_handles_without_unpreparing_new_ones() {
     let Some(config) = test_config() else {
         return;

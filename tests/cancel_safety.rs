@@ -7,13 +7,14 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use async_trait::async_trait;
-use deadpool::managed::{Manager, Metrics, RecycleError};
+use deadpool::managed::{Manager, Metrics, Object, RecycleError};
 use futures_util::{poll, task::noop_waker_ref, StreamExt, TryStreamExt};
 use mssql_tds::core::TdsResult;
 use mssql_tds::datatypes::column_values::ColumnValues;
 use mssql_tds::message::bulk_load::StreamingBulkLoadWriter;
 use mssql_tiberius_bridge::{
-    AuthMethod, BulkInsert, BulkLoadRow, Client, Config, Error, Result, Row, TdsManager,
+    AuthMethod, BulkInsert, BulkLoadRow, Client, Config, Error, Pool, RecyclingMethod, Result, Row,
+    TdsManager,
 };
 use tokio::sync::Notify;
 use tokio::time::timeout;
@@ -79,6 +80,7 @@ fn assert_retired(client: &mut Client) {
     assert!(client.is_connection_dead());
     assert_rejected(client.simple_query("SELECT 1 AS n"));
     assert_rejected(client.ping());
+    assert_rejected(client.reset_session());
 }
 
 async fn cancel_after_poll<T>(future: impl Future<Output = T>) {
@@ -274,6 +276,23 @@ async fn cancelling_unprepare_during_prior_result_cleanup_retires_connection() {
 }
 
 #[tokio::test]
+async fn cancelled_reset_rejects_dead_state_before_stale_prepared_handles() {
+    let Some(mut client) = live_client().await else {
+        return;
+    };
+    let statement = timeout(IO_BOUND, client.prepare("SELECT @P1", &[&0i32]))
+        .await
+        .expect("prepare timed out")
+        .expect("prepare failed");
+    drop(delayed_results(&mut client).await);
+    cancel_after_poll(client.reset_session()).await;
+    assert_retired(&mut client);
+    assert_rejected(statement.query(&mut client, &[&1i32]));
+    assert_rejected(statement.execute(&mut client, &[&1i32]));
+    assert_rejected(statement.close(&mut client));
+}
+
+#[tokio::test]
 async fn dropping_stream_between_rows_preserves_reuse() {
     let Some(mut client) = live_client().await else {
         return;
@@ -301,6 +320,7 @@ async fn unpolled_operations_and_unused_builders_preserve_reuse() {
     drop(client.execute(WAIT_QUERY, &[]));
     drop(client.prepare("SELECT @P1", &[&0i32]));
     drop(client.ping());
+    drop(client.reset_session());
     drop(client.simple_query_streamed(WAIT_QUERY));
     drop(client.query_streamed("SELECT @P1", &[&1i32]));
     drop(client.bulk_insert("#unused"));
@@ -455,44 +475,54 @@ async fn pool_rejects_cancelled_client_and_replaces_its_session() {
     let Some(config) = live_config() else {
         return;
     };
-    let manager = TdsManager::new(config.clone());
-    let pool = TdsManager::create_pool(config, 1).expect("pool build failed");
-    let mut connection = timeout(IO_BOUND, pool.get())
+    for method in [RecyclingMethod::Reset, RecyclingMethod::Ping] {
+        let manager = TdsManager::new(config.clone()).with_recycling_method(method);
+        let pool = Pool::builder(manager.clone())
+            .max_size(1)
+            .build()
+            .expect("pool build failed");
+        let mut connection = timeout(IO_BOUND, pool.get())
+            .await
+            .expect("pool checkout timed out")
+            .expect("pool checkout failed");
+        timeout(
+            IO_BOUND,
+            connection.simple_query("CREATE TABLE #CancelledSessionMarker (n int)"),
+        )
         .await
-        .expect("pool checkout timed out")
-        .expect("pool checkout failed");
-    timeout(
-        IO_BOUND,
-        connection.simple_query("CREATE TABLE #CancelledSessionMarker (n int)"),
-    )
-    .await
-    .expect("session marker setup timed out")
-    .expect("session marker setup failed");
-    cancel_after_poll(connection.simple_query(WAIT_QUERY)).await;
-    assert!(connection.is_connection_dead());
-    assert!(matches!(
-        poll_once(manager.recycle(&mut connection, &Metrics::default())),
-        Poll::Ready(Err(RecycleError::Backend(Error::Tds(
-            mssql_tds::error::Error::ConnectionClosed(_)
-        ))))
-    ));
-    drop(connection);
+        .expect("session marker setup timed out")
+        .expect("session marker setup failed");
+        cancel_after_poll(connection.simple_query(WAIT_QUERY)).await;
+        assert!(connection.is_connection_dead());
+        assert!(matches!(
+            poll_once(manager.recycle(&mut connection, &Metrics::default())),
+            Poll::Ready(Err(RecycleError::Backend(Error::Tds(
+                mssql_tds::error::Error::ConnectionClosed(_)
+            ))))
+        ));
+        drop(connection);
 
-    let mut replacement = timeout(IO_BOUND, pool.get())
+        let mut replacement = timeout(IO_BOUND, pool.get())
+            .await
+            .expect("pool stalled recycling cancelled client")
+            .expect("replacement checkout failed");
+        assert_eq!(
+            Object::metrics(&replacement).recycle_count,
+            0,
+            "cancelled client must be replaced, not merely reset"
+        );
+        let rows = timeout(
+            IO_BOUND,
+            replacement.simple_query(
+                "SELECT CASE WHEN OBJECT_ID('tempdb..#CancelledSessionMarker') \
+                 IS NULL THEN 1 ELSE 0 END AS fresh",
+            ),
+        )
         .await
-        .expect("pool stalled recycling cancelled client")
-        .expect("replacement checkout failed");
-    let rows = timeout(
-        IO_BOUND,
-        replacement.simple_query(
-            "SELECT CASE WHEN OBJECT_ID('tempdb..#CancelledSessionMarker') \
-             IS NULL THEN 1 ELSE 0 END AS fresh",
-        ),
-    )
-    .await
-    .expect("replacement query timed out")
-    .expect("replacement query failed")
-    .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("fresh"), Some(1));
-    assert_select_one(&mut replacement).await;
+        .expect("replacement query timed out")
+        .expect("replacement query failed")
+        .into_first_result();
+        assert_eq!(rows[0].get::<i32, _>("fresh"), Some(1));
+        assert_select_one(&mut replacement).await;
+    }
 }

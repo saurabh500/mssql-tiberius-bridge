@@ -40,6 +40,11 @@ pub enum Error {
 
     /// A connection pool error occurred.
     Pool(String),
+
+    /// A prepared statement belongs to another client or a reset session.
+    ///
+    /// Prepare a new statement on the current client before using it.
+    InvalidPreparedStatement,
 }
 
 impl fmt::Display for Error {
@@ -52,6 +57,12 @@ impl fmt::Display for Error {
             }
             Error::Conversion(msg) => write!(f, "Conversion error: {msg}"),
             Error::Pool(msg) => write!(f, "Pool error: {msg}"),
+            Error::InvalidPreparedStatement => {
+                write!(
+                    f,
+                    "Prepared statement belongs to a different or reset client session"
+                )
+            }
         }
     }
 }
@@ -73,3 +84,50 @@ impl From<mssql_tds::error::Error> for Error {
 
 /// Result type alias using [`Error`] for all mssql-tiberius-bridge operations.
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::error::Error as _;
+
+    #[test]
+    fn tds_errors_retain_the_original_source() {
+        let original = mssql_tds::error::Error::UsageError("invalid parameter".into());
+        let original_message = original.to_string();
+        let error = Error::from(original);
+        assert_eq!(error.to_string(), format!("TDS error: {original_message}"));
+        let source = error.source().unwrap();
+        assert_eq!(source.to_string(), original_message);
+        assert!(matches!(
+            source.downcast_ref::<mssql_tds::error::Error>(),
+            Some(mssql_tds::error::Error::UsageError(message)) if message == "invalid parameter"
+        ));
+    }
+
+    #[test]
+    fn facade_errors_preserve_context_without_a_source() {
+        let cases = [
+            (
+                Error::ColumnNotFound("missing".into()),
+                "Column not found: missing",
+            ),
+            (
+                Error::ColumnIndexOutOfBounds { index: 3, count: 2 },
+                "Column index 3 out of bounds (count: 2)",
+            ),
+            (
+                Error::Conversion("invalid date".into()),
+                "Conversion error: invalid date",
+            ),
+            (Error::Pool("closed".into()), "Pool error: closed"),
+            (
+                Error::InvalidPreparedStatement,
+                "Prepared statement belongs to a different or reset client session",
+            ),
+        ];
+        for (error, expected) in cases {
+            assert_eq!(error.to_string(), expected);
+            assert!(error.source().is_none());
+        }
+    }
+}

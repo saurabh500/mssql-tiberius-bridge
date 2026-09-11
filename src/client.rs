@@ -7,6 +7,7 @@
 
 use mssql_tds::connection::tds_client::{ResultSet, StatementResult, TdsClient};
 use mssql_tds::connection_provider::tds_connection_provider::TdsConnectionProvider;
+use std::sync::Arc;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -41,6 +42,8 @@ use crate::query::{build_params_with_string_encoding, ExecuteResult, QueryResult
 /// rolled back its effects. No SQL is retried, and no async cleanup is run from
 /// `Drop`. Completed errors keep the native driver's liveness classification;
 /// ordinary drained SQL errors do not by themselves kill a connection.
+/// [`reset_session`](Self::reset_session) is stricter: any failed or cancelled
+/// reset retires the connection rather than leaving a partially cleaned session.
 ///
 /// Native cooperative cancellation through `ExecuteOptions` is different: the
 /// native operation must keep being polled to finish its ATTENTION cleanup.
@@ -65,6 +68,21 @@ use crate::query::{build_params_with_string_encoding, ExecuteResult, QueryResult
 pub struct Client {
     inner: TdsClient,
     send_string_parameters_as_unicode: bool,
+    prepared_session: Arc<()>,
+}
+
+// An interrupted reset must never leave a reusable, partially cleaned session.
+struct SessionReset<'a> {
+    inner: &'a mut TdsClient,
+    complete: bool,
+}
+
+impl Drop for SessionReset<'_> {
+    fn drop(&mut self) {
+        if !self.complete {
+            self.inner.mark_connection_dead();
+        }
+    }
 }
 
 impl Client {
@@ -89,7 +107,54 @@ impl Client {
         Ok(Client {
             inner: client,
             send_string_parameters_as_unicode: config.string_parameters_as_unicode(),
+            prepared_session: Arc::new(()),
         })
+    }
+
+    /// Return whether the driver has observed the connection to be dead.
+    ///
+    /// This performs no I/O. A `false` result does not prove that an idle
+    /// connection is still responsive; use [`ping`](Self::ping) or
+    /// [`reset_session`](Self::reset_session) to validate it. A known-dead client
+    /// must be discarded.
+    pub fn is_connection_dead(&self) -> bool {
+        self.inner.is_connection_dead()
+    }
+
+    /// Reset and validate this session without closing its physical connection.
+    ///
+    /// Drains any outstanding query, then sends the native TDS `RESETCONNECTION`
+    /// flag on a batch that restores `READ COMMITTED` transaction isolation.
+    /// The reset rolls back open transactions and clears temporary tables and
+    /// session settings; the driver verifies the server's acknowledgement.
+    /// Isolation is set explicitly because SQL Server reset does not restore it.
+    ///
+    /// Prepared statements created before this call become invalid and must be
+    /// prepared again. The carrying batch produces no rows and replaces a
+    /// separate ping, so normal recycling needs only one round trip.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Tds`] if the connection is known dead, draining fails,
+    /// or the reset/baseline batch fails. A failed or cancelled reset marks the
+    /// connection dead so it cannot be recycled in an unknown session state.
+    pub async fn reset_session(&mut self) -> Result<()> {
+        self.ensure_usable()?;
+
+        self.prepared_session = Arc::new(());
+        let mut reset = SessionReset {
+            inner: &mut self.inner,
+            complete: false,
+        };
+        reset.inner.close_query().await?;
+        reset.inner.prepare_reset_connection(false);
+        reset
+            .inner
+            .execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED".into(), ())
+            .await?;
+        reset.inner.close_query().await?;
+        reset.complete = true;
+        Ok(())
     }
 
     /// Check whether the connection is alive and responsive.
@@ -104,14 +169,6 @@ impl Client {
     pub async fn ping(&mut self) -> Result<()> {
         let _ = self.simple_query("SELECT 1").await?.into_first_result();
         Ok(())
-    }
-
-    /// Return the native driver's cached dead-connection status without I/O.
-    ///
-    /// A dead client must be discarded. `false` is not a liveness guarantee:
-    /// an idle connection may have failed without the driver observing it yet.
-    pub fn is_connection_dead(&self) -> bool {
-        self.inner.is_connection_dead()
     }
 
     pub(crate) fn ensure_usable(&self) -> Result<()> {
@@ -369,6 +426,8 @@ impl Client {
     ///
     /// Use this escape hatch when you need functionality not yet exposed
     /// by the bridge API (e.g., bulk copy, stored procedure output parameters).
+    /// Use [`reset_session`](Self::reset_session) for resets so the bridge can
+    /// also invalidate its prepared-statement handles.
     ///
     /// Direct native operations bypass the bridge's dead-state checks and
     /// cancellation guards. If you drop an in-flight native future, call
@@ -431,6 +490,7 @@ impl Client {
                 sql,
                 param_types,
                 self.send_string_parameters_as_unicode,
+                Arc::clone(&self.prepared_session),
             )
             .await
         }
@@ -448,6 +508,8 @@ impl Client {
         stmt: &crate::prepared::PreparedStatement,
         params: &[&dyn ToSql],
     ) -> Result<QueryResult> {
+        self.ensure_usable()?;
+        stmt.validate_session(&self.prepared_session)?;
         let rpc_params = if params.is_empty() {
             None
         } else {
@@ -484,6 +546,8 @@ impl Client {
         stmt: &crate::prepared::PreparedStatement,
         params: &[&dyn ToSql],
     ) -> Result<ExecuteResult> {
+        self.ensure_usable()?;
+        stmt.validate_session(&self.prepared_session)?;
         let rpc_params = if params.is_empty() {
             None
         } else {
@@ -520,6 +584,8 @@ impl Client {
     /// connection, so calling this is optional unless you want to free
     /// server-side memory while keeping the connection alive.
     pub async fn unprepare(&mut self, stmt: crate::prepared::PreparedStatement) -> Result<()> {
+        self.ensure_usable()?;
+        stmt.validate_session(&self.prepared_session)?;
         let mut operation = Operation::new(&mut self.inner)?;
         let result = async {
             operation.close_query().await.map_err(Error::Tds)?;

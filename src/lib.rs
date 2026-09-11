@@ -76,7 +76,7 @@
 //!
 //! - TCP transport is handled internally — no `TcpStream` boilerplate
 //! - `row.get::<&str, _>("col")` works (strings are pre-decoded from UTF-16)
-//! - Connection pooling via [`TdsManager`] + [`deadpool`]
+//! - Connection pooling via [`TdsManager`] + [`deadpool`] with native session resets
 
 pub mod bulk;
 #[cfg(feature = "arrow")]
@@ -99,7 +99,7 @@ pub use client::Client;
 pub use column::{Collation, Column, ColumnType, MultiPartName};
 pub use config::{AuthMethod, Config, EncryptionLevel, Transport};
 pub use error::{Error, Result};
-pub use pool::{Pool, PooledConnection, TdsManager};
+pub use pool::{Pool, PooledConnection, RecyclingMethod, TdsManager};
 pub use prepared::PreparedStatement;
 pub use query::{DebugParams, ExecuteResult, QueryResult, ToSql};
 pub use row::{ColumnIndex, FromSql, Row};
@@ -110,6 +110,8 @@ pub use row::{ColumnIndex, FromSql, Row};
 pub use mssql_tds::connection::tds_client::TdsClient;
 /// Raw column values from mssql-tds, exposed for low-level access
 /// via [`Row::raw_value()`].
+/// Spatial values remain `ColumnValues::Bytes`; their identity is exposed
+/// through [`ColumnType::Geography`] and [`ColumnType::Geometry`].
 pub use mssql_tds::datatypes::column_values::ColumnValues;
 /// Decimal/Numeric value representation from mssql-tds.
 /// Returned inside `ColumnValues::Decimal` and `ColumnValues::Numeric`.

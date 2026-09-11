@@ -13,11 +13,12 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 - `stream.into_row_stream()` — `Stream<Item = Result<Row>>` over a buffered `QueryResult` (rows pre-buffered)
 - `client.query_streamed(sql, params)` / `simple_query_streamed(sql)` — true wire-level row streaming for memory-bounded large result sets
 - `client.ping()` — lightweight liveness check for connection pools
+- `client.reset_session()` — native TDS session reset with `READ COMMITTED` isolation
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
 - `Config::new().host().port().trust_cert()` — fluent builder
 - `Config::trust_cert_ca("ca.pem")` — pin a CA certificate (mirrors tiberius)
 - `AuthMethod::aad_token(jwt)` — Microsoft Entra ID / AAD federated auth
-- deadpool connection pooling out of the box
+- deadpool connection pooling with native session reset and validation before reuse
 
 ## Quick Start
 
@@ -61,9 +62,25 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
 | `conn.simple_query(sql)` | `client.simple_query(sql)` |
 | `conn.query(sql, &[&p1])` | `client.query(sql, &[&p1])` |
 | connection-pool validation | `client.ping()` |
+| connection-pool session cleanup | `client.reset_session()` (the default `TdsManager` recycling policy) |
 | `stream.into_first_result()` | `.into_first_result()` |
 | `row.get::<&str, _>("col")` | `row.get::<&str, _>("col")` |
 | `tiberius::AuthMethod::sql_server` | `AuthMethod::sql_server` |
+
+### Pooling behavior change
+
+`TdsManager::new` and `TdsManager::create_pool` now reset reused sessions using
+`mssql-tds`'s native `RESETCONNECTION` flag, restore `READ COMMITTED` isolation,
+and validate the response. Temporary tables, changed session settings, open
+transactions, and prepared handles no longer carry over to the next borrower.
+Prepare and close statements within one checkout. Finish transactions before
+returning a connection: recycling runs at the next checkout, not at check-in.
+
+For intentional legacy session reuse, build a pool with
+`TdsManager::new(config).with_recycling_method(RecyclingMethod::Ping)`.
+See [connection pooling](docs/connection-examples.md#connection-pooling) for
+examples and timeout configuration. `deadpool` still owns capacity and checkout;
+`mssql-tds` provides the native reset and health primitives.
 
 ## Cancellation and timeouts
 
@@ -71,13 +88,15 @@ Dropping an in-flight bridge operation with `tokio::time::timeout`, `select!`,
 or task cancellation marks the connection dead. Later bridge operations fail
 immediately with `Error::Tds(mssql_tds::error::Error::ConnectionClosed(...))`.
 Check `client.is_connection_dead()` without I/O, then drop the client and
-reconnect. The pool rejects dead clients before ping and replaces them on checkout.
+reconnect. The pool rejects dead clients before reset or ping and replaces them
+on checkout.
 
 Wire streams remain reusable when dropped between fully yielded rows; dropping
 a stream while its I/O is pending marks the connection dead. Cancelling only
 `stream.next()` retains the internal future if you keep the stream and resume it.
 Unpolled futures, unused bulk builders, and buffered result streams do not poison
 the connection. Completed SQL errors retain the native driver's liveness outcome.
+A failed or cancelled session reset always retires the connection.
 
 Cancellation does not guarantee that SQL stopped executing or rolled back, so
 do not automatically retry writes. Native cooperative cancellation requires
@@ -85,6 +104,31 @@ polling through cleanup; an external timeout that drops the operation is differe
 Direct calls through `inner_mut()` bypass the bridge guards: after abandoning
 native I/O, mark the native client dead and discard it instead of returning it
 to a pool as healthy. See the `Client` rustdoc for the full contract.
+
+## Spatial values
+
+`geography` and `geometry` columns can be read directly in buffered or streamed
+queries as `Vec<u8>` (owned) or `&[u8]` (borrowed). SQL `NULL` returns `None`.
+Their column types are `ColumnType::Geography` and `ColumnType::Geometry`;
+other CLR user-defined types report `ColumnType::Udt`.
+
+```rust
+use mssql_tiberius_bridge::ColumnType;
+
+let rows = client
+    .simple_query("SELECT geography::Point(47.6, -122.3, 4326) AS location")
+    .await?
+    .into_first_result();
+assert_eq!(rows[0].columns()[0].column_type(), ColumnType::Geography);
+let bytes: &[u8] = rows[0].get("location").unwrap();
+```
+
+These are SQL Server's native serialized bytes (equivalent to `.Serialize()`),
+including the SRID, **not OGC Well-Known Binary (WKB)**. Use `.STAsBinary()` in
+SQL when you need WKB instead. `Row::raw_value()` continues to return
+`ColumnValues::Bytes`; no new value enum or spatial parser is required.
+Point/LineString/Polygon parsing, `geo` integration, and native spatial parameter
+binding are not provided. Existing byte parameters remain `varbinary`.
 
 ## Runtime requirements
 

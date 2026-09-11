@@ -1,9 +1,14 @@
-//! Connection pooling via [`deadpool`], mirroring the tiberius + deadpool pattern.
+//! Connection pooling via [`deadpool`] with native mssql-tds session resets.
+//!
+//! Reused connections are reset and validated before checkout, including restoring
+//! `READ COMMITTED` isolation. Use [`RecyclingMethod::Ping`] only when retaining
+//! session state between borrowers is intentional.
 //!
 //! Connections marked dead after cancelled bridge I/O are rejected before the
-//! recycle ping, so deadpool drops them and creates replacements. Healthy
-//! connections are still pinged. See [`Client`]'s cancellation safety contract,
-//! including the unguarded [`Client::inner_mut`] escape hatch.
+//! recycle reset or ping, so deadpool drops them and creates replacements.
+//! Healthy connections follow the selected recycling policy. See [`Client`]'s
+//! cancellation safety contract, including the unguarded [`Client::inner_mut`]
+//! escape hatch.
 //!
 //! # Example
 //!
@@ -31,21 +36,50 @@ pub type PooledConnection = deadpool::managed::Object<TdsManager>;
 /// Connection pool type alias.
 pub type Pool = deadpool::managed::Pool<TdsManager>;
 
+/// How an existing connection is prepared for its next borrower.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum RecyclingMethod {
+    /// Reset session state with the native TDS reset flag, restore
+    /// `READ COMMITTED` isolation, and validate the server's response.
+    ///
+    /// Invalidates prepared statements from previous checkouts.
+    #[default]
+    Reset,
+    /// Validate with `SELECT 1` without resetting session state.
+    ///
+    /// This preserves the bridge's legacy behavior, including temporary tables,
+    /// session settings, prepared handles, and any uncommitted transaction.
+    Ping,
+}
+
 /// [`deadpool::managed::Manager`] implementation for mssql-tds connections.
 ///
 /// Creates and recycles [`Client`] connections using the provided [`Config`].
+/// Recycling occurs on checkout, not when a connection is returned. Commit or
+/// roll back transactions before returning a connection to avoid holding locks
+/// while it is idle in the pool.
 #[derive(Debug, Clone)]
 pub struct TdsManager {
     config: Config,
+    recycling_method: RecyclingMethod,
 }
 
 impl TdsManager {
-    /// Create a new pool manager from a Config.
+    /// Create a manager using [`RecyclingMethod::Reset`].
     pub fn new(config: Config) -> Self {
-        Self { config }
+        Self {
+            config,
+            recycling_method: RecyclingMethod::default(),
+        }
     }
 
-    /// Build a [`Pool`] with the given maximum connection count.
+    /// Choose how reused connections are prepared for checkout.
+    pub fn with_recycling_method(mut self, method: RecyclingMethod) -> Self {
+        self.recycling_method = method;
+        self
+    }
+
+    /// Build a [`Pool`] with native reset recycling and the given maximum size.
     ///
     /// # Errors
     ///
@@ -55,7 +89,10 @@ impl TdsManager {
         max_size: usize,
     ) -> Result<Pool, deadpool::managed::BuildError> {
         let mgr = TdsManager::new(config);
-        Pool::builder(mgr).max_size(max_size).build()
+        Pool::builder(mgr)
+            .max_size(max_size)
+            .runtime(deadpool::Runtime::Tokio1)
+            .build()
     }
 }
 
@@ -69,7 +106,11 @@ impl Manager for TdsManager {
 
     async fn recycle(&self, conn: &mut Self::Type, _: &Metrics) -> RecycleResult<Self::Error> {
         conn.ensure_usable().map_err(RecycleError::Backend)?;
-        conn.ping().await.map_err(RecycleError::Backend)
+        match self.recycling_method {
+            RecyclingMethod::Reset => conn.reset_session().await,
+            RecyclingMethod::Ping => conn.ping().await,
+        }
+        .map_err(RecycleError::Backend)
     }
 }
 
@@ -92,5 +133,15 @@ mod tests {
         let cfg = Config::new();
         let pool = TdsManager::create_pool(cfg, 10);
         assert!(pool.is_ok());
+    }
+
+    #[test]
+    fn native_reset_is_default_and_ping_is_explicit() {
+        let manager = TdsManager::new(Config::new());
+        assert_eq!(manager.recycling_method, RecyclingMethod::Reset);
+        let manager = manager.with_recycling_method(RecyclingMethod::Ping);
+        assert_eq!(manager.recycling_method, RecyclingMethod::Ping);
+        let pool = Pool::builder(manager).max_size(2).build().unwrap();
+        assert_eq!(pool.status().max_size, 2);
     }
 }

@@ -1031,6 +1031,51 @@ mod tests {
     }
 
     #[test]
+    fn nvarchar_utf16_replaces_only_malformed_sequences() {
+        let cases: &[(&str, &[u8], &str)] = &[
+            ("lone high surrogate", &[0x00, 0xD8], "\u{FFFD}"),
+            ("lone low surrogate", &[0x00, 0xDC], "\u{FFFD}"),
+            ("odd byte length", &[0x41, 0x00, 0x42], "A\u{FFFD}"),
+            (
+                "surrogate between valid characters",
+                &[0x41, 0x00, 0x00, 0xD8, 0x42, 0x00],
+                "A\u{FFFD}B",
+            ),
+            (
+                "reversed surrogate pair",
+                &[0x00, 0xDC, 0x00, 0xD8],
+                "\u{FFFD}\u{FFFD}",
+            ),
+            (
+                "valid surrogate pair",
+                &[0x41, 0x00, 0x3D, 0xD8, 0x00, 0xDE, 0x42, 0x00],
+                "A\u{1F600}B",
+            ),
+        ];
+
+        for &(name, bytes, expected) in cases {
+            let row = make_row(
+                &["s"],
+                vec![ColumnValues::String(SqlString::new(
+                    bytes.to_vec(),
+                    EncodingType::Utf16,
+                ))],
+            );
+
+            assert_eq!(
+                row.get::<String, _>(0usize).as_deref(),
+                Some(expected),
+                "{name}: owned string",
+            );
+            assert_eq!(
+                row.get::<&str, _>("s"),
+                Some(expected),
+                "{name}: borrowed string",
+            );
+        }
+    }
+
+    #[test]
     fn str_non_string_column_returns_none() {
         let row = make_row(&["i"], vec![ColumnValues::Int(42)]);
         assert_eq!(row.get::<&str, _>("i"), None);

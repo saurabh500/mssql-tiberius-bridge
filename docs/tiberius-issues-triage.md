@@ -152,8 +152,8 @@ These are bugs in tiberius's TDS implementation. The bridge uses `mssql-tds`, an
 | 380 | `QueryStream::into_results` doesn't return correct number | ✅ | regression test in PR [#51](../../pull/51) | **Repro**: bridge `QueryResult::into_results` — empty SELECTs preserved? |
 | 371 | QueryStream returns 1 row, ends with more remaining | ✅ | regression test in PR [#51](../../pull/51) | **Repro**: bridge has streaming via `into_row_stream` (PR #29). |
 | 365 | Cannot return `RowStream` from a function (lifetime tied to connection) | 🔵 | — | Bridge has same architecture; design issue. Could be addressed via owned stream. |
-| 79 | Cancel safety on futures | 🟡 | tracked in [#88](../../issues/88) — cancel-safety audit | Bridge inherits this from mssql-tds — needs investigation. |
-| 300 | Cancel is not safe (tokio::time::timeout corrupts state) | 🟡 | tracked in [#88](../../issues/88) — cancel-safety audit | **Repro**: timeout a `client.simple_query` and re-use. |
+| 79 | Cancel safety on futures | ✅ | [#88](../../issues/88) — native dead-state guard | Dropped in-flight bridge I/O marks the client dead; reuse fails fast and the pool replaces it. Raw `inner_mut()` calls remain unguarded. |
+| 300 | Cancel is not safe (tokio::time::timeout corrupts state) | ✅ | [#88](../../issues/88) — bounded timeout regression | External future drops use fail-fast retirement, not same-connection recovery. Normal stream drops between yielded rows preserve reuse. |
 | 160 | `rows_affected` length incorrect when table has trigger | ✅ | regression test in PR [#51](../../pull/51) | **Repro**: bridge's `ExecuteResult::rows_affected`. |
 | 157 | "IN" prepared statement | ⚪ | — | how-to (TDS doesn't support array params). |
 

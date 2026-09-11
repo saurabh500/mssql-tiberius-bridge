@@ -82,6 +82,7 @@ use mssql_tds::connection::bulk_copy::BulkCopy as TdsBulkCopy;
 use mssql_tds::connection::tds_client::TdsClient;
 
 use crate::error::{Error, Result};
+use crate::operation::Operation;
 
 // Re-export upstream types that callers will use directly.
 pub use mssql_tds::connection::bulk_copy::{
@@ -95,8 +96,16 @@ pub use mssql_tds::connection::bulk_copy::{
 /// [`Client::bulk_insert_with_columns`](crate::Client::bulk_insert_with_columns).
 /// Configure it with the option setters, then call [`send`](Self::send) to
 /// stream rows.
+///
+/// Dropping a pending send marks the native connection dead; dropping an unused
+/// builder or unpolled send does not. See [`Client`](crate::Client)'s
+/// cancellation safety contract.
 pub struct BulkInsert<'a> {
-    inner: TdsBulkCopy<'a>,
+    client: &'a mut TdsClient,
+    table_name: String,
+    options: BulkCopyOptions,
+    timeout: Option<Duration>,
+    column_mappings: Vec<ColumnMapping>,
 }
 
 impl<'a> BulkInsert<'a> {
@@ -108,49 +117,53 @@ impl<'a> BulkInsert<'a> {
     /// (e.g., via [`Client::inner_mut`](crate::Client::inner_mut)).
     pub fn new(client: &'a mut TdsClient, table_name: impl Into<String>) -> Self {
         Self {
-            inner: TdsBulkCopy::new(client, table_name),
+            client,
+            table_name: table_name.into(),
+            options: BulkCopyOptions::default(),
+            timeout: None,
+            column_mappings: Vec::new(),
         }
     }
 
     /// Number of rows per server-side batch. Default 0 = single batch.
     pub fn batch_size(mut self, n: usize) -> Self {
-        self.inner = self.inner.batch_size(n);
+        self.options.batch_size = n;
         self
     }
 
     /// Per-operation timeout. Default 30 seconds. Pass `Duration::ZERO` for no timeout.
     pub fn timeout(mut self, t: Duration) -> Self {
-        self.inner = self.inner.timeout(t);
+        self.timeout = Some(t);
         self
     }
 
     /// Enforce CHECK constraints on the destination table during the load. Default off.
     pub fn check_constraints(mut self, enabled: bool) -> Self {
-        self.inner = self.inner.check_constraints(enabled);
+        self.options.check_constraints = enabled;
         self
     }
 
     /// Fire INSERT triggers for every loaded row. Default off.
     pub fn fire_triggers(mut self, enabled: bool) -> Self {
-        self.inner = self.inner.fire_triggers(enabled);
+        self.options.fire_triggers = enabled;
         self
     }
 
     /// Preserve source identity column values. Default off (server auto-generates).
     pub fn keep_identity(mut self, enabled: bool) -> Self {
-        self.inner = self.inner.keep_identity(enabled);
+        self.options.keep_identity = enabled;
         self
     }
 
     /// Preserve source NULLs even when destination has a DEFAULT. Default off.
     pub fn keep_nulls(mut self, enabled: bool) -> Self {
-        self.inner = self.inner.keep_nulls(enabled);
+        self.options.keep_nulls = enabled;
         self
     }
 
     /// Acquire a bulk-update (TABLOCK) lock for the duration of the load. Default off.
     pub fn table_lock(mut self, enabled: bool) -> Self {
-        self.inner = self.inner.table_lock(enabled);
+        self.options.table_lock = enabled;
         self
     }
 
@@ -158,13 +171,13 @@ impl<'a> BulkInsert<'a> {
     ///
     /// **Cannot be combined with an active client-level transaction.**
     pub fn use_internal_transaction(mut self, enabled: bool) -> Self {
-        self.inner = self.inner.use_internal_transaction(enabled);
+        self.options.use_internal_transaction = enabled;
         self
     }
 
     /// Rows between progress callback invocations. Default 0 = no callbacks.
     pub fn notification_interval(mut self, n: usize) -> Self {
-        self.inner = self.inner.notification_interval(n);
+        self.options.notification_interval = n;
         self
     }
 
@@ -173,7 +186,7 @@ impl<'a> BulkInsert<'a> {
     /// When any mapping is added, ordinal auto-mapping is disabled and only
     /// the listed mappings apply.
     pub fn add_column_mapping(mut self, mapping: ColumnMapping) -> Self {
-        self.inner = self.inner.add_column_mapping(mapping);
+        self.column_mappings.push(mapping);
         self
     }
 
@@ -196,17 +209,37 @@ impl<'a> BulkInsert<'a> {
     /// # Errors
     ///
     /// Returns [`Error::Tds`] for any failure: column type mismatch, network
-    /// error, server-side constraint violation, timeout, etc. On error the
-    /// connection state is recovered automatically by mssql-tds.
-    pub async fn send<I, R>(mut self, rows: I) -> Result<BulkCopyResult>
+    /// error, server-side constraint violation, timeout, or a known-dead client.
+    /// Completed errors retain the native driver's recovery/liveness outcome.
+    /// Dropping this future during I/O bypasses native async cleanup and marks
+    /// the connection dead; discard it rather than retrying on the same client.
+    pub async fn send<I, R>(self, rows: I) -> Result<BulkCopyResult>
     where
         I: IntoIterator<Item = R>,
         R: BulkLoadRow,
     {
-        self.inner
-            .write_to_server_zerocopy(rows)
-            .await
-            .map_err(Error::Tds)
+        let mut operation = Operation::new(self.client)?;
+        let result = {
+            let mut bulk = TdsBulkCopy::new(&mut operation, self.table_name)
+                .batch_size(self.options.batch_size)
+                .check_constraints(self.options.check_constraints)
+                .fire_triggers(self.options.fire_triggers)
+                .keep_identity(self.options.keep_identity)
+                .keep_nulls(self.options.keep_nulls)
+                .table_lock(self.options.table_lock)
+                .use_internal_transaction(self.options.use_internal_transaction)
+                .notification_interval(self.options.notification_interval);
+            if let Some(timeout) = self.timeout {
+                bulk = bulk.timeout(timeout);
+            }
+            for mapping in self.column_mappings {
+                bulk = bulk.add_column_mapping(mapping);
+            }
+            bulk.write_to_server_zerocopy(rows)
+                .await
+                .map_err(Error::Tds)
+        };
+        operation.complete(result)
     }
 }
 

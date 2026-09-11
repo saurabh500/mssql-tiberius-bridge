@@ -11,12 +11,44 @@ use std::sync::Arc;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
+use crate::operation::{ensure_usable, Operation};
 use crate::query::{build_params_with_string_encoding, ExecuteResult, QueryResult, ToSql};
 
 /// An async SQL Server client with tiberius-style query methods.
 ///
 /// `Client` owns a single TCP connection to SQL Server. It is **not** `Clone`
 /// or `Sync` — for concurrent access, use a connection pool via [`TdsManager`](crate::TdsManager).
+///
+/// # Cancellation safety
+///
+/// Dropping an in-flight bridge operation (for example, when
+/// `tokio::time::timeout` expires) marks this connection dead. Subsequent bridge
+/// operations fail immediately with [`Error::Tds`] wrapping
+/// [`mssql_tds::error::Error::ConnectionClosed`], without sending or draining
+/// anything. Drop the client and reconnect; [`TdsManager`](crate::TdsManager)
+/// discards dead connections on recycle. [`is_connection_dead`](Self::is_connection_dead)
+/// observes this state without I/O.
+///
+/// This applies to queries, execution, prepared statements, ping, and bulk
+/// sends, including response collection and cleanup. Unpolled futures and
+/// unused bulk builders do not affect the connection. For wire streams, dropping
+/// between fully yielded rows remains safe: the next operation drains the unread
+/// results. Dropping a stream while its I/O is pending marks the connection dead.
+/// Dropping only a pending `next()` future leaves the stream's internal future
+/// intact; the retained stream can be resumed. Buffered [`QueryResult`] streams
+/// do not perform I/O and are unaffected.
+///
+/// Cancellation does **not** guarantee that SQL Server stopped the request or
+/// rolled back its effects. No SQL is retried, and no async cleanup is run from
+/// `Drop`. Completed errors keep the native driver's liveness classification;
+/// ordinary drained SQL errors do not by themselves kill a connection.
+/// [`reset_session`](Self::reset_session) is stricter: any failed or cancelled
+/// reset retires the connection rather than leaving a partially cleaned session.
+///
+/// Native cooperative cancellation through `ExecuteOptions` is different: the
+/// native operation must keep being polled to finish its ATTENTION cleanup.
+/// Direct operations through [`inner_mut`](Self::inner_mut) bypass the bridge's
+/// guards; see that method's safety contract.
 ///
 /// # Example
 ///
@@ -83,7 +115,8 @@ impl Client {
     ///
     /// This performs no I/O. A `false` result does not prove that an idle
     /// connection is still responsive; use [`ping`](Self::ping) or
-    /// [`reset_session`](Self::reset_session) to validate it.
+    /// [`reset_session`](Self::reset_session) to validate it. A known-dead client
+    /// must be discarded.
     pub fn is_connection_dead(&self) -> bool {
         self.inner.is_connection_dead()
     }
@@ -106,12 +139,7 @@ impl Client {
     /// or the reset/baseline batch fails. A failed or cancelled reset marks the
     /// connection dead so it cannot be recycled in an unknown session state.
     pub async fn reset_session(&mut self) -> Result<()> {
-        if self.is_connection_dead() {
-            return Err(mssql_tds::error::Error::ConnectionClosed(
-                "cannot reset a connection that is known dead".into(),
-            )
-            .into());
-        }
+        self.ensure_usable()?;
 
         self.prepared_session = Arc::new(());
         let mut reset = SessionReset {
@@ -143,6 +171,10 @@ impl Client {
         Ok(())
     }
 
+    pub(crate) fn ensure_usable(&self) -> Result<()> {
+        ensure_usable(&self.inner)
+    }
+
     /// Execute a raw SQL query without parameters.
     ///
     /// Mirrors tiberius' `simple_query`. The SQL is sent as a TDS SQL Batch
@@ -172,10 +204,14 @@ impl Client {
     /// Returns [`Error::Tds`] on SQL errors or connection issues.
     pub async fn simple_query(&mut self, sql: impl Into<String>) -> Result<QueryResult> {
         let sql = sql.into();
-        self.inner.close_query().await.map_err(Error::Tds)?;
-        self.inner.execute(sql, ()).await.map_err(Error::Tds)?;
-
-        self.collect_results().await
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = async {
+            operation.close_query().await.map_err(Error::Tds)?;
+            operation.execute(sql, ()).await.map_err(Error::Tds)?;
+            Self::collect_results(&mut operation).await
+        }
+        .await;
+        operation.complete(result)
     }
 
     /// Execute a parameterized query with positional `@P1, @P2, ...` parameters.
@@ -212,15 +248,19 @@ impl Client {
             return self.simple_query(sql).await;
         }
 
-        self.inner.close_query().await.map_err(Error::Tds)?;
         let rpc_params =
             build_params_with_string_encoding(params, self.send_string_parameters_as_unicode);
-        self.inner
-            .execute_sp_executesql(sql, rpc_params, ())
-            .await
-            .map_err(Error::Tds)?;
-
-        self.collect_results().await
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = async {
+            operation.close_query().await.map_err(Error::Tds)?;
+            operation
+                .execute_sp_executesql(sql, rpc_params, ())
+                .await
+                .map_err(Error::Tds)?;
+            Self::collect_results(&mut operation).await
+        }
+        .await;
+        operation.complete(result)
     }
 
     /// Execute a DML statement and return row counts.
@@ -237,19 +277,25 @@ impl Client {
         params: &[&dyn ToSql],
     ) -> Result<ExecuteResult> {
         let sql = sql.into();
-        self.inner.close_query().await.map_err(Error::Tds)?;
-
-        let result = if params.is_empty() {
-            self.inner.execute(sql, ()).await.map_err(Error::Tds)?
-        } else {
-            let rpc_params =
-                build_params_with_string_encoding(params, self.send_string_parameters_as_unicode);
-            self.inner
-                .execute_sp_executesql(sql, rpc_params, ())
-                .await
-                .map_err(Error::Tds)?
-        };
-        self.collect_execute_results(result).await
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = async {
+            operation.close_query().await.map_err(Error::Tds)?;
+            let result = if params.is_empty() {
+                operation.execute(sql, ()).await.map_err(Error::Tds)?
+            } else {
+                let rpc_params = build_params_with_string_encoding(
+                    params,
+                    self.send_string_parameters_as_unicode,
+                );
+                operation
+                    .execute_sp_executesql(sql, rpc_params, ())
+                    .await
+                    .map_err(Error::Tds)?
+            };
+            Self::collect_execute_results(&mut operation, result).await
+        }
+        .await;
+        operation.complete(result)
     }
 
     /// Execute a parameterized query and return rows as a true wire-level
@@ -268,6 +314,11 @@ impl Client {
     /// The returned stream borrows `&mut self` for its lifetime. You must
     /// fully consume the stream (or drop it) before issuing another query
     /// on the same `Client`.
+    ///
+    /// Dropping between yielded rows preserves reuse; dropping while the stream
+    /// is suspended in I/O marks the connection dead. A cancelled `next()` can
+    /// be retried if the stream itself is retained. See [`Client`]'s cancellation
+    /// safety contract.
     ///
     /// # Example
     ///
@@ -299,26 +350,30 @@ impl Client {
             ))
         };
         Box::pin(async_stream::try_stream! {
-            // Drain any leftover state from a prior query / dropped stream
-            // so we don't hit "open batch" errors when re-using the Client.
-            self.inner.close_query().await.map_err(Error::Tds)?;
-
-            // Initiate the query inside the stream so the &mut self borrow
-            // lives for the entire row-pull duration.
-            match rpc_params {
-                None => self.inner.execute(sql, ()).await.map_err(Error::Tds)?,
-                Some(p) => self.inner.execute_sp_executesql(sql, p, ()).await.map_err(Error::Tds)?,
-            };
+            let mut operation = Operation::new(&mut self.inner)?;
+            let result: Result<()> = async {
+                operation.close_query().await.map_err(Error::Tds)?;
+                match rpc_params {
+                    None => operation.execute(sql, ()).await.map_err(Error::Tds)?,
+                    Some(p) => operation.execute_sp_executesql(sql, p, ()).await.map_err(Error::Tds)?,
+                };
+                Ok(())
+            }.await;
+            operation.complete(result)?;
 
             while self.inner.on_rows()
-                || self.inner.advance_to_rows().await.map_err(Error::Tds)?
+                || Self::advance_stream(&mut self.inner).await?
             {
                 let schema = crate::row::RowSchema::from_metadata(self.inner.get_metadata());
                 let mut writer = crate::row::BridgeRowWriter::new(schema);
-                while self.inner.next_row_into(&mut writer).await.map_err(Error::Tds)? {
+                while {
+                    let mut operation = Operation::new(&mut self.inner)?;
+                    let result = operation.next_row_into(&mut writer).await.map_err(Error::Tds);
+                    operation.complete(result)?
+                } {
                     yield writer.take_row();
                 }
-                if !self.inner.advance_to_rows().await.map_err(Error::Tds)? {
+                if !Self::advance_stream(&mut self.inner).await? {
                     break;
                 }
             }
@@ -373,6 +428,13 @@ impl Client {
     /// by the bridge API (e.g., bulk copy, stored procedure output parameters).
     /// Use [`reset_session`](Self::reset_session) for resets so the bridge can
     /// also invalidate its prepared-statement handles.
+    ///
+    /// Direct native operations bypass the bridge's dead-state checks and
+    /// cancellation guards. If you drop an in-flight native future, call
+    /// [`TdsClient::mark_connection_dead`] and discard the client; do not reuse it
+    /// or return it to a pool as healthy. Native cooperative cancellation must be
+    /// polled through completion to perform cleanup. A known-dead native client
+    /// must not be used even if its methods still accept calls.
     pub fn inner_mut(&mut self) -> &mut TdsClient {
         &mut self.inner
     }
@@ -420,15 +482,20 @@ impl Client {
         param_types: &[&dyn ToSql],
     ) -> Result<crate::prepared::PreparedStatement> {
         let sql = sql.into();
-        self.inner.close_query().await.map_err(Error::Tds)?;
-        crate::prepared::PreparedStatement::prepare(
-            &mut self.inner,
-            sql,
-            param_types,
-            self.send_string_parameters_as_unicode,
-            Arc::clone(&self.prepared_session),
-        )
-        .await
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = async {
+            operation.close_query().await.map_err(Error::Tds)?;
+            crate::prepared::PreparedStatement::prepare(
+                &mut operation,
+                sql,
+                param_types,
+                self.send_string_parameters_as_unicode,
+                Arc::clone(&self.prepared_session),
+            )
+            .await
+        }
+        .await;
+        operation.complete(result)
     }
 
     /// Execute a previously prepared statement and collect all result sets.
@@ -441,8 +508,8 @@ impl Client {
         stmt: &crate::prepared::PreparedStatement,
         params: &[&dyn ToSql],
     ) -> Result<QueryResult> {
+        self.ensure_usable()?;
         stmt.validate_session(&self.prepared_session)?;
-        self.inner.close_query().await.map_err(Error::Tds)?;
         let rpc_params = if params.is_empty() {
             None
         } else {
@@ -451,16 +518,22 @@ impl Client {
                 self.send_string_parameters_as_unicode,
             ))
         };
-        self.inner
-            .execute_stored_procedure(
-                "sp_execute".into(),
-                Some(stmt.handle_parameter()),
-                rpc_params,
-                (),
-            )
-            .await
-            .map_err(Error::Tds)?;
-        self.collect_results().await
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = async {
+            operation.close_query().await.map_err(Error::Tds)?;
+            operation
+                .execute_stored_procedure(
+                    "sp_execute".into(),
+                    Some(stmt.handle_parameter()),
+                    rpc_params,
+                    (),
+                )
+                .await
+                .map_err(Error::Tds)?;
+            Self::collect_results(&mut operation).await
+        }
+        .await;
+        operation.complete(result)
     }
 
     /// Execute a previously prepared DML statement and return row counts.
@@ -473,8 +546,8 @@ impl Client {
         stmt: &crate::prepared::PreparedStatement,
         params: &[&dyn ToSql],
     ) -> Result<ExecuteResult> {
+        self.ensure_usable()?;
         stmt.validate_session(&self.prepared_session)?;
-        self.inner.close_query().await.map_err(Error::Tds)?;
         let rpc_params = if params.is_empty() {
             None
         } else {
@@ -483,17 +556,22 @@ impl Client {
                 self.send_string_parameters_as_unicode,
             ))
         };
-        let result = self
-            .inner
-            .execute_stored_procedure(
-                "sp_execute".into(),
-                Some(stmt.handle_parameter()),
-                rpc_params,
-                (),
-            )
-            .await
-            .map_err(Error::Tds)?;
-        self.collect_execute_results(result).await
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = async {
+            operation.close_query().await.map_err(Error::Tds)?;
+            let result = operation
+                .execute_stored_procedure(
+                    "sp_execute".into(),
+                    Some(stmt.handle_parameter()),
+                    rpc_params,
+                    (),
+                )
+                .await
+                .map_err(Error::Tds)?;
+            Self::collect_execute_results(&mut operation, result).await
+        }
+        .await;
+        operation.complete(result)
     }
 
     /// Release a prepared-statement handle via `sp_unprepare`.
@@ -506,41 +584,48 @@ impl Client {
     /// connection, so calling this is optional unless you want to free
     /// server-side memory while keeping the connection alive.
     pub async fn unprepare(&mut self, stmt: crate::prepared::PreparedStatement) -> Result<()> {
+        self.ensure_usable()?;
         stmt.validate_session(&self.prepared_session)?;
-        self.inner.close_query().await.map_err(Error::Tds)?;
-        self.inner
-            .execute_stored_procedure(
-                "sp_unprepare".into(),
-                Some(stmt.handle_parameter()),
-                None,
-                (),
-            )
-            .await
-            .map_err(Error::Tds)?;
-        self.inner.close_query().await.map_err(Error::Tds)
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = async {
+            operation.close_query().await.map_err(Error::Tds)?;
+            operation
+                .execute_stored_procedure(
+                    "sp_unprepare".into(),
+                    Some(stmt.handle_parameter()),
+                    None,
+                    (),
+                )
+                .await
+                .map_err(Error::Tds)?;
+            operation.close_query().await.map_err(Error::Tds)
+        }
+        .await;
+        operation.complete(result)
+    }
+
+    async fn advance_stream(inner: &mut TdsClient) -> Result<bool> {
+        let mut operation = Operation::new(inner)?;
+        let result = operation.advance_to_rows().await.map_err(Error::Tds);
+        operation.complete(result)
     }
 
     /// Collect all result sets from the current execution into a [`QueryResult`].
-    async fn collect_results(&mut self) -> Result<QueryResult> {
+    async fn collect_results(inner: &mut TdsClient) -> Result<QueryResult> {
         let mut result_sets: Vec<Vec<crate::row::Row>> = Vec::new();
 
-        while self.inner.on_rows() || self.inner.advance_to_rows().await.map_err(Error::Tds)? {
-            let schema = crate::row::RowSchema::from_metadata(self.inner.get_metadata());
+        while inner.on_rows() || inner.advance_to_rows().await.map_err(Error::Tds)? {
+            let schema = crate::row::RowSchema::from_metadata(inner.get_metadata());
             let mut writer = crate::row::BridgeRowWriter::new(schema);
             let mut rows: Vec<crate::row::Row> = Vec::new();
 
-            while self
-                .inner
-                .next_row_into(&mut writer)
-                .await
-                .map_err(Error::Tds)?
-            {
+            while inner.next_row_into(&mut writer).await.map_err(Error::Tds)? {
                 rows.push(writer.take_row());
             }
 
             result_sets.push(rows);
 
-            if !self.inner.advance_to_rows().await.map_err(Error::Tds)? {
+            if !inner.advance_to_rows().await.map_err(Error::Tds)? {
                 break;
             }
         }
@@ -549,7 +634,7 @@ impl Client {
     }
 
     async fn collect_execute_results(
-        &mut self,
+        inner: &mut TdsClient,
         mut result: StatementResult,
     ) -> Result<ExecuteResult> {
         let mut counts = Vec::new();
@@ -557,7 +642,7 @@ impl Client {
             match result {
                 StatementResult::Rows => {
                     let mut count = 0;
-                    while self.inner.next_row().await.map_err(Error::Tds)?.is_some() {
+                    while inner.next_row().await.map_err(Error::Tds)?.is_some() {
                         count += 1;
                     }
                     counts.push(count);
@@ -569,7 +654,7 @@ impl Client {
                 }
                 StatementResult::End => break,
             }
-            result = self.inner.advance().await.map_err(Error::Tds)?;
+            result = inner.advance().await.map_err(Error::Tds)?;
         }
         Ok(ExecuteResult { counts })
     }

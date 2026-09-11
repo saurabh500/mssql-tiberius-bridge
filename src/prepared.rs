@@ -55,10 +55,16 @@
 //! (Rust [`Drop`] cannot run async code). The type is marked
 //! `#[must_use]` to nudge callers toward explicit cleanup.
 //!
+//! Preparation, execution, and explicit close follow [`Client`]'s cancellation
+//! safety contract. Dropping an in-flight bridge operation marks the connection
+//! dead, including when preparation is still reading its output handle. Discard
+//! the client and prepare new handles on the replacement connection.
+//!
 //! Statements belong to the client session that prepared them.
 //! [`Client::reset_session`] and the default pool recycling policy invalidate
-//! them. Querying, executing, or closing an invalidated statement returns
+//! them. On a usable client, querying, executing, or closing an invalidated statement returns
 //! [`Error::InvalidPreparedStatement`] without sending its stale handle.
+//! A known-dead client returns `ConnectionClosed` first, even for a stale handle.
 //! Prepare and close statements within one pool checkout.
 //!
 //! # Type inference for parameters

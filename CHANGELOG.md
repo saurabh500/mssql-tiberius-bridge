@@ -11,6 +11,17 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+## [0.1.0](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.5...v0.1.0) - 2026-09-11
+
+### Changed
+
+- Replace `mssql-tds-preview` with `mssql-tds` 0.1.0 from crates.io.
+- Adapt buffered queries, row streaming, row decoding, and prepared statements to the published driver's APIs.
+
+### Fixed
+
+- Return DML affected-row counts using the driver's statement results.
+
 ## [0.1.0-preview.5](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.4...v0.1.0-preview.5) - 2026-05-18
 
 ### Documentation

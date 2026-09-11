@@ -5,7 +5,7 @@
 //! [`query`](Client::query) with positional parameters, and
 //! [`execute`](Client::execute) for DML.
 
-use mssql_tds::connection::tds_client::{ResultSet, ResultSetClient, TdsClient};
+use mssql_tds::connection::tds_client::{ResultSet, StatementResult, TdsClient};
 use mssql_tds::connection_provider::tds_connection_provider::TdsConnectionProvider;
 
 use crate::config::Config;
@@ -106,10 +106,7 @@ impl Client {
     pub async fn simple_query(&mut self, sql: impl Into<String>) -> Result<QueryResult> {
         let sql = sql.into();
         self.inner.close_query().await.map_err(Error::Tds)?;
-        self.inner
-            .execute(sql, None, None)
-            .await
-            .map_err(Error::Tds)?;
+        self.inner.execute(sql, ()).await.map_err(Error::Tds)?;
 
         self.collect_results().await
     }
@@ -152,7 +149,7 @@ impl Client {
         let rpc_params =
             build_params_with_string_encoding(params, self.send_string_parameters_as_unicode);
         self.inner
-            .execute_sp_executesql(sql, rpc_params, None, None)
+            .execute_sp_executesql(sql, rpc_params, ())
             .await
             .map_err(Error::Tds)?;
 
@@ -163,12 +160,6 @@ impl Client {
     ///
     /// Use for INSERT, UPDATE, DELETE, or any statement where you need
     /// the affected row count rather than result rows.
-    ///
-    /// # Known Limitation
-    ///
-    /// Currently returns 0 for DML statements because `mssql-tds` doesn't
-    /// expose DONE token row counts through its public API.
-    /// See [issue #1](https://github.com/saurabh500/mssql-tiberius-bridge/issues/1).
     ///
     /// # Errors
     ///
@@ -181,33 +172,17 @@ impl Client {
         let sql = sql.into();
         self.inner.close_query().await.map_err(Error::Tds)?;
 
-        if params.is_empty() {
-            self.inner
-                .execute(sql, None, None)
-                .await
-                .map_err(Error::Tds)?;
+        let result = if params.is_empty() {
+            self.inner.execute(sql, ()).await.map_err(Error::Tds)?
         } else {
             let rpc_params =
                 build_params_with_string_encoding(params, self.send_string_parameters_as_unicode);
             self.inner
-                .execute_sp_executesql(sql, rpc_params, None, None)
+                .execute_sp_executesql(sql, rpc_params, ())
                 .await
-                .map_err(Error::Tds)?;
-        }
-
-        // Drain result sets, counting rows in each.
-        let mut counts: Vec<u64> = Vec::new();
-        while let Some(rs) = self.inner.get_current_resultset() {
-            let mut count = 0u64;
-            while let Some(_row) = rs.next_row().await.map_err(Error::Tds)? {
-                count += 1;
-            }
-            counts.push(count);
-            if !self.inner.move_to_next().await.map_err(Error::Tds)? {
-                break;
-            }
-        }
-        Ok(ExecuteResult { counts })
+                .map_err(Error::Tds)?
+        };
+        self.collect_execute_results(result).await
     }
 
     /// Execute a parameterized query and return rows as a true wire-level
@@ -264,28 +239,19 @@ impl Client {
             // Initiate the query inside the stream so the &mut self borrow
             // lives for the entire row-pull duration.
             match rpc_params {
-                None => self.inner.execute(sql, None, None).await.map_err(Error::Tds)?,
-                Some(p) => self.inner.execute_sp_executesql(sql, p, None, None).await.map_err(Error::Tds)?,
-            }
+                None => self.inner.execute(sql, ()).await.map_err(Error::Tds)?,
+                Some(p) => self.inner.execute_sp_executesql(sql, p, ()).await.map_err(Error::Tds)?,
+            };
 
-            while let Some(schema) = self
-                .inner
-                .get_current_resultset()
-                .map(|rs| crate::row::RowSchema::from_metadata(rs.get_metadata()))
+            while self.inner.on_rows()
+                || self.inner.advance_to_rows().await.map_err(Error::Tds)?
             {
+                let schema = crate::row::RowSchema::from_metadata(self.inner.get_metadata());
                 let mut writer = crate::row::BridgeRowWriter::new(schema);
-                loop {
-                    let has_row = match self.inner.get_current_resultset() {
-                        Some(rs) => rs.next_row_into(&mut writer).await.map_err(Error::Tds)?,
-                        None => false,
-                    };
-                    if has_row {
-                        yield writer.take_row();
-                    } else {
-                        break;
-                    }
+                while self.inner.next_row_into(&mut writer).await.map_err(Error::Tds)? {
+                    yield writer.take_row();
                 }
-                if !self.inner.move_to_next().await.map_err(Error::Tds)? {
+                if !self.inner.advance_to_rows().await.map_err(Error::Tds)? {
                     break;
                 }
             }
@@ -386,14 +352,13 @@ impl Client {
     ) -> Result<crate::prepared::PreparedStatement> {
         let sql = sql.into();
         self.inner.close_query().await.map_err(Error::Tds)?;
-        let rpc_params =
-            build_params_with_string_encoding(param_types, self.send_string_parameters_as_unicode);
-        let handle = self
-            .inner
-            .execute_sp_prepare(sql.clone(), rpc_params, None, None)
-            .await
-            .map_err(Error::Tds)?;
-        Ok(crate::prepared::PreparedStatement::new(handle, sql))
+        crate::prepared::PreparedStatement::prepare(
+            &mut self.inner,
+            sql,
+            param_types,
+            self.send_string_parameters_as_unicode,
+        )
+        .await
     }
 
     /// Execute a previously prepared statement and collect all result sets.
@@ -416,7 +381,12 @@ impl Client {
             ))
         };
         self.inner
-            .execute_sp_execute(stmt.handle(), None, rpc_params, None, None)
+            .execute_stored_procedure(
+                "sp_execute".into(),
+                Some(stmt.handle_parameter()),
+                rpc_params,
+                (),
+            )
             .await
             .map_err(Error::Tds)?;
         self.collect_results().await
@@ -424,8 +394,7 @@ impl Client {
 
     /// Execute a previously prepared DML statement and return row counts.
     ///
-    /// Same caveat as [`Client::execute`]: row counts are currently `0`
-    /// pending [#1](https://github.com/saurabh500/mssql-tiberius-bridge/issues/1).
+    /// Uses the same affected-row counting as [`Client::execute`].
     /// Usually called via
     /// [`PreparedStatement::execute`](crate::prepared::PreparedStatement::execute).
     pub async fn execute_prepared(
@@ -442,23 +411,17 @@ impl Client {
                 self.send_string_parameters_as_unicode,
             ))
         };
-        self.inner
-            .execute_sp_execute(stmt.handle(), None, rpc_params, None, None)
+        let result = self
+            .inner
+            .execute_stored_procedure(
+                "sp_execute".into(),
+                Some(stmt.handle_parameter()),
+                rpc_params,
+                (),
+            )
             .await
             .map_err(Error::Tds)?;
-
-        let mut counts: Vec<u64> = Vec::new();
-        while let Some(rs) = self.inner.get_current_resultset() {
-            let mut count = 0u64;
-            while let Some(_row) = rs.next_row().await.map_err(Error::Tds)? {
-                count += 1;
-            }
-            counts.push(count);
-            if !self.inner.move_to_next().await.map_err(Error::Tds)? {
-                break;
-            }
-        }
-        Ok(ExecuteResult { counts })
+        self.collect_execute_results(result).await
     }
 
     /// Release a prepared-statement handle via `sp_unprepare`.
@@ -473,33 +436,69 @@ impl Client {
     pub async fn unprepare(&mut self, stmt: crate::prepared::PreparedStatement) -> Result<()> {
         self.inner.close_query().await.map_err(Error::Tds)?;
         self.inner
-            .execute_sp_unprepare(stmt.handle(), None, None)
+            .execute_stored_procedure(
+                "sp_unprepare".into(),
+                Some(stmt.handle_parameter()),
+                None,
+                (),
+            )
             .await
             .map_err(Error::Tds)?;
-        Ok(())
+        self.inner.close_query().await.map_err(Error::Tds)
     }
 
     /// Collect all result sets from the current execution into a [`QueryResult`].
     async fn collect_results(&mut self) -> Result<QueryResult> {
         let mut result_sets: Vec<Vec<crate::row::Row>> = Vec::new();
 
-        while let Some(rs) = self.inner.get_current_resultset() {
-            let schema = crate::row::RowSchema::from_metadata(rs.get_metadata());
+        while self.inner.on_rows() || self.inner.advance_to_rows().await.map_err(Error::Tds)? {
+            let schema = crate::row::RowSchema::from_metadata(self.inner.get_metadata());
             let mut writer = crate::row::BridgeRowWriter::new(schema);
             let mut rows: Vec<crate::row::Row> = Vec::new();
 
-            while rs.next_row_into(&mut writer).await.map_err(Error::Tds)? {
+            while self
+                .inner
+                .next_row_into(&mut writer)
+                .await
+                .map_err(Error::Tds)?
+            {
                 rows.push(writer.take_row());
             }
 
             result_sets.push(rows);
 
-            if !self.inner.move_to_next().await.map_err(Error::Tds)? {
+            if !self.inner.advance_to_rows().await.map_err(Error::Tds)? {
                 break;
             }
         }
 
         Ok(QueryResult { result_sets })
+    }
+
+    async fn collect_execute_results(
+        &mut self,
+        mut result: StatementResult,
+    ) -> Result<ExecuteResult> {
+        let mut counts = Vec::new();
+        loop {
+            match result {
+                StatementResult::Rows => {
+                    let mut count = 0;
+                    while self.inner.next_row().await.map_err(Error::Tds)?.is_some() {
+                        count += 1;
+                    }
+                    counts.push(count);
+                }
+                StatementResult::NoRows { rows_affected } => {
+                    if let Some(count) = rows_affected {
+                        counts.push(count);
+                    }
+                }
+                StatementResult::End => break,
+            }
+            result = self.inner.advance().await.map_err(Error::Tds)?;
+        }
+        Ok(ExecuteResult { counts })
     }
 }
 

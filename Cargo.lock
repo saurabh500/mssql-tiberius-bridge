@@ -1000,16 +1000,17 @@ dependencies = [
 ]
 
 [[package]]
-name = "mssql-tds-preview"
-version = "0.1.0-preview.5"
+name = "mssql-tds"
+version = "0.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0e88e1ab8a57f9ddfb43cd8ecab7bc4d388f7c234f8ed5334b1e35e94c7f9d7d"
+checksum = "24af8cb7710c93995782f5f04fc2a10c79b5e073034f104fea9b98872b67e71b"
 dependencies = [
  "async-trait",
  "bigdecimal",
  "bitflags",
  "byteorder",
  "bytes",
+ "core-foundation",
  "dns-lookup",
  "encoding_rs",
  "futures",
@@ -1017,7 +1018,10 @@ dependencies = [
  "hostname",
  "libc",
  "native-tls",
+ "openssl",
  "pretty-hex",
+ "security-framework",
+ "security-framework-sys",
  "socket2 0.5.10",
  "thiserror",
  "tokio",
@@ -1027,12 +1031,14 @@ dependencies = [
  "uuid",
  "winapi",
  "windows",
+ "windows-sys 0.59.0",
  "x509-parser",
+ "zeroize",
 ]
 
 [[package]]
 name = "mssql-tiberius-bridge"
-version = "0.1.0-preview.5"
+version = "0.1.0"
 dependencies = [
  "arrow-array",
  "arrow-schema",
@@ -1044,7 +1050,7 @@ dependencies = [
  "futures-core",
  "futures-util",
  "jiff",
- "mssql-tds-preview",
+ "mssql-tds",
  "rust_decimal",
  "serde",
  "serde_json",
@@ -1799,7 +1805,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",
@@ -2332,6 +2338,15 @@ dependencies = [
 
 [[package]]
 name = "windows-sys"
+version = "0.59.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1e38bc4d79ed67fd075bcc251a1c39b32a1776bbe92e5bef1f0bf1f8c531853b"
+dependencies = [
+ "windows-targets 0.52.6",
+]
+
+[[package]]
+name = "windows-sys"
 version = "0.60.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2f500e4d28234f72040990ec9d39e3a6b950f9f22d3dba18416c35882612bcb"
@@ -2620,6 +2635,26 @@ name = "zerocopy-derive"
 version = "0.8.48"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "70e3cd084b1788766f53af483dd21f93881ff30d7320490ec3ef7526d203bad4"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
+name = "zeroize"
+version = "1.9.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e13c156562582aa81c60cb29407084cdb54c4164760106ab78e6c5b0858cf64e"
+dependencies = [
+ "zeroize_derive",
+]
+
+[[package]]
+name = "zeroize_derive"
+version = "1.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c50655cbb0fe3fc43170059e702f1ce5e19b84cec58dc87b037a09935c2f328"
 dependencies = [
  "proc-macro2",
  "quote",

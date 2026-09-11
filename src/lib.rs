@@ -85,6 +85,7 @@ pub mod client;
 pub mod column;
 pub mod config;
 pub mod error;
+mod operation;
 pub mod pool;
 pub mod prepared;
 pub mod query;

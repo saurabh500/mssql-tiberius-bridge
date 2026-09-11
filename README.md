@@ -86,6 +86,29 @@ See [connection pooling](docs/connection-examples.md#connection-pooling) for
 examples and timeout configuration. `deadpool` still owns capacity and checkout;
 `mssql-tds` provides the native reset and health primitives.
 
+## Cancellation and timeouts
+
+Dropping an in-flight bridge operation with `tokio::time::timeout`, `select!`,
+or task cancellation marks the connection dead. Later bridge operations fail
+immediately with `Error::Tds(mssql_tds::error::Error::ConnectionClosed(...))`.
+Check `client.is_connection_dead()` without I/O, then drop the client and
+reconnect. The pool rejects dead clients before reset or ping and replaces them
+on checkout.
+
+Wire streams remain reusable when dropped between fully yielded rows; dropping
+a stream while its I/O is pending marks the connection dead. Cancelling only
+`stream.next()` retains the internal future if you keep the stream and resume it.
+Unpolled futures, unused bulk builders, and buffered result streams do not poison
+the connection. Completed SQL errors retain the native driver's liveness outcome.
+A failed or cancelled session reset always retires the connection.
+
+Cancellation does not guarantee that SQL stopped executing or rolled back, so
+do not automatically retry writes. Native cooperative cancellation requires
+polling through cleanup; an external timeout that drops the operation is different.
+Direct calls through `inner_mut()` bypass the bridge guards: after abandoning
+native I/O, mark the native client dead and discard it instead of returning it
+to a pool as healthy. See the `Client` rustdoc for the full contract.
+
 ## Spatial values
 
 `geography` and `geometry` columns can be read directly in buffered or streamed

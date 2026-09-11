@@ -475,13 +475,26 @@ is needed. SQL Server reset does not restore isolation, so it is set explicitly.
 
 The reset rolls back open transactions, clears temporary tables and session
 settings, and restores the login database. Prepared statements from before a
-reset are rejected with `Error::InvalidPreparedStatement`; prepare and close
+reset are rejected with `Error::InvalidPreparedStatement` on a usable client;
+known-dead clients return `ConnectionClosed` first. Prepare and close
 them within a single checkout. A failed or cancelled reset marks the connection
 dead, and the pool discards failed recycle attempts.
 
 **Transaction ownership:** commit or roll back before dropping the connection.
 Checkout-time reset prevents state reaching another borrower, but does not
 release an abandoned transaction's locks while the connection sits idle.
+
+If a bridge operation is dropped while I/O is pending (for example by
+`tokio::time::timeout`), the client is marked dead. Recycling checks that native
+state before reset or ping and rejects the client so deadpool replaces it. Outside a pool,
+drop the client and reconnect; later bridge calls return a typed `ConnectionClosed`
+error without I/O. `Client::is_connection_dead()` is a cached, no-I/O check.
+
+This does not abort or roll back SQL reliably, so do not automatically retry
+writes. Dropping a wire stream between complete rows preserves reuse; abandoning
+a stream during pending I/O does not. Direct `inner_mut()` operations are
+unguarded: mark the native connection dead and discard it after dropping native
+I/O. Native cooperative cancellation must finish its async cleanup instead.
 
 ```rust,no_run
 async fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {

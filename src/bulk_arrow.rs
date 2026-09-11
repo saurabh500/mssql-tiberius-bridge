@@ -337,6 +337,9 @@ impl<'a> BulkInsert<'a> {
     /// or [`Self::map_column`]).
     ///
     /// See [the module example](self) for end-to-end usage.
+    ///
+    /// Uses [`Self::send`]'s cancellation contract: dropping an in-flight send
+    /// marks the connection dead.
     pub async fn send_arrow(self, batch: RecordBatch) -> Result<BulkCopyResult> {
         self.send_arrow_batches(std::iter::once(batch)).await
     }
@@ -345,6 +348,8 @@ impl<'a> BulkInsert<'a> {
     ///
     /// Schemas must be consistent across batches; mismatches surface as a
     /// server-side bulk-load error.
+    ///
+    /// Uses [`Self::send`]'s cancellation contract, including dead-state checks.
     pub async fn send_arrow_batches<I>(self, batches: I) -> Result<BulkCopyResult>
     where
         I: IntoIterator<Item = RecordBatch>,

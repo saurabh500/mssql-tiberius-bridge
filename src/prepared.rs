@@ -55,6 +55,12 @@
 //! (Rust [`Drop`] cannot run async code). The type is marked
 //! `#[must_use]` to nudge callers toward explicit cleanup.
 //!
+//! Statements belong to the client session that prepared them.
+//! [`Client::reset_session`] and the default pool recycling policy invalidate
+//! them. Querying, executing, or closing an invalidated statement returns
+//! [`Error::InvalidPreparedStatement`] without sending its stale handle.
+//! Prepare and close statements within one pool checkout.
+//!
 //! # Type inference for parameters
 //!
 //! [`Client::prepare`] takes the *same* `&[&dyn ToSql]` slice as
@@ -74,6 +80,7 @@ use mssql_tds::datatypes::sql_string::SqlString;
 use mssql_tds::datatypes::sqldatatypes::{TdsDataType, VectorBaseType};
 use mssql_tds::datatypes::sqltypes::SqlType;
 use mssql_tds::message::parameters::rpc_parameters::{RpcParameter, StatusFlags};
+use std::sync::Arc;
 
 use crate::error::{Error, Result};
 use crate::query::{ExecuteResult, QueryResult, ToSql};
@@ -89,11 +96,24 @@ use crate::Client;
 pub struct PreparedStatement {
     handle: i32,
     sql: String,
+    session: Arc<()>,
 }
 
 impl PreparedStatement {
-    pub(crate) fn new(handle: i32, sql: String) -> Self {
-        Self { handle, sql }
+    pub(crate) fn new(handle: i32, sql: String, session: Arc<()>) -> Self {
+        Self {
+            handle,
+            sql,
+            session,
+        }
+    }
+
+    pub(crate) fn validate_session(&self, session: &Arc<()>) -> Result<()> {
+        if Arc::ptr_eq(&self.session, session) {
+            Ok(())
+        } else {
+            Err(Error::InvalidPreparedStatement)
+        }
     }
 
     pub(crate) async fn prepare(
@@ -101,6 +121,7 @@ impl PreparedStatement {
         sql: String,
         param_types: &[&dyn ToSql],
         unicode: bool,
+        session: Arc<()>,
     ) -> Result<Self> {
         let declaration = Self::parameter_declaration(param_types, unicode)?;
         let parameters = vec![
@@ -126,7 +147,7 @@ impl PreparedStatement {
         let values = client.get_return_values();
         match values.as_slice() {
             [value] => match value.value {
-                ColumnValues::Int(handle) => Ok(Self::new(handle, sql)),
+                ColumnValues::Int(handle) => Ok(Self::new(handle, sql, session)),
                 _ => Err(Error::Tds(mssql_tds::error::Error::ProtocolError(
                     "sp_prepare did not return an integer handle".into(),
                 ))),
@@ -314,7 +335,7 @@ mod tests {
 
     #[test]
     fn prepared_statement_handle_and_sql_accessors() {
-        let stmt = PreparedStatement::new(42, "SELECT @P1".to_string());
+        let stmt = PreparedStatement::new(42, "SELECT @P1".to_string(), Arc::new(()));
         assert_eq!(stmt.handle(), 42);
         assert_eq!(stmt.sql(), "SELECT @P1");
     }
@@ -327,8 +348,25 @@ mod tests {
 
     #[test]
     fn prepared_statement_debug_includes_handle() {
-        let stmt = PreparedStatement::new(7, "SELECT 1".to_string());
+        let stmt = PreparedStatement::new(7, "SELECT 1".to_string(), Arc::new(()));
         let s = format!("{stmt:?}");
         assert!(s.contains("7"), "debug should include handle: {s}");
+    }
+
+    #[test]
+    fn prepared_statement_is_bound_to_one_session() {
+        let mut session = Arc::new(());
+        let stmt = PreparedStatement::new(7, "SELECT 1".into(), Arc::clone(&session));
+        assert!(stmt.validate_session(&session).is_ok());
+        assert!(matches!(
+            stmt.validate_session(&Arc::new(())),
+            Err(Error::InvalidPreparedStatement)
+        ));
+
+        session = Arc::new(());
+        assert!(matches!(
+            stmt.validate_session(&session),
+            Err(Error::InvalidPreparedStatement)
+        ));
     }
 }

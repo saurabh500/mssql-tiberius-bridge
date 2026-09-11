@@ -18,7 +18,7 @@ _bench = []
 
 [dependencies]
 mssql-tds = { version = "0.1.0", default-features = false }
-deadpool = "0.12"
+deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 chrono = "0.4"
 rust_decimal = "1"
 uuid = "1"

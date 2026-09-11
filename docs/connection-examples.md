@@ -461,7 +461,27 @@ async fn example() -> mssql_tiberius_bridge::Result<()> {
 
 ## Connection pooling
 
-`Client` owns one connection and is not cloneable; use `TdsManager` with `deadpool` for shared concurrency. The manager clones the `Config`, creates connections with `Client::connect(&config)`, and recycles them with `Client::ping()`.
+`Client` owns one connection and is not cloneable; use `TdsManager` with
+`deadpool` for shared concurrency. Connections are created lazily with
+`Client::connect(&config)`. Dropping a checked-out connection returns it to the
+pool; native reset and validation happen before its next checkout.
+
+The default `RecyclingMethod::Reset` rejects connections known to be dead and
+calls `Client::reset_session()`. This drains any outstanding query, sets
+`mssql-tds`'s native `RESETCONNECTION` flag, and executes
+`SET TRANSACTION ISOLATION LEVEL READ COMMITTED`. That batch carries the reset
+and validates the server's acknowledgement in one round trip; no separate ping
+is needed. SQL Server reset does not restore isolation, so it is set explicitly.
+
+The reset rolls back open transactions, clears temporary tables and session
+settings, and restores the login database. Prepared statements from before a
+reset are rejected with `Error::InvalidPreparedStatement`; prepare and close
+them within a single checkout. A failed or cancelled reset marks the connection
+dead, and the pool discards failed recycle attempts.
+
+**Transaction ownership:** commit or roll back before dropping the connection.
+Checkout-time reset prevents state reaching another borrower, but does not
+release an abandoned transaction's locks while the connection sits idle.
 
 ```rust,no_run
 async fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -477,19 +497,55 @@ async fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-If you need a custom `deadpool` builder, construct `TdsManager::new(cfg)` yourself and pass it to `deadpool::managed::Pool::builder`.
+For a custom `deadpool` builder, construct `TdsManager::new(cfg)` and pass it to
+`Pool::builder`. Specify `Runtime::Tokio1` when setting wait, create, or recycle
+timeouts. The convenience `create_pool` method already selects this runtime,
+so its pool also supports `timeout_get`. No pool-level deadlines are set unless
+requested.
 
 ```rust,no_run
 fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::time::Duration;
+    use deadpool::{managed::Timeouts, Runtime};
     use mssql_tiberius_bridge::{AuthMethod, Config, Pool, TdsManager};
     let mut cfg = Config::new();
     cfg.host("sql.example.com")
         .authentication(AuthMethod::sql_server("app", "secret"));
     let manager = TdsManager::new(cfg);
+    let _pool = Pool::builder(manager)
+        .max_size(8)
+        .runtime(Runtime::Tokio1)
+        .timeouts(Timeouts {
+            wait: Some(Duration::from_secs(5)),
+            create: Some(Duration::from_secs(30)),
+            recycle: Some(Duration::from_secs(5)),
+        })
+        .build()?;
+    Ok(())
+}
+```
+
+To preserve the old ping-only behavior explicitly:
+
+```rust,no_run
+fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use mssql_tiberius_bridge::{Config, Pool, RecyclingMethod, TdsManager};
+    let manager = TdsManager::new(Config::new())
+        .with_recycling_method(RecyclingMethod::Ping);
     let _pool = Pool::builder(manager).max_size(8).build()?;
     Ok(())
 }
 ```
+
+`Ping` validates with `SELECT 1` but deliberately retains session state,
+including open transactions. Use it only when that behavior is intentional.
+`Client::ping()` remains a liveness-only operation. The cheap
+`Client::is_connection_dead()` accessor does no I/O: `false` means "not observed
+dead," not proof that an idle connection is responsive.
+
+Outside a pool, call `client.reset_session().await?` directly for the same
+reset-and-validate behavior. Use this bridge method rather than arming a reset
+through `inner_mut()` so bridge-owned prepared handles are also invalidated.
 
 ## Tiberius API mapping
 

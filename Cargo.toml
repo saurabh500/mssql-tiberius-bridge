@@ -35,6 +35,7 @@ futures-core = "0.3"
 async-stream = "0.3"
 
 [dev-dependencies]
+mssql-tds = { version = "0.1.0", default-features = false, features = ["test-util"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 criterion = { version = "0.5", features = ["async_tokio"] }

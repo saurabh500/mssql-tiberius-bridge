@@ -30,7 +30,7 @@ These are bugs in tiberius's TDS implementation. The bridge uses `mssql-tds`, an
 | 410 | BCP failure when DATE column precedes TIME column | ✅ | via [#53](../../issues/53) (PR [#84](../../pull/84)) | tiberius-only BCP encoder bug. Bridge has no `bulk_insert` yet anyway. |
 | 368 | Negative Numeric Floats sign issue (`-17.-80`) | ✅ | regression test in PR [#51](../../pull/51) | **Repro**: did we already fix this? Numeric Display in `DecimalParts`. Worth a regression test. |
 | 316 | Panic reading datetime field with date < 1900 (overflow in `time` feature) | ✅ | regression test in PR [#51](../../pull/51) | **Repro**: try with `chrono`. mssql-tds may have same overflow. |
-| 325 | UTF-16 error on broken characters | 🟡 | tracked in [#90](../../issues/90) | **Repro**: check `to_utf8_string` on `SqlString` for replacement-char fallback. |
+| 325 | UTF-16 error on broken characters | ✅ | regression test for [#90](../../issues/90) | `Row::get` returns U+FFFD for lone surrogates and odd-length UTF-16LE input, for both owned and borrowed strings; valid surrogate pairs are preserved. |
 | 322 | Bulk insert large varchar/nvarchar fails (BCP colid 8) | ✅ | via [#53](../../issues/53) (PR [#84](../../pull/84)) | tiberius BCP-only; bridge has no bulk_insert. |
 | 358 | `bulk_insert` does not support Money MS SQL data type | ✅ | via [#53](../../issues/53) (PR [#84](../../pull/84)) | tiberius-only. Money/SmallMoney *are* readable in bridge. |
 | 370 | (n/a placeholder) | — | — | — |
@@ -90,7 +90,7 @@ These are bugs in tiberius's TDS implementation. The bridge uses `mssql-tds`, an
 | 401 | Implement `IntoSql` for `rust_decimal` | 🟡 | tracked in [#87](../../issues/87) — `ToSql for rust_decimal::Decimal` missing | **Check**: bridge's `ToSql for Decimal`. Probably already has. |
 | 277 | `IntoSql` impl missing for `time` crate | ✅ | [#67](../../issues/67) — `time` crate `ToSql` | Bridge added chrono ToSql in PR #23; `time` crate is a separate gap. |
 | 244 | `impl IntoSql<'a>` in `.bind()` method | ⚪ | — | Bridge has no `Query::bind` builder; N/A. |
-| 257 | Can't get `geography` type | 🟡 | tracked in [#69](../../issues/69) | **Repro**: bridge `ColumnValues` — does it have a Geography variant? Likely no. |
+| 257 | Can't get `geography` type | ✅ | [#69](../../issues/69) | Raw native bytes via `Vec<u8>` / `&[u8]`, with `ColumnType::Geography` / `Geometry` metadata. `ColumnValues::Bytes` is preserved. |
 | 354 | jiff crate support | ✅ | [#68](../../issues/68) — `jiff` support | Feature. Mirror chrono/time impls. |
 | 277 | (dup) | ✅ | [#67](../../issues/67) — `time` crate `ToSql` | — |
 | 401 | (dup) | 🟡 | tracked in [#87](../../issues/87) — `ToSql for rust_decimal::Decimal` missing | — |
@@ -316,6 +316,7 @@ The following bridge issues were filed from this triage to track the work.
 | #68 | —  | #354 | `jiff` crate support |
 | #74 | —  | (infra) | Strict-encryption CI test infra |
 | #85 | #86 | (new) | Apache Arrow `RecordBatch` input to `bulk_insert` (`arrow` feature) |
+| #90 | — | #325 | Malformed UTF-16 NVARCHAR replacement-character regression test |
 
 ### 🟡 Open tracking issues (work pending)
 
@@ -332,7 +333,6 @@ The following bridge issues were filed from this triage to track the work.
 | #87 | #401 | `ToSql for rust_decimal::Decimal` (confirmed missing impl) |
 | #88 | #300, #79 | Cancel-safety audit under `tokio::time::timeout` |
 | #89 | #320, #274 | Verify `EncryptionLevel::Off` connect doesn't stall on TLS-capable servers |
-| #90 | #325 | Regression test: malformed UTF-16 NVARCHAR returns U+FFFD, not error |
 
 ### ⚪ Not filed / closed as out-of-scope
 

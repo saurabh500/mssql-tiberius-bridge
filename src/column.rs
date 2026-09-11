@@ -39,6 +39,12 @@ pub enum ColumnType {
     Vector,
     BigVarBin,
     Ssvariant,
+    /// SQL Server `geography`, returned as raw serialized bytes.
+    Geography,
+    /// SQL Server `geometry`, returned as raw serialized bytes.
+    Geometry,
+    /// A CLR user-defined type without a recognized spatial identity.
+    Udt,
 }
 
 impl From<TdsDataType> for ColumnType {
@@ -77,15 +83,35 @@ impl From<TdsDataType> for ColumnType {
             TdsDataType::Json => ColumnType::Json,
             TdsDataType::Vector => ColumnType::Vector,
             TdsDataType::SsVariant => ColumnType::Ssvariant,
+            TdsDataType::Udt => ColumnType::Udt,
             _ => ColumnType::Null,
         }
     }
 }
 
 impl ColumnType {
+    fn from_metadata(meta: &mssql_tds::query::metadata::ColumnMetadata) -> Self {
+        if meta.data_type == TdsDataType::Udt {
+            if let Some(info) = meta.type_info.udt_info() {
+                // A custom UDT can have the same name as a system spatial type.
+                if info.schema_name().eq_ignore_ascii_case("sys") {
+                    if info.type_name().eq_ignore_ascii_case("geography") {
+                        return Self::Geography;
+                    }
+                    if info.type_name().eq_ignore_ascii_case("geometry") {
+                        return Self::Geometry;
+                    }
+                }
+            }
+        }
+        Self::from_tds_with_length(meta.data_type, meta.type_info.length)
+    }
+
     /// Resolve the column type using both the TDS data type and the wire byte
     /// length. This is necessary for variable-width nullable types like `IntN`
     /// and `FltN` where the data type alone doesn't indicate the width.
+    /// CLR UDTs resolve to [`Self::Udt`]; [`Column::from_tds`] uses the
+    /// additional UDT identity metadata to recognize spatial types.
     pub fn from_tds_with_length(dt: TdsDataType, byte_length: usize) -> Self {
         match dt {
             TdsDataType::IntN => match byte_length {
@@ -274,7 +300,7 @@ impl Column {
     pub fn from_tds(meta: &mssql_tds::query::metadata::ColumnMetadata) -> Self {
         Column {
             name: meta.column_name.clone(),
-            column_type: ColumnType::from_tds_with_length(meta.data_type, meta.type_info.length),
+            column_type: ColumnType::from_metadata(meta),
             nullable: meta.is_nullable(),
             is_identity: meta.is_identity(),
             is_computed: meta.is_computed(),
@@ -314,6 +340,51 @@ impl Column {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mssql_tds::test_client_support::{int_columns, udt_column, udt_column_with_metadata};
+
+    #[test]
+    fn spatial_column_types_use_udt_identity() {
+        for (schema, name, expected) in [
+            ("sys", "geography", ColumnType::Geography),
+            ("sys", "geometry", ColumnType::Geometry),
+            ("SYS", "GEOGRAPHY", ColumnType::Geography),
+            ("SYS", "GEOMETRY", ColumnType::Geometry),
+            ("dbo", "geography", ColumnType::Udt),
+            ("dbo", "geometry", ColumnType::Udt),
+            ("sys", "hierarchyid", ColumnType::Udt),
+            ("sys", "geography_extra", ColumnType::Udt),
+            ("", "geometry", ColumnType::Udt),
+        ] {
+            let mut meta = udt_column_with_metadata(u16::MAX, "", schema, name, "assembly");
+            // Classification must not depend on a database's user-type ordinals.
+            meta.user_type = 12345;
+            meta.column_name = "value".into();
+            let column = Column::from_tds(&meta);
+            assert_eq!(column.column_type(), expected, "{schema}.{name}");
+            assert_eq!(column.name(), "value");
+            assert_eq!(column.user_type(), 12345);
+            assert!(column.nullable());
+            assert!(column.is_plp());
+            assert_eq!(column.byte_length(), usize::from(u16::MAX));
+            assert_eq!(column.char_length(), None);
+        }
+    }
+
+    #[test]
+    fn spatial_column_type_requires_udt_metadata() {
+        assert_eq!(ColumnType::from(TdsDataType::Udt), ColumnType::Udt);
+        assert_eq!(
+            ColumnType::from_tds_with_length(TdsDataType::Udt, 65535),
+            ColumnType::Udt
+        );
+        assert_eq!(
+            Column::from_tds(&udt_column(u16::MAX)).column_type(),
+            ColumnType::Udt
+        );
+        let mut meta = int_columns(1).remove(0);
+        meta.column_name = "geography".into();
+        assert_eq!(Column::from_tds(&meta).column_type(), ColumnType::Int4);
+    }
 
     #[test]
     fn test_column_metadata_accessors() {

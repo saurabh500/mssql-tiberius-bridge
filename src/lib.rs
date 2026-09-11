@@ -109,6 +109,8 @@ pub use row::{ColumnIndex, FromSql, Row};
 pub use mssql_tds::connection::tds_client::TdsClient;
 /// Raw column values from mssql-tds, exposed for low-level access
 /// via [`Row::raw_value()`].
+/// Spatial values remain `ColumnValues::Bytes`; their identity is exposed
+/// through [`ColumnType::Geography`] and [`ColumnType::Geometry`].
 pub use mssql_tds::datatypes::column_values::ColumnValues;
 /// Decimal/Numeric value representation from mssql-tds.
 /// Returned inside `ColumnValues::Decimal` and `ColumnValues::Numeric`.

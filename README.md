@@ -82,6 +82,31 @@ See [connection pooling](docs/connection-examples.md#connection-pooling) for
 examples and timeout configuration. `deadpool` still owns capacity and checkout;
 `mssql-tds` provides the native reset and health primitives.
 
+## Spatial values
+
+`geography` and `geometry` columns can be read directly in buffered or streamed
+queries as `Vec<u8>` (owned) or `&[u8]` (borrowed). SQL `NULL` returns `None`.
+Their column types are `ColumnType::Geography` and `ColumnType::Geometry`;
+other CLR user-defined types report `ColumnType::Udt`.
+
+```rust
+use mssql_tiberius_bridge::ColumnType;
+
+let rows = client
+    .simple_query("SELECT geography::Point(47.6, -122.3, 4326) AS location")
+    .await?
+    .into_first_result();
+assert_eq!(rows[0].columns()[0].column_type(), ColumnType::Geography);
+let bytes: &[u8] = rows[0].get("location").unwrap();
+```
+
+These are SQL Server's native serialized bytes (equivalent to `.Serialize()`),
+including the SRID, **not OGC Well-Known Binary (WKB)**. Use `.STAsBinary()` in
+SQL when you need WKB instead. `Row::raw_value()` continues to return
+`ColumnValues::Bytes`; no new value enum or spatial parser is required.
+Point/LineString/Polygon parsing, `geo` integration, and native spatial parameter
+binding are not provided. Existing byte parameters remain `varbinary`.
+
 ## Runtime requirements
 
 The bridge itself is pure Rust. **No native libraries are linked at compile time**, so binaries build cleanly on minimal targets (alpine, distroless, scratch, musl). However, some authentication modes load system libraries at runtime via `dlopen` and require those libraries to be present on the host where the binary runs.

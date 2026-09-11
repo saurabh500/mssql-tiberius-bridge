@@ -677,10 +677,177 @@ mod tests {
 
     #[test]
     fn to_sql_primitives() {
-        let _ = 42i32.to_sql();
-        let _ = "hello".to_sql();
-        let _ = true.to_sql();
-        let _ = 2.72_f64.to_sql();
+        assert!(matches!(42i32.to_sql(), SqlType::Int(Some(42))));
+        assert!(matches!(255u8.to_sql(), SqlType::TinyInt(Some(255))));
+        assert!(matches!((-12i16).to_sql(), SqlType::SmallInt(Some(-12))));
+        assert!(matches!(i64::MAX.to_sql(), SqlType::BigInt(Some(i64::MAX))));
+        assert!(matches!(true.to_sql(), SqlType::Bit(Some(true))));
+        assert!(matches!(1.5f32.to_sql(), SqlType::Real(Some(1.5))));
+        assert!(matches!(2.5f64.to_sql(), SqlType::Float(Some(2.5))));
+        assert!(matches!(Some(7i32).to_sql(), SqlType::Int(Some(7))));
+        assert!(matches!(
+            None::<i32>.to_sql(),
+            SqlType::NVarchar(None, 4000)
+        ));
+        for value in ["hello".to_sql(), "hello".to_owned().to_sql()] {
+            let SqlType::NVarchar(Some(value), 4000) = value else {
+                panic!("expected nvarchar");
+            };
+            assert_eq!(value.to_utf8_string(), "hello");
+        }
+        let bytes = vec![0, 255, 42];
+        for value in [bytes.to_sql(), bytes.as_slice().to_sql()] {
+            assert!(matches!(value, SqlType::VarBinaryMax(Some(v)) if v == bytes));
+        }
+    }
+
+    #[test]
+    fn parameter_debug_preserves_types_and_option_values() {
+        let id = uuid::Uuid::nil();
+        let owned = "owned".to_owned();
+        let params: &[&dyn ToSql] = &[
+            &true,
+            &255u8,
+            &-12i16,
+            &42i64,
+            &1.5f32,
+            &2.5f64,
+            &owned,
+            &Some(7i32),
+            &id,
+        ];
+        assert_eq!(
+            format!("{:?}", DebugParams(params)),
+            r#"[true, 255, -12, 42, 1.5, 2.5, "owned", Some(7), <sql param>]"#
+        );
+        assert!(matches!(id.to_sql(), SqlType::Uuid(Some(value)) if value == id));
+        assert!(matches!(
+            encode_string_parameters(SqlType::NVarcharMax(None), false),
+            SqlType::VarcharMax(None)
+        ));
+        assert!(matches!(
+            encode_string_parameters(42i32.to_sql(), false),
+            SqlType::Int(Some(42))
+        ));
+    }
+
+    #[tokio::test]
+    async fn buffered_stream_skips_empty_sets_and_tracks_remaining_rows() {
+        use futures_core::Stream;
+        use futures_util::StreamExt;
+        use mssql_tds::datatypes::column_values::ColumnValues;
+
+        let row = |n| Row::from_tds(&[], vec![ColumnValues::Int(n)]);
+        let mut stream = QueryResult {
+            result_sets: vec![vec![], vec![row(1), row(2)], vec![], vec![row(3)], vec![]],
+        }
+        .into_row_stream();
+        for expected in 1..=3 {
+            let remaining = 4 - expected as usize;
+            assert_eq!(stream.size_hint(), (remaining, Some(remaining)));
+            assert_eq!(
+                stream.next().await.unwrap().unwrap().get::<i32, _>(0),
+                Some(expected)
+            );
+        }
+        assert_eq!(stream.size_hint(), (0, Some(0)));
+        assert!(stream.next().await.is_none());
+        assert!(stream.next().await.is_none());
+        assert!(QueryResult::empty()
+            .into_row_stream()
+            .next()
+            .await
+            .is_none());
+        let result = ExecuteResult {
+            counts: vec![0, 2, 3],
+        };
+        assert_eq!(result.total(), 5);
+        assert_eq!(result.into_iter().collect::<Vec<_>>(), [0, 2, 3]);
+    }
+
+    #[cfg(feature = "time")]
+    #[test]
+    fn time_temporals_roundtrip_with_fractional_seconds_and_offset() {
+        use crate::FromSql;
+        use mssql_tds::datatypes::column_values::ColumnValues;
+        let time = time::Time::from_hms_nano(23, 45, 56, 123_456_700).unwrap();
+        let date = time::Date::from_calendar_date(2024, time::Month::February, 29).unwrap();
+        let dt = time::PrimitiveDateTime::new(date, time);
+        let SqlType::Time(Some(value)) = time.to_sql() else {
+            panic!("expected time")
+        };
+        assert_eq!(time::Time::from_sql(&ColumnValues::Time(value)), Some(time));
+        let SqlType::DateTime2(Some(value)) = dt.to_sql() else {
+            panic!("expected datetime2")
+        };
+        assert_eq!(
+            time::PrimitiveDateTime::from_sql(&ColumnValues::DateTime2(value)),
+            Some(dt)
+        );
+        for offset in [-330, 0, 345] {
+            let dt = dt.assume_offset(time::UtcOffset::from_whole_seconds(offset * 60).unwrap());
+            let SqlType::DateTimeOffset(Some(value)) = dt.to_sql() else {
+                panic!("expected datetimeoffset")
+            };
+            assert_eq!(value.offset, offset as i16);
+            let actual =
+                time::OffsetDateTime::from_sql(&ColumnValues::DateTimeOffset(value)).unwrap();
+            assert_eq!(actual, dt);
+            assert_eq!(actual.offset(), dt.offset());
+            assert_eq!(actual.date(), dt.date());
+            assert_eq!(actual.time(), dt.time());
+        }
+        assert!(time::Time::from_sql(&ColumnValues::Null).is_none());
+        assert!(time::PrimitiveDateTime::from_sql(&ColumnValues::Null).is_none());
+        assert!(time::OffsetDateTime::from_sql(&ColumnValues::Null).is_none());
+    }
+
+    #[cfg(feature = "jiff")]
+    #[test]
+    fn jiff_temporals_roundtrip_with_fractional_seconds_and_offset() {
+        use crate::FromSql;
+        use mssql_tds::datatypes::column_values::ColumnValues;
+        let dt = jiff::civil::DateTime::new(2024, 2, 29, 23, 45, 56, 123_456_700).unwrap();
+        let SqlType::Time(Some(value)) = dt.time().to_sql() else {
+            panic!("expected time")
+        };
+        assert_eq!(
+            jiff::civil::Time::from_sql(&ColumnValues::Time(value)),
+            Some(dt.time())
+        );
+        let SqlType::DateTime2(Some(value)) = dt.to_sql() else {
+            panic!("expected datetime2")
+        };
+        assert_eq!(
+            jiff::civil::DateTime::from_sql(&ColumnValues::DateTime2(value)),
+            Some(dt)
+        );
+        for offset in [-330, 0, 345] {
+            let zone = jiff::tz::Offset::from_seconds(offset * 60)
+                .unwrap()
+                .to_time_zone();
+            let zoned = dt.to_zoned(zone).unwrap();
+            let SqlType::DateTimeOffset(Some(value)) = zoned.to_sql() else {
+                panic!("expected datetimeoffset")
+            };
+            assert_eq!(value.offset, offset as i16);
+            let actual = jiff::Zoned::from_sql(&ColumnValues::DateTimeOffset(value)).unwrap();
+            assert_eq!(actual.timestamp(), zoned.timestamp());
+            assert_eq!(actual.offset(), zoned.offset());
+            assert_eq!(actual.datetime(), dt);
+            let SqlType::DateTimeOffset(Some(value)) = zoned.timestamp().to_sql() else {
+                panic!("expected datetimeoffset")
+            };
+            assert_eq!(value.offset, 0);
+            assert_eq!(
+                jiff::Timestamp::from_sql(&ColumnValues::DateTimeOffset(value)),
+                Some(zoned.timestamp())
+            );
+        }
+        assert!(jiff::civil::Time::from_sql(&ColumnValues::Null).is_none());
+        assert!(jiff::civil::DateTime::from_sql(&ColumnValues::Null).is_none());
+        assert!(jiff::Timestamp::from_sql(&ColumnValues::Null).is_none());
+        assert!(jiff::Zoned::from_sql(&ColumnValues::Null).is_none());
     }
 
     #[test]

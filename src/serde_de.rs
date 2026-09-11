@@ -637,6 +637,38 @@ mod tests {
     }
 
     #[test]
+    fn deserialize_borrowed_spatial_bytes() {
+        #[derive(Deserialize)]
+        struct Spatial<'a> {
+            geography: &'a [u8],
+            geometry: &'a [u8],
+            #[serde(borrow)]
+            missing: Option<&'a [u8]>,
+        }
+        let row = make_row(vec![
+            (
+                "geography",
+                ColumnType::Geography,
+                ColumnValues::Bytes(vec![1, 2]),
+            ),
+            (
+                "geometry",
+                ColumnType::Geometry,
+                ColumnValues::Bytes(vec![3, 4]),
+            ),
+            ("missing", ColumnType::Geography, ColumnValues::Null),
+        ]);
+        let value: Spatial<'_> = row.deserialize_borrowed().unwrap();
+        assert_eq!(value.geography, &[1, 2]);
+        assert_eq!(value.geometry, &[3, 4]);
+        assert_eq!(value.missing, None);
+        assert_eq!(
+            value.geography.as_ptr(),
+            row.get::<&[u8], _>("geography").unwrap().as_ptr()
+        );
+    }
+
+    #[test]
     fn deserialize_widens_integers() {
         #[derive(Deserialize)]
         struct R {

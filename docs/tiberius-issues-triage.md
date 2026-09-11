@@ -90,7 +90,7 @@ These are bugs in tiberius's TDS implementation. The bridge uses `mssql-tds`, an
 | 401 | Implement `IntoSql` for `rust_decimal` | 🟡 | tracked in [#87](../../issues/87) — `ToSql for rust_decimal::Decimal` missing | **Check**: bridge's `ToSql for Decimal`. Probably already has. |
 | 277 | `IntoSql` impl missing for `time` crate | ✅ | [#67](../../issues/67) — `time` crate `ToSql` | Bridge added chrono ToSql in PR #23; `time` crate is a separate gap. |
 | 244 | `impl IntoSql<'a>` in `.bind()` method | ⚪ | — | Bridge has no `Query::bind` builder; N/A. |
-| 257 | Can't get `geography` type | 🟡 | tracked in [#69](../../issues/69) | **Repro**: bridge `ColumnValues` — does it have a Geography variant? Likely no. |
+| 257 | Can't get `geography` type | ✅ | [#69](../../issues/69) | Raw native bytes via `Vec<u8>` / `&[u8]`, with `ColumnType::Geography` / `Geometry` metadata. `ColumnValues::Bytes` is preserved. |
 | 354 | jiff crate support | ✅ | [#68](../../issues/68) — `jiff` support | Feature. Mirror chrono/time impls. |
 | 277 | (dup) | ✅ | [#67](../../issues/67) — `time` crate `ToSql` | — |
 | 401 | (dup) | 🟡 | tracked in [#87](../../issues/87) — `ToSql for rust_decimal::Decimal` missing | — |

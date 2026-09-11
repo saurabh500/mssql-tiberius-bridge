@@ -152,6 +152,10 @@ impl Row {
     }
 
     /// Raw access to the underlying ColumnValues at a given index.
+    ///
+    /// Spatial (`geography`/`geometry`) values use [`ColumnValues::Bytes`]
+    /// containing SQL Server's native serialization, not OGC WKB.
+    /// Use [`Column::column_type`] to distinguish them from ordinary binary data.
     pub fn raw_value(&self, idx: usize) -> Option<&ColumnValues> {
         self.values.get(idx)
     }
@@ -420,6 +424,8 @@ impl<'a> FromSql<'a> for uuid::Uuid {
     }
 }
 
+/// Reads binary and spatial values as owned bytes. Spatial bytes retain SQL
+/// Server's native serialization, including the SRID.
 impl<'a> FromSql<'a> for Vec<u8> {
     fn from_sql(val: &'a ColumnValues) -> Option<Self> {
         match val {
@@ -429,6 +435,7 @@ impl<'a> FromSql<'a> for Vec<u8> {
     }
 }
 
+/// Borrows binary and spatial bytes without copying.
 impl<'a> FromSql<'a> for &'a [u8] {
     fn from_sql(val: &'a ColumnValues) -> Option<Self> {
         match val {
@@ -934,6 +941,57 @@ mod tests {
         let row = make_row(&["b"], vec![ColumnValues::Bytes(vec![1, 2, 3])]);
         assert_eq!(row.get::<Vec<u8>, _>("b"), Some(vec![1, 2, 3]));
         assert_eq!(row.get::<&[u8], _>("b"), Some(&[1, 2, 3][..]));
+    }
+
+    #[test]
+    fn spatial_bytes_preserve_row_construction_and_writer_behavior() {
+        use crate::ColumnType;
+        use mssql_tds::test_client_support::udt_column_with_metadata;
+
+        for (name, column_type, srid) in [
+            ("geography", ColumnType::Geography, 4326u32),
+            ("geometry", ColumnType::Geometry, 0u32),
+        ] {
+            let metadata = [udt_column_with_metadata(u16::MAX, "", "sys", name, "")];
+            let mut bytes = srid.to_le_bytes().to_vec();
+            bytes.extend_from_slice(&[1, 12]);
+            bytes.extend_from_slice(&1.0f64.to_le_bytes());
+            bytes.extend_from_slice(&2.0f64.to_le_bytes());
+            let expected = Row::from_tds(&metadata, vec![ColumnValues::Bytes(bytes.clone())]);
+            let mut writer = BridgeRowWriter::new(RowSchema::from_metadata(&metadata));
+
+            writer.write_null(0);
+            let null = writer.take_row();
+            assert_eq!(null.columns()[0].column_type(), column_type);
+            assert_eq!(null.get::<Vec<u8>, _>(0usize), None);
+            assert_eq!(null.get::<Option<&[u8]>, _>(0usize), Some(None));
+            assert_eq!(null.raw_value(0), Some(&ColumnValues::Null));
+
+            writer.write_bytes(0, Cow::Borrowed(&bytes));
+            let row = writer.take_row();
+            assert_eq!(row, expected);
+            assert_eq!(row.columns()[0].column_type(), column_type);
+            assert_eq!(row.get::<Vec<u8>, _>("udt"), Some(bytes.clone()));
+            assert_eq!(
+                row.try_get::<&[u8], _>(0usize).unwrap(),
+                Some(bytes.as_slice())
+            );
+            let Some(ColumnValues::Bytes(raw)) = row.raw_value(0) else {
+                panic!("spatial values must retain the upstream Bytes representation");
+            };
+            assert_eq!(row.get::<&[u8], _>("udt").unwrap().as_ptr(), raw.as_ptr());
+            assert_eq!(row.get::<String, _>("udt"), None);
+            assert_eq!(row.get::<&str, _>("udt"), None);
+
+            writer.write_bytes(0, Cow::Owned(Vec::new()));
+            let empty = writer.take_row();
+            assert_eq!(empty.get::<Vec<u8>, _>("udt"), Some(Vec::new()));
+            assert_ne!(empty, null);
+            assert_eq!(
+                row, expected,
+                "reusing the writer must not alter earlier rows"
+            );
+        }
     }
 
     #[test]

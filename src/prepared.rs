@@ -55,6 +55,11 @@
 //! (Rust [`Drop`] cannot run async code). The type is marked
 //! `#[must_use]` to nudge callers toward explicit cleanup.
 //!
+//! Preparation, execution, and explicit close follow [`Client`]'s cancellation
+//! safety contract. Dropping an in-flight bridge operation marks the connection
+//! dead, including when preparation is still reading its output handle. Discard
+//! the client and prepare new handles on the replacement connection.
+//!
 //! # Type inference for parameters
 //!
 //! [`Client::prepare`] takes the *same* `&[&dyn ToSql]` slice as

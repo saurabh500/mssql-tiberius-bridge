@@ -463,6 +463,18 @@ async fn example() -> mssql_tiberius_bridge::Result<()> {
 
 `Client` owns one connection and is not cloneable; use `TdsManager` with `deadpool` for shared concurrency. The manager clones the `Config`, creates connections with `Client::connect(&config)`, and recycles them with `Client::ping()`.
 
+If a bridge operation is dropped while I/O is pending (for example by
+`tokio::time::timeout`), the client is marked dead. Recycling checks that native
+state before ping and rejects the client so deadpool replaces it. Outside a pool,
+drop the client and reconnect; later bridge calls return a typed `ConnectionClosed`
+error without I/O. `Client::is_connection_dead()` is a cached, no-I/O check.
+
+This does not abort or roll back SQL reliably, so do not automatically retry
+writes. Dropping a wire stream between complete rows preserves reuse; abandoning
+a stream during pending I/O does not. Direct `inner_mut()` operations are
+unguarded: mark the native connection dead and discard it after dropping native
+I/O. Native cooperative cancellation must finish its async cleanup instead.
+
 ```rust,no_run
 async fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
     use mssql_tiberius_bridge::{AuthMethod, Config, TdsManager};

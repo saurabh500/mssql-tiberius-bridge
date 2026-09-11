@@ -65,6 +65,27 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
 | `row.get::<&str, _>("col")` | `row.get::<&str, _>("col")` |
 | `tiberius::AuthMethod::sql_server` | `AuthMethod::sql_server` |
 
+## Cancellation and timeouts
+
+Dropping an in-flight bridge operation with `tokio::time::timeout`, `select!`,
+or task cancellation marks the connection dead. Later bridge operations fail
+immediately with `Error::Tds(mssql_tds::error::Error::ConnectionClosed(...))`.
+Check `client.is_connection_dead()` without I/O, then drop the client and
+reconnect. The pool rejects dead clients before ping and replaces them on checkout.
+
+Wire streams remain reusable when dropped between fully yielded rows; dropping
+a stream while its I/O is pending marks the connection dead. Cancelling only
+`stream.next()` retains the internal future if you keep the stream and resume it.
+Unpolled futures, unused bulk builders, and buffered result streams do not poison
+the connection. Completed SQL errors retain the native driver's liveness outcome.
+
+Cancellation does not guarantee that SQL stopped executing or rolled back, so
+do not automatically retry writes. Native cooperative cancellation requires
+polling through cleanup; an external timeout that drops the operation is different.
+Direct calls through `inner_mut()` bypass the bridge guards: after abandoning
+native I/O, mark the native client dead and discard it instead of returning it
+to a pool as healthy. See the `Client` rustdoc for the full contract.
+
 ## Runtime requirements
 
 The bridge itself is pure Rust. **No native libraries are linked at compile time**, so binaries build cleanly on minimal targets (alpine, distroless, scratch, musl). However, some authentication modes load system libraries at runtime via `dlopen` and require those libraries to be present on the host where the binary runs.

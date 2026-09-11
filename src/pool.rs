@@ -1,5 +1,10 @@
 //! Connection pooling via [`deadpool`], mirroring the tiberius + deadpool pattern.
 //!
+//! Connections marked dead after cancelled bridge I/O are rejected before the
+//! recycle ping, so deadpool drops them and creates replacements. Healthy
+//! connections are still pinged. See [`Client`]'s cancellation safety contract,
+//! including the unguarded [`Client::inner_mut`] escape hatch.
+//!
 //! # Example
 //!
 //! ```rust,no_run
@@ -63,6 +68,7 @@ impl Manager for TdsManager {
     }
 
     async fn recycle(&self, conn: &mut Self::Type, _: &Metrics) -> RecycleResult<Self::Error> {
+        conn.ensure_usable().map_err(RecycleError::Backend)?;
         conn.ping().await.map_err(RecycleError::Backend)
     }
 }

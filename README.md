@@ -170,6 +170,19 @@ Uses SSPI via `secur32.dll`, which is part of every supported Windows install. *
 
 `mssql-tds` uses `native-tls`, which on Linux requires OpenSSL at runtime (already a dep of nearly every Linux distro and most container base images). Alpine needs `apk add openssl ca-certificates`.
 
+## Performance
+
+Both buffered and streamed queries already use `mssql-tds`'s `RowWriter`.
+The [performance comparison](docs/performance.md) includes measured results
+against Tiberius, a reproducible Criterion benchmark, and an assessment of
+direct-writer and Arrow query-output opportunities.
+The [Arrow follow-up](docs/arrow-performance.md) measures benchmark-only direct
+RecordBatch output and reusable decoding buffers, without changing public APIs.
+
+For large results, use `query_streamed` / `simple_query_streamed`.
+Calling `into_row_stream()` on a buffered `QueryResult` does not undo its
+up-front memory usage.
+
 ## License
 
 MIT

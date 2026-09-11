@@ -15,6 +15,7 @@ jiff = ["dep:jiff"]
 serde = ["dep:serde"]
 arrow = ["dep:arrow-array", "dep:arrow-schema"]
 _bench = []
+_bench_alloc = ["_bench"]
 
 [dependencies]
 mssql-tds = { version = "0.1.0", default-features = false }
@@ -40,8 +41,21 @@ futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 criterion = { version = "0.5", features = ["async_tokio"] }
 tokio = { version = "1", features = ["full"] }
+tiberius = { version = "0.12.3", default-features = false, features = ["native-tls", "tds73"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+encoding_rs = "0.8"
 
 [[bench]]
 name = "row_streaming"
 harness = false
 required-features = ["_bench"]
+
+[[bench]]
+name = "driver_comparison"
+harness = false
+required-features = ["_bench"]
+
+[[bench]]
+name = "arrow_comparison"
+harness = false
+required-features = ["_bench", "arrow"]

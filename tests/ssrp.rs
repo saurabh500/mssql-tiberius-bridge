@@ -39,9 +39,12 @@ async fn ssrp_named_instance_connect() {
     let row = client
         .query("SELECT @@SERVERNAME", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @@SERVERNAME")
         .into_first_result();
-    let server_name = row[0].get::<&str, _>(0usize);
+    let server_name = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<&str, _>(0usize);
     assert!(server_name.is_some());
     eprintln!("SSRP-resolved @@SERVERNAME: {server_name:?}");
 }

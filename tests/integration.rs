@@ -47,7 +47,11 @@ async fn connect_and_select_one() {
         .into_first_result();
 
     assert_eq!(rows.len(), 1);
-    let val: i32 = rows[0].get("value").expect("column 'value' not found");
+    let val: i32 = rows
+        .first()
+        .expect("expected row at index 0")
+        .get("value")
+        .expect("column 'value' not found");
     assert_eq!(val, 1);
 }
 
@@ -70,11 +74,33 @@ async fn select_multiple_types() {
         .into_first_result();
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<i32, _>("int_col"), Some(42));
-    assert_eq!(rows[0].get::<bool, _>("bit_col"), Some(true));
-    assert!(rows[0].get::<f64, _>("float_col").is_some());
-    assert!(rows[0].get::<String, _>("str_col").is_some());
-    assert!(rows[0].get::<uuid::Uuid, _>("guid_col").is_some());
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("int_col"),
+        Some(42)
+    );
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<bool, _>("bit_col"),
+        Some(true)
+    );
+    assert!(rows
+        .first()
+        .expect("expected row at index 0")
+        .get::<f64, _>("float_col")
+        .is_some());
+    assert!(rows
+        .first()
+        .expect("expected row at index 0")
+        .get::<String, _>("str_col")
+        .is_some());
+    assert!(rows
+        .first()
+        .expect("expected row at index 0")
+        .get::<uuid::Uuid, _>("guid_col")
+        .is_some());
 }
 
 #[tokio::test]
@@ -89,8 +115,18 @@ async fn parameterized_query() {
         .into_first_result();
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<i32, _>("a"), Some(42));
-    assert_eq!(rows[0].get::<String, _>("b"), Some("world".into()));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("a"),
+        Some(42)
+    );
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<String, _>("b"),
+        Some("world".into())
+    );
 }
 
 #[tokio::test]
@@ -105,8 +141,18 @@ async fn null_handling() {
         .into_first_result();
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<i32, _>("nullable_col"), None);
-    assert_eq!(rows[0].get::<Option<i32>, _>("nullable_col"), Some(None));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("nullable_col"),
+        None
+    );
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<Option<i32>, _>("nullable_col"),
+        Some(None)
+    );
 }
 
 #[tokio::test]
@@ -122,7 +168,12 @@ async fn multiple_rows() {
 
     // System DBs: master, tempdb, model, msdb
     assert!(rows.len() >= 4);
-    assert_eq!(rows[0].get::<String, _>("name"), Some("master".into()));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<String, _>("name"),
+        Some("master".into())
+    );
 }
 
 #[tokio::test]
@@ -136,7 +187,12 @@ async fn get_by_index() {
         .expect("query failed")
         .into_first_result();
 
-    assert_eq!(rows[0].get::<i32, _>(0usize), Some(99));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(99)
+    );
 }
 
 #[tokio::test]
@@ -156,16 +212,34 @@ async fn datetime_types() {
         .into_first_result();
 
     assert_eq!(rows.len(), 1);
-    let d: chrono::NaiveDate = rows[0].get("d").expect("date");
-    assert_eq!(d, chrono::NaiveDate::from_ymd_opt(2026, 5, 8).unwrap());
+    let d: chrono::NaiveDate = rows
+        .first()
+        .expect("expected row at index 0")
+        .get("d")
+        .expect("date");
+    assert_eq!(
+        d,
+        chrono::NaiveDate::from_ymd_opt(2026, 5, 8).expect("valid test date")
+    );
 
-    let t: chrono::NaiveTime = rows[0].get("t").expect("time");
-    assert_eq!(t, chrono::NaiveTime::from_hms_opt(13, 30, 0).unwrap());
+    let t: chrono::NaiveTime = rows
+        .first()
+        .expect("expected row at index 0")
+        .get("t")
+        .expect("time");
+    assert_eq!(
+        t,
+        chrono::NaiveTime::from_hms_opt(13, 30, 0).expect("valid test time")
+    );
 
-    let dt: chrono::NaiveDateTime = rows[0].get("dt2").expect("datetime2");
+    let dt: chrono::NaiveDateTime = rows
+        .first()
+        .expect("expected row at index 0")
+        .get("dt2")
+        .expect("datetime2");
     assert_eq!(
         dt.date(),
-        chrono::NaiveDate::from_ymd_opt(2026, 5, 8).unwrap()
+        chrono::NaiveDate::from_ymd_opt(2026, 5, 8).expect("valid test date")
     );
 }
 
@@ -180,7 +254,11 @@ async fn decimal_type() {
         .expect("query failed")
         .into_first_result();
 
-    let d: rust_decimal::Decimal = rows[0].get("dec_col").expect("decimal");
+    let d: rust_decimal::Decimal = rows
+        .first()
+        .expect("expected row at index 0")
+        .get("dec_col")
+        .expect("decimal");
     assert_eq!(d.to_string(), "123.45");
 }
 
@@ -196,7 +274,12 @@ async fn client_ping() {
         .await
         .expect("query after ping failed")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("value"), Some(1));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("value"),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -228,14 +311,19 @@ async fn connection_pool() {
     let cfg = test_config();
     let pool = TdsManager::create_pool(cfg, 4).expect("pool creation failed");
 
-    let mut conn = pool.get().await.expect("pool checkout failed");
+    let mut conn = Box::pin(pool.get()).await.expect("pool checkout failed");
 
     let rows = conn
         .simple_query("SELECT 1 AS value")
         .await
         .expect("query failed")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("value"), Some(1));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("value"),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -249,7 +337,11 @@ async fn binary_data() {
         .expect("query failed")
         .into_first_result();
 
-    let bytes: Vec<u8> = rows[0].get("bin_col").expect("binary");
+    let bytes: Vec<u8> = rows
+        .first()
+        .expect("expected row at index 0")
+        .get("bin_col")
+        .expect("binary");
     assert_eq!(bytes, vec![0xDE, 0xAD, 0xBE, 0xEF]);
 }
 
@@ -284,7 +376,7 @@ async fn decimal_parameter_roundtrip() {
         .into_first_result();
 
     assert_eq!(rows.len(), 1);
-    let read_val: Option<Decimal> = rows[0].get("amount");
+    let read_val: Option<Decimal> = rows.first().expect("expected row at index 0").get("amount");
     assert_eq!(read_val, Some(decimal_val));
 
     // Clean up

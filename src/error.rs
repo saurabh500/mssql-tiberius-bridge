@@ -96,7 +96,7 @@ mod tests {
         let original_message = original.to_string();
         let error = Error::from(original);
         assert_eq!(error.to_string(), format!("TDS error: {original_message}"));
-        let source = error.source().unwrap();
+        let source = error.source().expect("TDS error should retain its source");
         assert_eq!(source.to_string(), original_message);
         assert!(matches!(
             source.downcast_ref::<mssql_tds::error::Error>(),

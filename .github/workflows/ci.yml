@@ -131,7 +131,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --all-targets --features arrow,serde,time,jiff -- -D warnings
 
       - name: Unit tests
         run: cargo test --lib
@@ -151,7 +151,7 @@ jobs:
       - name: Doc tests (arrow feature)
         run: cargo test --doc --features arrow
 
-      - name: Integration tests with coverage
+      - name: All public features with coverage (minimum 90%)
         env:
           TEST_DB_HOST: localhost
           TEST_DB_PORT: 1433
@@ -162,7 +162,7 @@ jobs:
           # Strict-mode tests. The cert was generated with CA:TRUE above so
           # rustls accepts it as a root.
           TEST_DB_CA: ${{ runner.temp }}/mssql-tls/mssql.pem
-        run: cargo llvm-cov --all-targets --features arrow --lcov --output-path lcov.info
+        run: cargo llvm-cov --all-targets --features arrow,serde,time,jiff --fail-under-lines 90 --lcov --output-path lcov.info
 
       - name: SQL Server logs (on failure)
         if: failure()

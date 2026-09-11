@@ -12,6 +12,7 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 - `stream.into_first_result()` — collect results into `Vec<Row>`
 - `stream.into_row_stream()` — `Stream<Item = Result<Row>>` over a buffered `QueryResult` (rows pre-buffered)
 - `client.query_streamed(sql, params)` / `simple_query_streamed(sql)` — true wire-level row streaming for memory-bounded large result sets
+- `client.query_arrow(sql, params)` / `simple_query_arrow(sql)` — direct Arrow read batches under the `arrow` feature, with result-set indexes and configurable limits
 - `client.ping()` — lightweight liveness check for connection pools
 - `client.reset_session()` — native TDS session reset with `READ COMMITTED` isolation
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
@@ -153,8 +154,9 @@ Both buffered and streamed queries already use `mssql-tds`'s `RowWriter`.
 The [performance comparison](docs/performance.md) includes measured results
 against Tiberius, a reproducible Criterion benchmark, and an assessment of
 direct-writer and Arrow query-output opportunities.
-The [Arrow follow-up](docs/arrow-performance.md) measures benchmark-only direct
-RecordBatch output and reusable decoding buffers, without changing public APIs.
+The [Arrow follow-up](docs/arrow-performance.md) records prototype and production
+measurements. [Arrow reads](docs/arrow-reads.md) documents the additive public
+APIs, SQL type mappings, limits, and cancellation behavior.
 
 For large results, use `query_streamed` / `simple_query_streamed`.
 Calling `into_row_stream()` on a buffered `QueryResult` does not undo its

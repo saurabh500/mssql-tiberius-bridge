@@ -53,6 +53,23 @@ impl Drop for SessionReset<'_> {
     }
 }
 
+#[cfg(feature = "arrow")]
+struct ArrowQuery<'a> {
+    inner: &'a mut TdsClient,
+    complete: bool,
+}
+
+#[cfg(feature = "arrow")]
+impl Drop for ArrowQuery<'_> {
+    fn drop(&mut self) {
+        // A cancelled fetch may have consumed only part of a wire row. Do not
+        // recycle that connection or drain potentially unbounded LOB values.
+        if !self.complete {
+            self.inner.mark_connection_dead();
+        }
+    }
+}
+
 impl Client {
     /// Connect to SQL Server using the given [`Config`].
     ///
@@ -334,6 +351,153 @@ impl Client {
     ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<crate::row::Row>> + Send + 'a>>
     {
         self.query_streamed(sql, &[])
+    }
+
+    /// Stream parameterized query results directly into Arrow record batches.
+    ///
+    /// Requires the `arrow` feature. Uses [`ArrowOptions::default`](crate::ArrowOptions)
+    /// (8,192 rows and an 8 MiB soft byte target). Each [`ArrowBatch`](crate::ArrowBatch)
+    /// carries a zero-based result-set index. Empty result sets produce an empty
+    /// batch with their schema; statements without rows produce no batch.
+    ///
+    /// Values are decoded into column buffers without intermediate bridge
+    /// [`Row`](crate::Row) objects. See [`crate::arrow`] for SQL type mappings,
+    /// lossless temporal structs, and memory-limit semantics.
+    ///
+    /// Fully consume the stream to keep the connection reusable. Once execution
+    /// starts, dropping or cancelling an unfinished stream, or any execution,
+    /// schema, or conversion error, marks the connection dead. Invalid options
+    /// and dropping an unpolled stream do not affect the connection.
+    ///
+    /// ```rust,no_run
+    /// use futures_util::TryStreamExt;
+    /// use mssql_tiberius_bridge::Client;
+    ///
+    /// # async fn example(client: &mut Client) -> mssql_tiberius_bridge::Result<()> {
+    /// let mut stream = client.query_arrow("SELECT @P1 AS id", &[&42i32]);
+    /// while let Some(result) = stream.try_next().await? {
+    ///     println!("result {}: {} rows", result.result_index, result.batch.num_rows());
+    /// }
+    /// # Ok(()) }
+    /// ```
+    #[cfg(feature = "arrow")]
+    pub fn query_arrow<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+        params: &[&dyn ToSql],
+    ) -> crate::arrow::ArrowStream<'a> {
+        self.query_arrow_with_options(sql, params, crate::arrow::ArrowOptions::default())
+    }
+
+    /// Stream Arrow query batches with explicit row, byte, and value limits.
+    ///
+    /// Parameters use the same positional `@P1, @P2, ...` binding and Unicode
+    /// configuration as [`query`](Self::query). Fetching is lazy and applies
+    /// backpressure between batches; no background task or unbounded queue is
+    /// created. No batch mixes result sets.
+    ///
+    /// The byte target is soft and may be exceeded by one row. A row larger than
+    /// the target is emitted separately. Opt-in hard limits return
+    /// [`Error::Conversion`], never truncated data. The underlying TDS decoder
+    /// may materialize a value before the bridge checks its size, so limits are
+    /// not a process-memory or pre-network-allocation guarantee.
+    ///
+    /// Execution and connection lifetime match [`query_arrow`](Self::query_arrow).
+    /// Unsupported column types are rejected from metadata, even for empty
+    /// results. Previously yielded batches remain valid after an error, but the
+    /// unfinished batch is discarded.
+    #[cfg(feature = "arrow")]
+    pub fn query_arrow_with_options<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+        params: &[&dyn ToSql],
+        options: crate::arrow::ArrowOptions,
+    ) -> crate::arrow::ArrowStream<'a> {
+        let sql = sql.into();
+        let rpc_params = if params.is_empty() {
+            None
+        } else {
+            Some(build_params_with_string_encoding(
+                params,
+                self.send_string_parameters_as_unicode,
+            ))
+        };
+        Box::pin(async_stream::try_stream! {
+            options.validate()?;
+            let mut query = ArrowQuery { inner: &mut self.inner, complete: false };
+            query.inner.close_query().await.map_err(Error::Tds)?;
+            match rpc_params {
+                None => query.inner.execute(sql, ()).await.map_err(Error::Tds)?,
+                Some(params) => query.inner.execute_sp_executesql(sql, params, ())
+                    .await.map_err(Error::Tds)?,
+            };
+
+            let mut result_index = 0usize;
+            while query.inner.on_rows()
+                || query.inner.advance_to_rows().await.map_err(Error::Tds)?
+            {
+                let mut writer = crate::arrow::ArrowRowWriter::new(
+                    query.inner.get_metadata(), options.clone(),
+                )?;
+                let mut saw_row = false;
+                loop {
+                    let has_row = query.inner.next_row_into(&mut writer).await.map_err(Error::Tds)?;
+                    writer.check_error()?;
+                    if !has_row {
+                        break;
+                    }
+                    saw_row = true;
+                    if writer.should_flush() {
+                        let split = writer.last_row_bytes() > options.batch_bytes
+                            && writer.row_count() > 1;
+                        let batch = writer.take_batch()?;
+                        if split {
+                            let last = batch.num_rows() - 1;
+                            yield crate::arrow::ArrowBatch {
+                                result_index, batch: batch.slice(0, last),
+                            };
+                            yield crate::arrow::ArrowBatch {
+                                result_index, batch: batch.slice(last, 1),
+                            };
+                        } else {
+                            yield crate::arrow::ArrowBatch { result_index, batch };
+                        }
+                    }
+                }
+                if !saw_row || writer.row_count() > 0 {
+                    yield crate::arrow::ArrowBatch {
+                        result_index, batch: writer.take_batch()?,
+                    };
+                }
+                result_index = result_index.checked_add(1)
+                    .ok_or_else(|| Error::Conversion("Arrow result-set index overflow".into()))?;
+                if !query.inner.advance_to_rows().await.map_err(Error::Tds)? {
+                    break;
+                }
+            }
+            query.complete = true;
+        })
+    }
+
+    /// Stream an unparameterized query into Arrow batches with default options.
+    ///
+    /// See [`query_arrow`](Self::query_arrow) for types and connection lifetime.
+    #[cfg(feature = "arrow")]
+    pub fn simple_query_arrow<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+    ) -> crate::arrow::ArrowStream<'a> {
+        self.query_arrow(sql, &[])
+    }
+
+    /// Stream an unparameterized query into Arrow batches with explicit options.
+    #[cfg(feature = "arrow")]
+    pub fn simple_query_arrow_with_options<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+        options: crate::arrow::ArrowOptions,
+    ) -> crate::arrow::ArrowStream<'a> {
+        self.query_arrow_with_options(sql, &[], options)
     }
 
     /// Begin a bulk insert into `table`.

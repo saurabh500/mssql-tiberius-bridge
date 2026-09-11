@@ -56,7 +56,7 @@
 //! | `time` | off | Enables `time` crate support for [`FromSql`] and [`ToSql`] |
 //! | `jiff` | off | Enables `jiff` crate support for [`FromSql`] and [`ToSql`] |
 //! | `serde` | off | Enables `serde::Deserialize` for [`Row`] (see [`serde_de`]) |
-//! | `arrow` | off | Enables [`BulkInsert::send_arrow`](crate::bulk::BulkInsert::send_arrow) for Apache Arrow `RecordBatch` input (see [`bulk_arrow`]) |
+//! | `arrow` | off | Enables Arrow query batches via [`Client::query_arrow`] and bulk-insert input via [`BulkInsert::send_arrow`](crate::bulk::BulkInsert::send_arrow) |
 //!
 //! # Modules
 //!
@@ -78,6 +78,8 @@
 //! - `row.get::<&str, _>("col")` works (strings are pre-decoded from UTF-16)
 //! - Connection pooling via [`TdsManager`] + [`deadpool`] with native session resets
 
+#[cfg(feature = "arrow")]
+pub mod arrow;
 pub mod bulk;
 #[cfg(feature = "arrow")]
 pub mod bulk_arrow;
@@ -93,6 +95,8 @@ pub mod row;
 pub mod serde_de;
 
 // Re-exports for ergonomic top-level access.
+#[cfg(feature = "arrow")]
+pub use arrow::{ArrowBatch, ArrowOptions, ArrowStream};
 pub use bulk::{BulkInsert, BulkLoadRow, ColumnMapping, ColumnMappingSource};
 pub use client::Client;
 pub use column::{Collation, Column, ColumnType, MultiPartName};

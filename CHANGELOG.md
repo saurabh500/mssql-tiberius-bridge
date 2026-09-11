@@ -21,6 +21,10 @@ when the Release PR is opened.
 
 ### Added
 
+- Direct Arrow read streams behind the `arrow` feature: `query_arrow`,
+  `query_arrow_with_options`, `simple_query_arrow`, and
+  `simple_query_arrow_with_options`, with metadata-derived schemas,
+  result-set indexes, lossless temporal structs, and configurable batching.
 - `Client::reset_session()` and the no-I/O `Client::is_connection_dead()` accessor.
 - Tokio timeout support for pools built with `TdsManager::create_pool`.
 

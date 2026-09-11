@@ -15,8 +15,8 @@ confidence intervals. One forward numeric measurement was much slower and
 highly variable. Do not promise another large speedup simply from a different
 RowWriter adapter.
 
-The strongest remaining architectural opportunity is an **optional direct
-query-output API**, particularly bounded Arrow batches, rather than changing the
+The architectural follow-up is an **optional direct query-output API**,
+implemented as [Arrow reads](arrow-reads.md), rather than changing the
 owned, Tiberius-compatible `Row` contract. The
 [Arrow follow-up](arrow-performance.md) now measures actual RecordBatch
 construction and allocation reductions. Full application export throughput
@@ -145,13 +145,14 @@ used a different dataset/environment.
    The main comparison uses cached `&str` getters, so it does not measure the
    possible benefit of fixing repeated owned-string decoding.
 
-2. **Add an opt-in direct sink or Arrow query-batch API.** A proposed
-   `query_into`/`query_arrow_batches` surface could implement
+2. **Use the opt-in Arrow query-batch API for columnar consumers.**
+   `query_arrow` and `simple_query_arrow` now implement
    `TDS decoder -> RowWriter -> typed column buffers -> RecordBatch`, bypassing
-   both per-row vectors and retained raw-plus-decoded text. The existing `arrow`
-   feature is Arrow-to-SQL bulk insertion only, not query output. Arrow 55
-   builders can be used without upgrading mssql-tds; RowWriter itself contains
-   no Arrow-version-specific types.
+   both per-row vectors and retained raw-plus-decoded text. They are additive
+   APIs under the existing `arrow` feature; Arrow bulk insertion is unchanged.
+   Arrow 55 builders work without upgrading mssql-tds; RowWriter itself contains
+   no Arrow-version-specific types. See [Arrow reads](arrow-reads.md) for limits
+   and supported SQL mappings.
 
 3. **Measure the actual destination before claiming a larger speedup.**
    Compare Tiberius-to-Arrow, bridge-rows-to-Arrow, and direct-writer-to-Arrow

@@ -1,4 +1,4 @@
-//! Benchmark-only Arrow query output: no public bridge APIs are changed.
+//! Compare row-to-Arrow adapters, direct prototypes, and the public Arrow read API.
 
 #[path = "support/allocations.rs"]
 mod allocations;
@@ -10,7 +10,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use arrow_array::builder::{
-    BinaryBuilder, BooleanBuilder, Float64Builder, Int32Builder, Int64Builder, StringBuilder,
+    BooleanBuilder, Float64Builder, Int32Builder, Int64Builder, LargeBinaryBuilder,
+    LargeStringBuilder,
 };
 use arrow_array::{ArrayRef, RecordBatch};
 use arrow_schema::{DataType, Field, Schema};
@@ -27,7 +28,7 @@ use mssql_tds::datatypes::row_writer::RowWriter;
 use mssql_tds::datatypes::sql_json::SqlJson;
 use mssql_tds::datatypes::sql_string::{EncodingType, SqlString};
 use mssql_tds::datatypes::sql_vector::SqlVector;
-use mssql_tiberius_bridge::Client;
+use mssql_tiberius_bridge::{ArrowOptions, Client};
 use support::{
     reverse_methods, row_counts, unsupported_values, ConnectionSettings, Shape, TiberiusClient,
     SELECT,
@@ -38,11 +39,12 @@ use uuid::Uuid;
 #[cfg(feature = "_bench_alloc")]
 static ALLOCATOR: allocations::CountingAllocator = allocations::CountingAllocator;
 
-const METHODS: [&str; 4] = [
+const METHODS: [&str; 5] = [
     "tiberius_arrow",
     "bridge_arrow",
     "direct_arrow",
     "direct_arrow_reuse",
+    "library_arrow",
 ];
 
 #[derive(Clone)]
@@ -57,11 +59,11 @@ impl Dataset {
     fn new(shape: Shape, repeats: usize) -> Self {
         let second = match shape {
             Shape::Numeric => DataType::Int64,
-            Shape::Mixed => DataType::Utf8,
+            Shape::Mixed => DataType::LargeUtf8,
         };
         let fourth = match shape {
             Shape::Numeric => DataType::Boolean,
-            Shape::Mixed => DataType::Binary,
+            Shape::Mixed => DataType::LargeBinary,
         };
         let mut fields = Vec::new();
         let mut projection = Vec::new();
@@ -129,8 +131,8 @@ enum ColumnBuilder {
     Int64(Int64Builder),
     Float64(Float64Builder),
     Boolean(BooleanBuilder),
-    String(StringBuilder),
-    Binary(BinaryBuilder),
+    String(LargeStringBuilder),
+    Binary(LargeBinaryBuilder),
 }
 
 impl ColumnBuilder {
@@ -140,8 +142,10 @@ impl ColumnBuilder {
             DataType::Int64 => Self::Int64(Int64Builder::with_capacity(rows)),
             DataType::Float64 => Self::Float64(Float64Builder::with_capacity(rows)),
             DataType::Boolean => Self::Boolean(BooleanBuilder::with_capacity(rows)),
-            DataType::Utf8 => Self::String(StringBuilder::with_capacity(rows, rows * 64)),
-            DataType::Binary => Self::Binary(BinaryBuilder::with_capacity(rows, rows * 16)),
+            DataType::LargeUtf8 => Self::String(LargeStringBuilder::with_capacity(rows, rows * 64)),
+            DataType::LargeBinary => {
+                Self::Binary(LargeBinaryBuilder::with_capacity(rows, rows * 16))
+            }
             _ => panic!("unsupported benchmark Arrow type: {data_type:?}"),
         }
     }
@@ -375,7 +379,23 @@ impl Consumer {
     fn accept(&mut self, batch: RecordBatch, dataset: &Dataset) {
         if self.validate {
             let expected = dataset.expected_batch(self.rows + 1, batch.num_rows());
-            assert_eq!(batch, expected, "Arrow schema or cell values differ");
+            assert_eq!(batch.num_columns(), expected.num_columns());
+            for (actual, expected) in batch
+                .schema()
+                .fields()
+                .iter()
+                .zip(expected.schema().fields())
+            {
+                assert_eq!(actual.name(), expected.name());
+                assert_eq!(actual.data_type(), expected.data_type());
+                assert_eq!(actual.is_nullable(), expected.is_nullable());
+            }
+            // The public API additionally preserves SQL-specific field metadata.
+            assert_eq!(
+                batch.columns(),
+                expected.columns(),
+                "Arrow cell values differ"
+            );
         }
         self.rows += batch.num_rows();
         self.batches += 1;
@@ -475,6 +495,30 @@ async fn direct_arrow(
     consumer
 }
 
+async fn library_arrow(
+    client: &mut Client,
+    dataset: &Dataset,
+    batch_rows: usize,
+    validate: bool,
+) -> Consumer {
+    let options = ArrowOptions {
+        batch_size: batch_rows,
+        // Keep identical row boundaries even for the widest batch-size experiments.
+        batch_bytes: 128 * 1024 * 1024,
+        ..ArrowOptions::default()
+    };
+    let mut consumer = Consumer {
+        validate,
+        ..Consumer::default()
+    };
+    let mut stream = client.simple_query_arrow_with_options(&dataset.sql, options);
+    while let Some(result) = stream.try_next().await.expect("public Arrow read") {
+        assert_eq!(result.result_index, 0);
+        consumer.accept(result.batch, dataset);
+    }
+    consumer
+}
+
 fn positive_list(name: &str, default: &str, max: usize) -> Vec<usize> {
     std::env::var(name)
         .unwrap_or_else(|_| default.into())
@@ -510,6 +554,7 @@ async fn run_method(
         "bridge_arrow" => bridge_arrow(bridge, dataset, batch_rows, validate).await,
         "direct_arrow" => direct_arrow(bridge, dataset, batch_rows, validate, false).await,
         "direct_arrow_reuse" => direct_arrow(bridge, dataset, batch_rows, validate, true).await,
+        "library_arrow" => library_arrow(bridge, dataset, batch_rows, validate).await,
         _ => unreachable!(),
     }
 }
@@ -551,7 +596,10 @@ async fn validate_edges(settings: &ConnectionSettings) {
             empty.sql = empty.sql.replace("ORDER BY id", "WHERE 1 = 0 ORDER BY id");
             for method in METHODS {
                 let result = run_method(method, &mut bridge, &mut tiberius, &empty, 8, true).await;
-                assert_eq!((result.rows, result.batches), (0, 0));
+                assert_eq!(
+                    (result.rows, result.batches),
+                    (0, usize::from(method == "library_arrow"))
+                );
             }
         }
         bridge

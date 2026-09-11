@@ -1,18 +1,103 @@
-# Direct Arrow output experiment
+# Direct Arrow output: experiment and production evaluation
 
 Tracking: [prototype and evaluation issue](https://github.com/saurabh500/mssql-tiberius-bridge/issues/112).
 
-## Decision
+## Production follow-up
+
+The experiment below led to an additive, feature-gated
+[`query_arrow`/`simple_query_arrow` API](arrow-reads.md). The product writer is
+separate from the fixture-specific benchmark writer: it derives schemas from
+server metadata, preserves SQL decimal/temporal values, supports multiple and
+empty results, and reports unsupported types and configured limit violations
+as errors. Existing row and Arrow bulk-insert APIs remain unchanged.
+
+The current benchmark includes a fifth `library_arrow` path and uses
+LargeUtf8/LargeBinary for equivalent output across all paths. The original
+measurements below used Utf8/Binary and the code at `570743d`; do not mix their
+absolute timings with the production follow-up.
+
+### Production measurements
+
+The public API was measured against equivalent row-to-Arrow and prototype
+outputs on the same host and driver versions, using a newly isolated SQL
+Server 2025 container with the same 4-CPU/4-GiB limits. All paths passed the
+exact-value/schema/boundary preflight. Four columns, one million rows, 8,192-row
+batches; timings include submission, decoding, batch construction and disposal.
+The public comparator's soft byte target was 128 MiB (the fixtures are below
+the default 8 MiB target too).
+
+Timing builds have no allocator hook. Criterion used 20 samples, a 2-second
+warm-up and a 5-second measurement target, expanding for slow queries. Results
+are milliseconds, **mean [95% confidence interval]**:
+
+| Workload | Path | Forward order | Reverse order |
+|---|---|---|---|
+| Numeric | Tiberius -> Arrow | 814.12 [771.11, 860.74] | 1502.58 [1428.77, 1586.90] |
+| Numeric | Bridge rows -> Arrow | 587.05 [563.69, 612.49] | 1303.54 [1267.99, 1339.86] |
+| Numeric | Prototype + reuse | 540.00 [529.98, 550.55] | 1232.57 [1197.06, 1266.57] |
+| Numeric | Public Arrow API | 548.21 [530.43, 565.72] | 1189.04 [1131.19, 1253.07] |
+| Mixed | Tiberius -> Arrow | 1977.57 [1907.77, 2057.69] | 5531.50 [5306.37, 5792.02] |
+| Mixed | Bridge rows -> Arrow | 687.12 [676.77, 697.95] | 1868.89 [1762.39, 1988.20] |
+| Mixed | Prototype + reuse | 748.42 [721.71, 774.14] | 1664.67 [1563.97, 1786.32] |
+| Mixed | Public Arrow API | 1270.13 [1171.21, 1370.00] | 1491.52 [1327.68, 1639.62] |
+
+**These runs do not establish a reliable production throughput improvement.**
+Absolute times drifted sharply across methods and runs on the shared host.
+The mixed public path was slower than the bridge adapter in forward order
+and faster in reverse order. Per-method confidence intervals do not account
+for this time-dependent environmental drift. Do not select just the favorable
+run, reuse the prototype's percentage gains as product claims, or interpret
+these runs as a controlled regression measurement.
+
+A separate allocation-only build measured one fully consumed query after
+preflight, excluding connection/fixture/expected-output creation:
+
+| Workload | Path | Allocation/reallocation calls | Total requested bytes |
+|---|---|---:|---:|
+| Numeric | Bridge rows -> Arrow | 2,005,291 | 308,955,084 |
+| Numeric | Public Arrow API | 5,203 | 20,886,542 |
+| Mixed | Bridge rows -> Arrow | 4,711,037 | 492,532,820 |
+| Mixed | Public Arrow API | 16,539 | 94,478,214 |
+
+The public implementation eliminated **99.65-99.74% of allocation calls**
+and **80.82-93.24% of requested allocation bytes** relative to bridge rows
+converted to equivalent Arrow output. These are Rust allocation-traffic
+measurements, not peak RSS or a guarantee of application-level speedups.
+
+**Adoption recommendation:** incorporate this as the explicit `arrow` read
+API, for direct columnar consumption and the demonstrated allocation savings.
+Do not replace existing row APIs or advertise a guaranteed throughput gain.
+Controlled timing, peak-memory/concurrency measurements, and actual
+Parquet/export workloads remain necessary before making broader performance
+claims. This recommendation is for the metadata-driven, error-reporting
+product implementation, not the fixture-specific adapter.
+
+Reproduce the production runs with the existing benchmark:
+
+```bash
+BENCH_ROW_COUNTS=1000000 cargo bench --locked --features _bench,arrow \
+  --bench arrow_comparison -- \
+  '(tiberius_arrow|bridge_arrow|direct_arrow_reuse|library_arrow)' \
+  --noplot --save-baseline arrow-production-forward
+BENCH_ROW_COUNTS=1000000 BENCH_REVERSE=1 cargo bench --locked \
+  --features _bench,arrow --bench arrow_comparison -- \
+  '(tiberius_arrow|bridge_arrow|direct_arrow_reuse|library_arrow)' \
+  --noplot --save-baseline arrow-production-reverse
+BENCH_ROW_COUNTS=1000000 BENCH_ARROW_ALLOCATIONS=1 cargo bench --locked \
+  --features _bench_alloc,arrow --bench arrow_comparison -- --noplot
+```
+
+## Original prototype decision
 
 **Keep this change benchmark-only; do not ship the fixture-specific adapter as
 production code.** The results justify developing an opt-in, production-quality
 Arrow query-output path, particularly for its allocation reduction, but not
 replacing the current row API.
 
-No public methods, return types, existing feature defaults, or production
-implementations were changed. The existing Arrow bulk-insert API is unchanged.
-The prototype is entirely in [`benches/arrow_comparison.rs`](../benches/arrow_comparison.rs).
-Its only dependency addition is benchmark/dev access to the already-resolved
+At the prototype stage, no public methods, return types, feature defaults, or
+production implementations were changed. The prototype is entirely in
+[`benches/arrow_comparison.rs`](../benches/arrow_comparison.rs).
+Its only dependency addition was benchmark/dev access to the already-resolved
 `encoding_rs` decoder.
 
 On the measured workloads, direct Arrow output with reusable text decoding
@@ -161,19 +246,19 @@ server allocations, and are neither live bytes nor peak RSS. Remaining direct
 allocations include Arrow batch storage and upstream owned-value fallbacks at
 buffer boundaries. There is no claim that this sink is allocation-free.
 
-## Product/API evaluation
+## Original product/API evaluation
 
 The allocation evidence makes this a worthwhile **optional export feature**.
 It does not justify an automatic change to existing `query`, `query_streamed`,
 `Row`, `FromSql`, `raw_value`, or Arrow bulk-insert semantics.
 
-First-class query output would require an **additive** surface, such as a
+First-class query output required an **additive** surface, such as a
 `query_arrow_batches` method under the existing `arrow` feature. That can be
 backward-compatible, but it is not literally zero API additions: the current
-product has no Arrow query-output method to optimize internally. Callers can
+product had no Arrow query-output method to optimize internally. Callers could
 already experiment through `inner_mut()` without any public API addition.
 
-Before adopting a first-class API, replace the fixture-specific assumptions:
+The prototype identified the following adoption requirements:
 
 1. Derive schemas from actual metadata and define all supported SQL-to-Arrow
    mappings, including decimals, temporal values, collations, spatial and
@@ -189,11 +274,17 @@ Before adopting a first-class API, replace the fixture-specific assumptions:
    consumers. The present result measures RecordBatch production, not storage
    serialization, compression, networking to an object store, or memory pressure.
 
-There is no production merge recommendation for the current prototype as-is.
+There was no production merge recommendation for the fixture-specific prototype as-is.
 Its unsupported-type panics and predeclared schemas are deliberate constraints
 of an experiment, not a proposed product contract.
 
 ## Reproduce
+
+Check out `570743d` in a separate worktree to reproduce the historical four-path
+experiment exactly. The current revision additionally measures the public API
+and uses 64-bit string/binary offsets. Its `library_arrow` comparator sets the
+soft byte target to 128 MiB so the row-boundary experiments remain equivalent;
+the product default remains 8 MiB.
 
 Use the isolated-server setup in [performance.md](performance.md#reproduce).
 It creates only connection-local temporary tables. Then run:

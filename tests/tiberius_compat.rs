@@ -43,16 +43,26 @@ async fn bool_type() {
     let row = client
         .query("SELECT @P1", &[&true])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<bool, _>(0usize), Some(true));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<bool, _>(0usize),
+        Some(true)
+    );
 
     let row = client
         .query("SELECT @P1", &[&false])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<bool, _>(0usize), Some(false));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<bool, _>(0usize),
+        Some(false)
+    );
 }
 
 #[tokio::test]
@@ -61,9 +71,14 @@ async fn u8_token() {
     let row = client
         .query("SELECT @P1", &[&255u8])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<u8, _>(0usize), Some(255u8));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<u8, _>(0usize),
+        Some(255u8)
+    );
 }
 
 #[tokio::test]
@@ -72,16 +87,26 @@ async fn i16_token() {
     let row = client
         .query("SELECT @P1", &[&i16::MIN])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<i16, _>(0usize), Some(i16::MIN));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<i16, _>(0usize),
+        Some(i16::MIN)
+    );
 
     let row = client
         .query("SELECT @P1", &[&i16::MAX])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<i16, _>(0usize), Some(i16::MAX));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<i16, _>(0usize),
+        Some(i16::MAX)
+    );
 }
 
 #[tokio::test]
@@ -90,16 +115,26 @@ async fn i32_token() {
     let row = client
         .query("SELECT @P1", &[&i32::MIN])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<i32, _>(0usize), Some(i32::MIN));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(i32::MIN)
+    );
 
     let row = client
         .query("SELECT @P1", &[&i32::MAX])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<i32, _>(0usize), Some(i32::MAX));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(i32::MAX)
+    );
 }
 
 #[tokio::test]
@@ -108,16 +143,26 @@ async fn i64_token() {
     let row = client
         .query("SELECT @P1", &[&i64::MIN])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<i64, _>(0usize), Some(i64::MIN));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<i64, _>(0usize),
+        Some(i64::MIN)
+    );
 
     let row = client
         .query("SELECT @P1", &[&i64::MAX])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<i64, _>(0usize), Some(i64::MAX));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<i64, _>(0usize),
+        Some(i64::MAX)
+    );
 }
 
 #[tokio::test]
@@ -126,9 +171,13 @@ async fn f32_token() {
     let row = client
         .query("SELECT @P1", &[&1.23f32])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    let val = row[0].get::<f32, _>(0usize).unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<f32, _>(0usize)
+        .expect("expected non-NULL column 0usize");
     assert!((val - 1.23f32).abs() < f32::EPSILON);
 }
 
@@ -138,9 +187,13 @@ async fn f64_token() {
     let row = client
         .query("SELECT @P1", &[&1.23456789f64])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    let val = row[0].get::<f64, _>(0usize).unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<f64, _>(0usize)
+        .expect("expected non-NULL column 0usize");
     assert!((val - 1.23456789f64).abs() < f64::EPSILON);
 }
 
@@ -151,10 +204,12 @@ async fn string_roundtrip() {
     let row = client
         .query("SELECT @P1", &[&input])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
     assert_eq!(
-        row[0].get::<String, _>(0usize),
+        row.first()
+            .expect("expected row at index 0")
+            .get::<String, _>(0usize),
         Some("hello world".to_string())
     );
 }
@@ -162,13 +217,19 @@ async fn string_roundtrip() {
 #[tokio::test]
 async fn uuid_roundtrip() {
     let mut client = connect().await;
-    let id = uuid::Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").unwrap();
+    let id =
+        uuid::Uuid::parse_str("936da01f-9abd-4d9d-80c7-02af85c822a8").expect("valid test UUID");
     let row = client
         .query("SELECT @P1", &[&id])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<uuid::Uuid, _>(0usize), Some(id));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<uuid::Uuid, _>(0usize),
+        Some(id)
+    );
 }
 
 #[tokio::test]
@@ -177,10 +238,14 @@ async fn decimal_roundtrip() {
     let row = client
         .query("SELECT CAST(123.456 AS decimal(10,3))", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST(123.456 AS decimal(10,3))")
         .into_first_result();
-    let val = row[0].get::<rust_decimal::Decimal, _>(0usize).unwrap();
-    let expected: rust_decimal::Decimal = "123.456".parse().unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<rust_decimal::Decimal, _>(0usize)
+        .expect("expected non-NULL column 0usize");
+    let expected: rust_decimal::Decimal = "123.456".parse().expect("valid test decimal");
     assert_eq!(val, expected);
 }
 
@@ -194,9 +259,14 @@ async fn nullable_i32_some() {
     let row = client
         .query("SELECT @P1", &[&42i32])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<Option<i32>, _>(0usize), Some(Some(42)));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<Option<i32>, _>(0usize),
+        Some(Some(42))
+    );
 }
 
 #[tokio::test]
@@ -205,9 +275,14 @@ async fn nullable_i32_none() {
     let row = client
         .query("SELECT CAST(NULL AS int)", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST(NULL AS int)")
         .into_first_result();
-    assert_eq!(row[0].get::<Option<i32>, _>(0usize), Some(None));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<Option<i32>, _>(0usize),
+        Some(None)
+    );
 }
 
 #[tokio::test]
@@ -216,10 +291,12 @@ async fn nullable_string_some() {
     let row = client
         .query("SELECT @P1", &[&"hello"])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
     assert_eq!(
-        row[0].get::<Option<String>, _>(0usize),
+        row.first()
+            .expect("expected row at index 0")
+            .get::<Option<String>, _>(0usize),
         Some(Some("hello".to_string()))
     );
 }
@@ -230,9 +307,14 @@ async fn nullable_string_none() {
     let row = client
         .query("SELECT CAST(NULL AS nvarchar(50))", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST(NULL AS nvarchar(50))")
         .into_first_result();
-    assert_eq!(row[0].get::<Option<String>, _>(0usize), Some(None));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<Option<String>, _>(0usize),
+        Some(None)
+    );
 }
 
 // =============================================================================
@@ -246,17 +328,22 @@ async fn kanji_nvarchar() {
     client
         .simple_query("CREATE TABLE #kanji_test (val nvarchar(100))")
         .await
-        .unwrap();
+        .expect("query succeeds: CREATE TABLE #kanji_test (val nvarchar(100))");
     client
         .execute("INSERT INTO #kanji_test (val) VALUES (@P1)", &[&text])
         .await
-        .unwrap();
+        .expect("execute succeeds: INSERT INTO #kanji_test (val) VALUES (@P1)");
     let row = client
         .query("SELECT val FROM #kanji_test", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT val FROM #kanji_test")
         .into_first_result();
-    assert_eq!(row[0].get::<String, _>(0usize), Some(text.to_string()));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<String, _>(0usize),
+        Some(text.to_string())
+    );
 }
 
 #[tokio::test]
@@ -266,17 +353,22 @@ async fn finnish_varchar() {
     client
         .simple_query("CREATE TABLE #finnish_test (val nvarchar(100))")
         .await
-        .unwrap();
+        .expect("query succeeds: CREATE TABLE #finnish_test (val nvarchar(100))");
     client
         .execute("INSERT INTO #finnish_test (val) VALUES (@P1)", &[&text])
         .await
-        .unwrap();
+        .expect("execute succeeds: INSERT INTO #finnish_test (val) VALUES (@P1)");
     let row = client
         .query("SELECT val FROM #finnish_test", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT val FROM #finnish_test")
         .into_first_result();
-    assert_eq!(row[0].get::<String, _>(0usize), Some(text.to_string()));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<String, _>(0usize),
+        Some(text.to_string())
+    );
 }
 
 #[tokio::test]
@@ -285,10 +377,12 @@ async fn empty_string() {
     let row = client
         .query("SELECT CAST('' AS varchar(10))", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST('' AS varchar(10))")
         .into_first_result();
     assert_eq!(
-        row[0].get::<Option<String>, _>(0usize),
+        row.first()
+            .expect("expected row at index 0")
+            .get::<Option<String>, _>(0usize),
         Some(Some(String::new()))
     );
 }
@@ -303,13 +397,17 @@ async fn naive_date_time() {
     let row = client
         .query("SELECT CAST('2020-04-20 16:20:00' AS datetime2)", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST('2020-04-20 16:20:00' AS datetime2)")
         .into_first_result();
-    let val = row[0].get::<chrono::NaiveDateTime, _>(0usize).unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<chrono::NaiveDateTime, _>(0usize)
+        .expect("expected non-NULL column 0usize");
     let expected = chrono::NaiveDate::from_ymd_opt(2020, 4, 20)
-        .unwrap()
+        .expect("valid test date")
         .and_hms_opt(16, 20, 0)
-        .unwrap();
+        .expect("valid test time");
     assert_eq!(val, expected);
 }
 
@@ -319,10 +417,17 @@ async fn naive_date() {
     let row = client
         .query("SELECT CAST('2020-04-20' AS date)", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST('2020-04-20' AS date)")
         .into_first_result();
-    let val = row[0].get::<chrono::NaiveDate, _>(0usize).unwrap();
-    assert_eq!(val, chrono::NaiveDate::from_ymd_opt(2020, 4, 20).unwrap());
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<chrono::NaiveDate, _>(0usize)
+        .expect("expected non-NULL column 0usize");
+    assert_eq!(
+        val,
+        chrono::NaiveDate::from_ymd_opt(2020, 4, 20).expect("valid test date")
+    );
 }
 
 #[tokio::test]
@@ -331,10 +436,17 @@ async fn naive_time() {
     let row = client
         .query("SELECT CAST('16:20:00' AS time)", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST('16:20:00' AS time)")
         .into_first_result();
-    let val = row[0].get::<chrono::NaiveTime, _>(0usize).unwrap();
-    assert_eq!(val, chrono::NaiveTime::from_hms_opt(16, 20, 0).unwrap());
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<chrono::NaiveTime, _>(0usize)
+        .expect("expected non-NULL column 0usize");
+    assert_eq!(
+        val,
+        chrono::NaiveTime::from_hms_opt(16, 20, 0).expect("valid test time")
+    );
 }
 
 #[tokio::test]
@@ -346,20 +458,23 @@ async fn datetime_offset() {
             &[],
         )
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST('2020-04-20 16:20:00 +02:00' AS datetimeoffset)")
         .into_first_result();
-    let val = row[0]
+    let val = row
+        .first()
+        .expect("expected row at index 0")
         .get::<chrono::DateTime<chrono::FixedOffset>, _>(0usize)
-        .unwrap();
+        .expect("expected non-NULL column 0usize");
     let expected = chrono::FixedOffset::east_opt(2 * 3600)
-        .unwrap()
+        .expect("valid test offset")
         .from_local_datetime(
             &chrono::NaiveDate::from_ymd_opt(2020, 4, 20)
-                .unwrap()
+                .expect("valid test date")
                 .and_hms_opt(16, 20, 0)
-                .unwrap(),
+                .expect("valid test time"),
         )
-        .unwrap();
+        .single()
+        .expect("unambiguous test datetime");
     assert_eq!(val, expected);
 }
 
@@ -373,9 +488,13 @@ async fn varbinary_roundtrip() {
     let row = client
         .query("SELECT CAST(0xDEADBEEF AS varbinary(4))", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST(0xDEADBEEF AS varbinary(4))")
         .into_first_result();
-    let val = row[0].get::<Vec<u8>, _>(0usize).unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<Vec<u8>, _>(0usize)
+        .expect("expected non-NULL column 0usize");
     assert_eq!(val, vec![0xDE, 0xAD, 0xBE, 0xEF]);
 }
 
@@ -385,9 +504,13 @@ async fn varbinary_empty() {
     let row = client
         .query("SELECT CAST(0x AS varbinary(1))", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST(0x AS varbinary(1))")
         .into_first_result();
-    let val = row[0].get::<Vec<u8>, _>(0usize).unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<Vec<u8>, _>(0usize)
+        .expect("expected non-NULL column 0usize");
     assert!(val.is_empty());
 }
 
@@ -397,9 +520,13 @@ async fn binary_type() {
     let row = client
         .query("SELECT CAST(0x0102030405 AS binary(5))", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST(0x0102030405 AS binary(5))")
         .into_first_result();
-    let val = row[0].get::<Vec<u8>, _>(0usize).unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<Vec<u8>, _>(0usize)
+        .expect("expected non-NULL column 0usize");
     assert_eq!(val, vec![0x01, 0x02, 0x03, 0x04, 0x05]);
 }
 
@@ -414,9 +541,14 @@ async fn vec_u8_param_roundtrip() {
     let row = client
         .query("SELECT @P1", &[&payload])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<Vec<u8>, _>(0usize), Some(payload));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<Vec<u8>, _>(0usize),
+        Some(payload)
+    );
 }
 
 #[tokio::test]
@@ -426,48 +558,68 @@ async fn empty_vec_u8_param_roundtrip() {
     let row = client
         .query("SELECT @P1", &[&payload])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<Vec<u8>, _>(0usize), Some(payload));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<Vec<u8>, _>(0usize),
+        Some(payload)
+    );
 }
 
 #[tokio::test]
 async fn naive_date_param_roundtrip() {
     let mut client = connect().await;
-    let d = chrono::NaiveDate::from_ymd_opt(2024, 7, 4).unwrap();
+    let d = chrono::NaiveDate::from_ymd_opt(2024, 7, 4).expect("valid test date");
     let row = client
         .query("SELECT @P1", &[&d])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<chrono::NaiveDate, _>(0usize), Some(d));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<chrono::NaiveDate, _>(0usize),
+        Some(d)
+    );
 }
 
 #[tokio::test]
 async fn naive_time_param_roundtrip() {
     let mut client = connect().await;
-    let t = chrono::NaiveTime::from_hms_nano_opt(12, 34, 56, 789_000_000).unwrap();
+    let t = chrono::NaiveTime::from_hms_nano_opt(12, 34, 56, 789_000_000).expect("valid test time");
     let row = client
         .query("SELECT @P1", &[&t])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<chrono::NaiveTime, _>(0usize), Some(t));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<chrono::NaiveTime, _>(0usize),
+        Some(t)
+    );
 }
 
 #[tokio::test]
 async fn naive_date_time_param_roundtrip() {
     let mut client = connect().await;
     let dt = chrono::NaiveDate::from_ymd_opt(1999, 12, 31)
-        .unwrap()
+        .expect("valid test date")
         .and_hms_milli_opt(23, 59, 58, 250)
-        .unwrap();
+        .expect("valid test time");
     let row = client
         .query("SELECT @P1", &[&dt])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(row[0].get::<chrono::NaiveDateTime, _>(0usize), Some(dt));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<chrono::NaiveDateTime, _>(0usize),
+        Some(dt)
+    );
 }
 
 #[tokio::test]
@@ -475,17 +627,20 @@ async fn datetime_fixed_offset_param_roundtrip() {
     use chrono::TimeZone;
     let mut client = connect().await;
     let dt = chrono::FixedOffset::east_opt(2 * 3600)
-        .unwrap()
+        .expect("valid test offset")
         .with_ymd_and_hms(2024, 1, 15, 9, 30, 0)
-        .unwrap();
+        .single()
+        .expect("valid test time");
     let row = client
         .query("SELECT @P1", &[&dt])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    let got = row[0]
+    let got = row
+        .first()
+        .expect("expected row at index 0")
         .get::<chrono::DateTime<chrono::FixedOffset>, _>(0usize)
-        .unwrap();
+        .expect("expected non-NULL column 0usize");
     assert_eq!(got, dt);
 }
 
@@ -493,15 +648,20 @@ async fn datetime_fixed_offset_param_roundtrip() {
 async fn datetime_utc_param_sends_offset_zero() {
     use chrono::TimeZone;
     let mut client = connect().await;
-    let dt_utc = chrono::Utc.with_ymd_and_hms(2024, 6, 1, 12, 0, 0).unwrap();
+    let dt_utc = chrono::Utc
+        .with_ymd_and_hms(2024, 6, 1, 12, 0, 0)
+        .single()
+        .expect("valid test datetime");
     let row = client
         .query("SELECT @P1", &[&dt_utc])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    let got = row[0]
+    let got = row
+        .first()
+        .expect("expected row at index 0")
         .get::<chrono::DateTime<chrono::FixedOffset>, _>(0usize)
-        .unwrap();
+        .expect("expected non-NULL column 0usize");
     assert_eq!(got.naive_utc(), dt_utc.naive_utc());
     assert_eq!(got.offset().local_minus_utc(), 0);
 }
@@ -514,51 +674,77 @@ async fn serde_json_value_param_variant_dispatch() {
     let rows = client
         .query("SELECT @P1", &[&null_value])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(rows[0].get::<Option<String>, _>(0usize), Some(None));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<Option<String>, _>(0usize),
+        Some(None)
+    );
 
     let bool_value = json!(true);
     let rows = client
         .query("SELECT @P1", &[&bool_value])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(rows[0].get::<bool, _>(0usize), Some(true));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<bool, _>(0usize),
+        Some(true)
+    );
 
     let int_value = json!(42);
     let rows = client
         .query("SELECT @P1", &[&int_value])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(rows[0].get::<i64, _>(0usize), Some(42));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i64, _>(0usize),
+        Some(42)
+    );
 
     let float_value = json!(2.5);
     let rows = client
         .query("SELECT @P1", &[&float_value])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    let got_float = rows[0].get::<f64, _>(0usize).unwrap();
+    let got_float = rows
+        .first()
+        .expect("expected row at index 0")
+        .get::<f64, _>(0usize)
+        .expect("expected non-NULL column 0usize");
     assert!((got_float - 2.5).abs() < f64::EPSILON);
 
     let string_value = json!("alice");
     let rows = client
         .query("SELECT @P1", &[&string_value])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
-    assert_eq!(rows[0].get::<String, _>(0usize), Some("alice".to_string()));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<String, _>(0usize),
+        Some("alice".to_string())
+    );
 
     let array_value = json!([1, 2, 3]);
     let rows = client
         .query("SELECT @P1", &[&array_value])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
     assert_eq!(
-        rows[0].get::<String, _>(0usize),
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<String, _>(0usize),
         Some(array_value.to_string())
     );
 
@@ -566,10 +752,12 @@ async fn serde_json_value_param_variant_dispatch() {
     let rows = client
         .query("SELECT @P1", &[&object_value])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT @P1")
         .into_first_result();
     assert_eq!(
-        rows[0].get::<String, _>(0usize),
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<String, _>(0usize),
         Some(object_value.to_string())
     );
 }
@@ -596,9 +784,14 @@ async fn readonly_login_smoke() {
     let row = client
         .query("SELECT 1", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 1")
         .into_first_result();
-    assert_eq!(row[0].get::<i32, _>(0usize), Some(1));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(1)
+    );
 }
 
 // =============================================================================
@@ -611,12 +804,27 @@ async fn multiple_rows() {
     let rows = client
         .query("SELECT value FROM (VALUES (1),(2),(3)) AS t(value)", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT value FROM (VALUES (1),(2),(3)) AS t(value)")
         .into_first_result();
     assert_eq!(rows.len(), 3);
-    assert_eq!(rows[0].get::<i32, _>(0usize), Some(1));
-    assert_eq!(rows[1].get::<i32, _>(0usize), Some(2));
-    assert_eq!(rows[2].get::<i32, _>(0usize), Some(3));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(1)
+    );
+    assert_eq!(
+        rows.get(1)
+            .expect("expected row at index 1")
+            .get::<i32, _>(0usize),
+        Some(2)
+    );
+    assert_eq!(
+        rows.get(2)
+            .expect("expected row at index 2")
+            .get::<i32, _>(0usize),
+        Some(3)
+    );
 }
 
 #[tokio::test]
@@ -625,12 +833,25 @@ async fn multiple_result_sets() {
     let results = client
         .query("SELECT 1; SELECT 'hello'", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 1; SELECT 'hello'")
         .into_results();
     assert_eq!(results.len(), 2);
-    assert_eq!(results[0][0].get::<i32, _>(0usize), Some(1));
     assert_eq!(
-        results[1][0].get::<String, _>(0usize),
+        results
+            .first()
+            .expect("expected result set at index 0")
+            .first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(1)
+    );
+    assert_eq!(
+        results
+            .get(1)
+            .expect("expected result set at index 1")
+            .first()
+            .expect("expected row at index 0")
+            .get::<String, _>(0usize),
         Some("hello".to_string())
     );
 }
@@ -641,7 +862,7 @@ async fn empty_result_set() {
     let rows = client
         .query("SELECT 1 WHERE 1=0", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 1 WHERE 1=0")
         .into_first_result();
     assert!(rows.is_empty());
 }
@@ -656,7 +877,7 @@ async fn execute_insert_update_delete() {
     client
         .simple_query("CREATE TABLE #dml_test (id int, name nvarchar(50))")
         .await
-        .unwrap();
+        .expect("query succeeds: CREATE TABLE #dml_test (id int, name nvarchar(50))");
 
     let result = client
         .execute(
@@ -664,7 +885,7 @@ async fn execute_insert_update_delete() {
             &[&1i32, &"test"],
         )
         .await
-        .unwrap();
+        .expect("execute succeeds: INSERT INTO #dml_test (id, name) VALUES (@P1, @P2)");
     assert_eq!(result.total(), 1);
 
     let result = client
@@ -673,13 +894,13 @@ async fn execute_insert_update_delete() {
             &[&"updated", &1i32],
         )
         .await
-        .unwrap();
+        .expect("execute succeeds: UPDATE #dml_test SET name = @P1 WHERE id = @P2");
     assert_eq!(result.total(), 1);
 
     let result = client
         .execute("DELETE FROM #dml_test WHERE id = @P1", &[&1i32])
         .await
-        .unwrap();
+        .expect("execute succeeds: DELETE FROM #dml_test WHERE id = @P1");
     assert_eq!(result.total(), 1);
 }
 
@@ -689,7 +910,7 @@ async fn mixed_statement_results_and_counts() {
     client
         .simple_query("CREATE TABLE #mixed_results (id int)")
         .await
-        .unwrap();
+        .expect("query succeeds: CREATE TABLE #mixed_results (id int)");
     let results = client
         .simple_query(
             "INSERT INTO #mixed_results VALUES (1); \
@@ -699,11 +920,22 @@ async fn mixed_statement_results_and_counts() {
              DELETE FROM #mixed_results",
         )
         .await
-        .unwrap()
+        .expect("query succeeds: INSERT INTO #mixed_results VALUES (1); SELECT id FROM #mixed_results WHERE 1 = 0; PRINT 'between ...")
         .into_results();
     assert_eq!(results.len(), 2);
-    assert!(results[0].is_empty());
-    assert_eq!(results[1][0].get::<i32, _>(0usize), Some(1));
+    assert!(results
+        .first()
+        .expect("expected result set at index 0")
+        .is_empty());
+    assert_eq!(
+        results
+            .get(1)
+            .expect("expected result set at index 1")
+            .first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(1)
+    );
 
     let result = client
         .execute(
@@ -715,9 +947,9 @@ async fn mixed_statement_results_and_counts() {
             &[],
         )
         .await
-        .unwrap();
+        .expect("execute succeeds: INSERT INTO #mixed_results VALUES (1), (2); PRINT 'between counts'; UPDATE #mixed_results SET id ...");
     assert_eq!(result.into_iter().collect::<Vec<_>>(), vec![2, 2, 0, 2]);
-    client.ping().await.unwrap();
+    client.ping().await.expect("ping connection");
 }
 
 #[tokio::test]
@@ -726,8 +958,11 @@ async fn simple_query_ddl() {
     client
         .simple_query("CREATE TABLE #ddl_test (id int)")
         .await
-        .unwrap();
-    client.simple_query("DROP TABLE #ddl_test").await.unwrap();
+        .expect("query succeeds: CREATE TABLE #ddl_test (id int)");
+    client
+        .simple_query("DROP TABLE #ddl_test")
+        .await
+        .expect("query succeeds: DROP TABLE #ddl_test");
 }
 
 // =============================================================================
@@ -740,21 +975,32 @@ async fn transaction_commit() {
     client
         .simple_query("CREATE TABLE #tx_commit (id int)")
         .await
-        .unwrap();
-    client.simple_query("BEGIN TRAN").await.unwrap();
+        .expect("query succeeds: CREATE TABLE #tx_commit (id int)");
+    client
+        .simple_query("BEGIN TRAN")
+        .await
+        .expect("query succeeds: BEGIN TRAN");
     client
         .simple_query("INSERT INTO #tx_commit VALUES (1)")
         .await
-        .unwrap();
-    client.simple_query("COMMIT").await.unwrap();
+        .expect("query succeeds: INSERT INTO #tx_commit VALUES (1)");
+    client
+        .simple_query("COMMIT")
+        .await
+        .expect("query succeeds: COMMIT");
 
     let rows = client
         .query("SELECT id FROM #tx_commit", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT id FROM #tx_commit")
         .into_first_result();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<i32, _>(0usize), Some(1));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -763,18 +1009,24 @@ async fn transaction_rollback() {
     client
         .simple_query("CREATE TABLE #tx_rollback (id int)")
         .await
-        .unwrap();
-    client.simple_query("BEGIN TRAN").await.unwrap();
+        .expect("query succeeds: CREATE TABLE #tx_rollback (id int)");
+    client
+        .simple_query("BEGIN TRAN")
+        .await
+        .expect("query succeeds: BEGIN TRAN");
     client
         .simple_query("INSERT INTO #tx_rollback VALUES (1)")
         .await
-        .unwrap();
-    client.simple_query("ROLLBACK").await.unwrap();
+        .expect("query succeeds: INSERT INTO #tx_rollback VALUES (1)");
+    client
+        .simple_query("ROLLBACK")
+        .await
+        .expect("query succeeds: ROLLBACK");
 
     let rows = client
         .query("SELECT id FROM #tx_rollback", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT id FROM #tx_rollback")
         .into_first_result();
     assert!(rows.is_empty());
 }
@@ -792,10 +1044,16 @@ async fn numeric_large() {
             &[],
         )
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST(99999999999999999999.999999 AS numeric(38,6))")
         .into_first_result();
-    let val = row[0].get::<rust_decimal::Decimal, _>(0usize).unwrap();
-    let expected: rust_decimal::Decimal = "99999999999999999999.999999".parse().unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<rust_decimal::Decimal, _>(0usize)
+        .expect("expected non-NULL column 0usize");
+    let expected: rust_decimal::Decimal = "99999999999999999999.999999"
+        .parse()
+        .expect("valid test decimal");
     assert_eq!(val, expected);
 }
 
@@ -805,10 +1063,14 @@ async fn money_type() {
     let row = client
         .query("SELECT CAST(1234.5678 AS money)", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST(1234.5678 AS money)")
         .into_first_result();
-    let val = row[0].get::<rust_decimal::Decimal, _>(0usize).unwrap();
-    let expected: rust_decimal::Decimal = "1234.5678".parse().unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<rust_decimal::Decimal, _>(0usize)
+        .expect("expected non-NULL column 0usize");
+    let expected: rust_decimal::Decimal = "1234.5678".parse().expect("valid test decimal");
     assert_eq!(val, expected);
 }
 
@@ -822,9 +1084,13 @@ async fn xml_type() {
     let row = client
         .query("SELECT CAST('<root><item>test</item></root>' AS xml)", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT CAST('<root><item>test</item></root>' AS xml)")
         .into_first_result();
-    let val = row[0].get::<String, _>(0usize).unwrap();
+    let val = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<String, _>(0usize)
+        .expect("expected non-NULL column 0usize");
     assert_eq!(val, "<root><item>test</item></root>");
 }
 
@@ -838,11 +1104,18 @@ async fn get_by_name() {
     let rows = client
         .query("SELECT 42 AS answer, 'hello' AS greeting", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 42 AS answer, 'hello' AS greeting")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("answer"), Some(42));
     assert_eq!(
-        rows[0].get::<String, _>("greeting"),
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("answer"),
+        Some(42)
+    );
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<String, _>("greeting"),
         Some("hello".to_string())
     );
 }
@@ -853,10 +1126,20 @@ async fn get_by_index() {
     let rows = client
         .query("SELECT 42 AS answer, 'hello' AS greeting", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 42 AS answer, 'hello' AS greeting")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>(0usize), Some(42));
-    assert_eq!(rows[0].get::<String, _>(1usize), Some("hello".to_string()));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(42)
+    );
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<String, _>(1usize),
+        Some("hello".to_string())
+    );
 }
 
 #[tokio::test]
@@ -865,11 +1148,17 @@ async fn column_metadata() {
     let rows = client
         .query("SELECT 42 AS answer, 'hello' AS greeting", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 42 AS answer, 'hello' AS greeting")
         .into_first_result();
-    let cols = rows[0].columns();
-    assert_eq!(cols[0].name(), "answer");
-    assert_eq!(cols[1].name(), "greeting");
+    let cols = rows.first().expect("expected row at index 0").columns();
+    assert_eq!(
+        cols.first().expect("expected column at index 0").name(),
+        "answer"
+    );
+    assert_eq!(
+        cols.get(1).expect("expected column at index 1").name(),
+        "greeting"
+    );
 }
 
 // --- &str borrowing (tiberius compat) ---
@@ -882,7 +1171,11 @@ async fn str_borrow_from_row() {
         .await
         .expect("query failed")
         .into_first_result();
-    let name: &str = rows[0].get("name").expect("should borrow &str");
+    let name: &str = rows
+        .first()
+        .expect("expected row at index 0")
+        .get("name")
+        .expect("should borrow &str");
     assert_eq!(name, "hello world");
 }
 
@@ -894,6 +1187,10 @@ async fn str_borrow_null() {
         .await
         .expect("query failed")
         .into_first_result();
-    let val: Option<&str> = rows[0].get("val").expect("option should work");
+    let val: Option<&str> = rows
+        .first()
+        .expect("expected row at index 0")
+        .get("val")
+        .expect("option should work");
     assert_eq!(val, None);
 }

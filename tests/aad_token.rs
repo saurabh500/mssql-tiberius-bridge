@@ -30,9 +30,12 @@ async fn aad_token_login() {
     let row = client
         .query("SELECT SUSER_SNAME()", &[])
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT SUSER_SNAME()")
         .into_first_result();
-    let sname = row[0].get::<&str, _>(0usize);
+    let sname = row
+        .first()
+        .expect("expected row at index 0")
+        .get::<&str, _>(0usize);
     assert!(sname.is_some(), "SUSER_SNAME() returned NULL");
     eprintln!("AAD login as: {sname:?}");
 }

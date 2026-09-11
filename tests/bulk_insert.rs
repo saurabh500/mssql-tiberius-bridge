@@ -111,7 +111,11 @@ async fn bulk_insert_thousand_rows() {
         .await
         .expect("select count failed")
         .into_first_result();
-    let n: i32 = count_rows[0].get("n").expect("missing count");
+    let n: i32 = count_rows
+        .first()
+        .expect("expected row at index 0")
+        .get("n")
+        .expect("missing count");
     assert_eq!(n, 1000);
 }
 
@@ -163,7 +167,7 @@ async fn bulk_insert_with_columns_and_named_mapping() {
     // for our raw `BulkLoadRow` impl (we have no source schema). The point
     // here is purely to cover the bridge-side builder forwarding paths;
     // we accept either Ok or Err — only the call site must execute.
-    let _ = r2;
+    drop(r2);
 }
 
 /// Exercises `BulkInsert::new` + `map_column_by_ordinal` against `inner_mut()`

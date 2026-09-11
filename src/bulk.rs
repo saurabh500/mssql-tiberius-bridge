@@ -255,20 +255,14 @@ mod tests {
     #[test]
     fn map_column_by_name_creates_named_mapping() {
         let m = ColumnMapping::by_name("src", "dst");
-        match m.source {
-            ColumnMappingSource::Name(n) => assert_eq!(n, "src"),
-            _ => panic!("expected Name mapping"),
-        }
+        assert!(matches!(m.source, ColumnMappingSource::Name(n) if n == "src"));
         assert_eq!(m.destination, "dst");
     }
 
     #[test]
     fn map_column_by_ordinal_creates_ordinal_mapping() {
         let m = ColumnMapping::by_ordinal(3, "dst");
-        match m.source {
-            ColumnMappingSource::Ordinal(n) => assert_eq!(n, 3),
-            _ => panic!("expected Ordinal mapping"),
-        }
+        assert!(matches!(m.source, ColumnMappingSource::Ordinal(3)));
         assert_eq!(m.destination, "dst");
     }
 
@@ -296,6 +290,6 @@ mod tests {
     #[test]
     fn bulk_copy_result_zero_elapsed_yields_zero_throughput() {
         let r = BulkCopyResult::new(100, Duration::ZERO);
-        assert_eq!(r.rows_per_second, 0.0);
+        assert_eq!(r.rows_per_second.to_bits(), 0.0_f64.to_bits());
     }
 }

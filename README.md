@@ -170,6 +170,17 @@ Uses SSPI via `secur32.dll`, which is part of every supported Windows install. *
 
 `mssql-tds` uses `native-tls`, which on Linux requires OpenSSL at runtime (already a dep of nearly every Linux distro and most container base images). Alpine needs `apk add openssl ca-certificates`.
 
+## Development
+
+`Cargo.toml` enables the Clippy lints listed in the
+[`microsoft/mssql-rs` workspace manifest](https://github.com/microsoft/mssql-rs/blob/main/Cargo.toml),
+including its commented-out lints. CI treats warnings as errors across all
+targets and features, including benchmarks:
+
+```sh
+cargo clippy --all-targets --all-features -- -D warnings
+```
+
 ## License
 
 MIT

@@ -24,13 +24,14 @@ const CANCEL_AFTER: Duration = Duration::from_millis(1);
 const WAIT_QUERY: &str = "WAITFOR DELAY '00:00:05'; SELECT 1 AS n";
 
 fn live_config() -> Option<Config> {
-    let password = match std::env::var("TEST_DB_PASSWORD") {
-        Ok(password) => password,
-        Err(std::env::VarError::NotPresent) => {
+    let password = match std::env::var_os("TEST_DB_PASSWORD") {
+        Some(password) => password
+            .into_string()
+            .expect("TEST_DB_PASSWORD must be valid Unicode"),
+        None => {
             eprintln!("TEST_DB_PASSWORD not set; skipping live cancellation test");
             return None;
         }
-        Err(std::env::VarError::NotUnicode(_)) => panic!("TEST_DB_PASSWORD is not valid Unicode"),
     };
     let mut config = Config::new();
     config
@@ -89,10 +90,10 @@ async fn cancel_after_poll<T>(future: impl Future<Output = T>) {
         poll!(future.as_mut()).is_pending(),
         "repro must reach a pending operation before starting the timeout"
     );
-    assert!(
-        timeout(CANCEL_AFTER, future).await.is_err(),
-        "repro must time out, not complete"
-    );
+    timeout(CANCEL_AFTER, future)
+        .await
+        .map(|_| ())
+        .expect_err("repro must time out, not complete");
 }
 
 async fn assert_select_one(client: &mut Client) {
@@ -101,7 +102,12 @@ async fn assert_select_one(client: &mut Client) {
         .expect("follow-up SELECT timed out")
         .expect("follow-up SELECT failed")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("n"), Some(1));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("n"),
+        Some(1)
+    );
     assert!(!client.is_connection_dead());
 }
 
@@ -120,7 +126,13 @@ async fn delayed_results(
         .expect("first result must arrive before WAITFOR completes")
         .expect("missing first row")
         .expect("first row failed");
-    assert_eq!(first.get::<&str, _>("payload").unwrap().len(), 16000);
+    assert_eq!(
+        first
+            .get::<&str, _>("payload")
+            .expect("expected non-NULL column payload")
+            .len(),
+        16000
+    );
     stream
 }
 
@@ -224,8 +236,18 @@ async fn cancelling_only_next_retains_resumable_stream() {
         .expect("retained stream did not resume")
         .expect("retained stream failed");
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].get::<i32, _>("n"), Some(1));
-    assert_eq!(rows[1].get::<i32, _>("n"), Some(2));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("n"),
+        Some(1)
+    );
+    assert_eq!(
+        rows.get(1)
+            .expect("expected row at index 1")
+            .get::<i32, _>("n"),
+        Some(2)
+    );
     assert_select_one(&mut client).await;
 }
 
@@ -392,14 +414,18 @@ async fn cancelling_bulk_write_marks_native_connection_dead() {
             client.bulk_insert_with_columns("#CancelBulk", &["n"])
         };
         let mut send = Box::pin(bulk.send([PausedRow { entered: &entered }]));
-        timeout(IO_BOUND, async {
+        let entered_row_writer = timeout(IO_BOUND, async {
             tokio::select! {
-                _ = entered.notified() => {}
-                _ = send.as_mut() => panic!("bulk send must remain pending inside write_to_packet"),
+                _ = entered.notified() => true,
+                _ = send.as_mut() => false,
             }
         })
         .await
         .expect("bulk send never entered row writing");
+        assert!(
+            entered_row_writer,
+            "bulk send must remain pending inside write_to_packet"
+        );
         drop(send);
         assert_retired(&mut client);
         assert_rejected(
@@ -481,7 +507,7 @@ async fn pool_rejects_cancelled_client_and_replaces_its_session() {
             .max_size(1)
             .build()
             .expect("pool build failed");
-        let mut connection = timeout(IO_BOUND, pool.get())
+        let mut connection = timeout(IO_BOUND, Box::pin(pool.get()))
             .await
             .expect("pool checkout timed out")
             .expect("pool checkout failed");
@@ -502,7 +528,7 @@ async fn pool_rejects_cancelled_client_and_replaces_its_session() {
         ));
         drop(connection);
 
-        let mut replacement = timeout(IO_BOUND, pool.get())
+        let mut replacement = timeout(IO_BOUND, Box::pin(pool.get()))
             .await
             .expect("pool stalled recycling cancelled client")
             .expect("replacement checkout failed");
@@ -522,7 +548,12 @@ async fn pool_rejects_cancelled_client_and_replaces_its_session() {
         .expect("replacement query timed out")
         .expect("replacement query failed")
         .into_first_result();
-        assert_eq!(rows[0].get::<i32, _>("fresh"), Some(1));
+        assert_eq!(
+            rows.first()
+                .expect("expected row at index 0")
+                .get::<i32, _>("fresh"),
+            Some(1)
+        );
         assert_select_one(&mut replacement).await;
     }
 }

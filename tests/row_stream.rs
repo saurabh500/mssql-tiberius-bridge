@@ -45,14 +45,29 @@ async fn into_row_stream_yields_all_rows() {
     let stream = client
         .simple_query("SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3")
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3")
         .into_row_stream();
 
-    let rows: Vec<Row> = stream.try_collect().await.unwrap();
+    let rows: Vec<Row> = stream.try_collect().await.expect("collect query rows");
     assert_eq!(rows.len(), 3);
-    assert_eq!(rows[0].get::<i32, _>("n"), Some(1));
-    assert_eq!(rows[1].get::<i32, _>("n"), Some(2));
-    assert_eq!(rows[2].get::<i32, _>("n"), Some(3));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("n"),
+        Some(1)
+    );
+    assert_eq!(
+        rows.get(1)
+            .expect("expected row at index 1")
+            .get::<i32, _>("n"),
+        Some(2)
+    );
+    assert_eq!(
+        rows.get(2)
+            .expect("expected row at index 2")
+            .get::<i32, _>("n"),
+        Some(3)
+    );
 }
 
 #[tokio::test]
@@ -63,13 +78,19 @@ async fn into_row_stream_supports_map_next() {
     let mut stream = client
         .simple_query("SELECT 'hello' AS s UNION ALL SELECT 'world'")
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 'hello' AS s UNION ALL SELECT 'world'")
         .into_row_stream()
-        .map(|row| row.map(|r| r.get::<&str, _>("s").unwrap().to_string()));
+        .map(|row| {
+            row.map(|r| {
+                r.get::<&str, _>("s")
+                    .expect("expected non-NULL column s")
+                    .to_string()
+            })
+        });
 
     let mut got = Vec::new();
     while let Some(item) = stream.next().await {
-        got.push(item.unwrap());
+        got.push(item.expect("read stream row"));
     }
     assert_eq!(got, vec!["hello".to_string(), "world".to_string()]);
 }
@@ -86,16 +107,28 @@ async fn into_row_stream_dropped_early_does_not_panic() {
         let mut stream = client
             .simple_query("SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3")
             .await
-            .unwrap()
+            .expect("query succeeds: SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3")
             .into_row_stream();
         // Pull only the first row, then drop.
-        let _ = stream.next().await;
+        stream
+            .next()
+            .await
+            .expect("expected first stream row")
+            .expect("read first stream row");
     }
 
     // Client should still work for further queries.
-    let rows = client.simple_query("SELECT 42 AS n").await.unwrap();
+    let rows = client
+        .simple_query("SELECT 42 AS n")
+        .await
+        .expect("query succeeds: SELECT 42 AS n");
     let rows = rows.into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("n"), Some(42));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("n"),
+        Some(42)
+    );
 }
 
 #[tokio::test]
@@ -104,9 +137,9 @@ async fn into_row_stream_empty_result_set() {
     let stream = client
         .simple_query("SELECT 1 AS n WHERE 1 = 0")
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 1 AS n WHERE 1 = 0")
         .into_row_stream();
-    let rows: Vec<Row> = stream.try_collect().await.unwrap();
+    let rows: Vec<Row> = stream.try_collect().await.expect("collect query rows");
     assert_eq!(rows.len(), 0);
 }
 
@@ -116,12 +149,22 @@ async fn into_row_stream_flattens_multiple_result_sets() {
     let stream = client
         .simple_query("SELECT 1 AS n; SELECT 2 AS n")
         .await
-        .unwrap()
+        .expect("query succeeds: SELECT 1 AS n; SELECT 2 AS n")
         .into_row_stream();
-    let rows: Vec<Row> = stream.try_collect().await.unwrap();
+    let rows: Vec<Row> = stream.try_collect().await.expect("collect query rows");
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].get::<i32, _>("n"), Some(1));
-    assert_eq!(rows[1].get::<i32, _>("n"), Some(2));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("n"),
+        Some(1)
+    );
+    assert_eq!(
+        rows.get(1)
+            .expect("expected row at index 1")
+            .get::<i32, _>("n"),
+        Some(2)
+    );
 }
 
 // =============================================================================
@@ -134,10 +177,13 @@ async fn query_streamed_yields_all_rows_in_order() {
     let stream = client.simple_query_streamed(
         "SELECT 1 AS n UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4",
     );
-    let rows: Vec<Row> = stream.try_collect().await.unwrap();
+    let rows: Vec<Row> = stream.try_collect().await.expect("collect query rows");
     assert_eq!(rows.len(), 4);
     for (i, row) in rows.iter().enumerate() {
-        assert_eq!(row.get::<i32, _>("n"), Some(i as i32 + 1));
+        assert_eq!(
+            row.get::<i32, _>("n"),
+            Some(i32::try_from(i).expect("row index fits i32") + 1)
+        );
     }
 }
 
@@ -145,17 +191,27 @@ async fn query_streamed_yields_all_rows_in_order() {
 async fn query_streamed_with_params_roundtrips() {
     let mut client = connect().await;
     let stream = client.query_streamed("SELECT @P1 AS a, @P2 AS b", &[&7i32, &"hi"]);
-    let rows: Vec<Row> = stream.try_collect().await.unwrap();
+    let rows: Vec<Row> = stream.try_collect().await.expect("collect query rows");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<i32, _>("a"), Some(7));
-    assert_eq!(rows[0].get::<&str, _>("b"), Some("hi"));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("a"),
+        Some(7)
+    );
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<&str, _>("b"),
+        Some("hi")
+    );
 }
 
 #[tokio::test]
 async fn query_streamed_empty_result_set() {
     let mut client = connect().await;
     let stream = client.simple_query_streamed("SELECT 1 AS n WHERE 1 = 0");
-    let rows: Vec<Row> = stream.try_collect().await.unwrap();
+    let rows: Vec<Row> = stream.try_collect().await.expect("collect query rows");
     assert!(rows.is_empty());
 }
 
@@ -163,11 +219,26 @@ async fn query_streamed_empty_result_set() {
 async fn query_streamed_flattens_multiple_result_sets() {
     let mut client = connect().await;
     let stream = client.simple_query_streamed("SELECT 1 AS n; SELECT 2 AS n; SELECT 3 AS n");
-    let rows: Vec<Row> = stream.try_collect().await.unwrap();
+    let rows: Vec<Row> = stream.try_collect().await.expect("collect query rows");
     assert_eq!(rows.len(), 3);
-    assert_eq!(rows[0].get::<i32, _>("n"), Some(1));
-    assert_eq!(rows[1].get::<i32, _>("n"), Some(2));
-    assert_eq!(rows[2].get::<i32, _>("n"), Some(3));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("n"),
+        Some(1)
+    );
+    assert_eq!(
+        rows.get(1)
+            .expect("expected row at index 1")
+            .get::<i32, _>("n"),
+        Some(2)
+    );
+    assert_eq!(
+        rows.get(2)
+            .expect("expected row at index 2")
+            .get::<i32, _>("n"),
+        Some(3)
+    );
 }
 
 #[tokio::test]
@@ -176,7 +247,7 @@ async fn query_streamed_skips_no_row_statements() {
     client
         .simple_query("CREATE TABLE #stream_results (id int)")
         .await
-        .unwrap();
+        .expect("query succeeds: CREATE TABLE #stream_results (id int)");
     let rows: Vec<Row> = client
         .query_streamed(
             "INSERT INTO #stream_results VALUES (@P1); \
@@ -189,11 +260,21 @@ async fn query_streamed_skips_no_row_statements() {
         )
         .try_collect()
         .await
-        .unwrap();
+        .expect("collect query rows");
     assert_eq!(rows.len(), 2);
-    assert_eq!(rows[0].get::<i32, _>("id"), Some(7));
-    assert_eq!(rows[1].get::<i32, _>("id"), Some(8));
-    client.ping().await.unwrap();
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("id"),
+        Some(7)
+    );
+    assert_eq!(
+        rows.get(1)
+            .expect("expected row at index 1")
+            .get::<i32, _>("id"),
+        Some(8)
+    );
+    client.ping().await.expect("ping connection");
 }
 
 #[tokio::test]
@@ -206,15 +287,27 @@ async fn query_streamed_pulls_lazily_one_at_a_time() {
     {
         let mut stream =
             client.simple_query_streamed("SELECT 10 AS n UNION ALL SELECT 20 UNION ALL SELECT 30");
-        let first = stream.next().await.unwrap().unwrap();
+        let first = stream
+            .next()
+            .await
+            .expect("expected stream row")
+            .expect("read stream row");
         assert_eq!(first.get::<i32, _>("n"), Some(10));
         // Drop stream mid-result-set.
     }
     // Client must remain usable for a follow-up query (this exercises
     // mssql-tds' state recovery when an unread result set is abandoned).
-    let rs = client.simple_query("SELECT 99 AS n").await.unwrap();
+    let rs = client
+        .simple_query("SELECT 99 AS n")
+        .await
+        .expect("query succeeds: SELECT 99 AS n");
     let rows = rs.into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("n"), Some(99));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("n"),
+        Some(99)
+    );
 }
 
 #[tokio::test]
@@ -223,7 +316,13 @@ async fn query_streamed_supports_map_next() {
     let mut client = connect().await;
     let stream = client
         .simple_query_streamed("SELECT 'a' AS s UNION ALL SELECT 'b'")
-        .map(|row| row.map(|r| r.get::<&str, _>("s").unwrap().to_string()));
-    let got: Vec<String> = stream.try_collect().await.unwrap();
+        .map(|row| {
+            row.map(|r| {
+                r.get::<&str, _>("s")
+                    .expect("expected non-NULL column s")
+                    .to_string()
+            })
+        });
+    let got: Vec<String> = stream.try_collect().await.expect("collect query rows");
     assert_eq!(got, vec!["a".to_string(), "b".to_string()]);
 }

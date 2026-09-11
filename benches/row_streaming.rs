@@ -36,7 +36,7 @@ FROM sys.all_objects a CROSS JOIN sys.all_objects b;
 ";
 
 fn bench_streaming_rows(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
+    let rt = Runtime::new().expect("benchmark runtime should start");
 
     rt.block_on(async {
         let cfg = test_config();
@@ -62,7 +62,9 @@ fn bench_streaming_rows(c: &mut Criterion) {
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let cfg = test_config();
-                let mut client = Client::connect(&cfg).await.unwrap();
+                let mut client = Client::connect(&cfg)
+                    .await
+                    .expect("benchmark connection failed");
                 let mut total = std::time::Duration::ZERO;
                 for _ in 0..iters {
                     let start = Instant::now();
@@ -71,7 +73,7 @@ fn bench_streaming_rows(c: &mut Criterion) {
                     );
                     let mut count = 0u64;
                     while let Some(row) = stream.next().await {
-                        let _ = row.unwrap();
+                        row.expect("streamed benchmark row failed");
                         count += 1;
                     }
                     total += start.elapsed();
@@ -84,7 +86,7 @@ fn bench_streaming_rows(c: &mut Criterion) {
 }
 
 fn bench_buffered_rows(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
+    let rt = Runtime::new().expect("benchmark runtime should start");
 
     rt.block_on(async {
         let cfg = test_config();
@@ -110,14 +112,16 @@ fn bench_buffered_rows(c: &mut Criterion) {
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let cfg = test_config();
-                let mut client = Client::connect(&cfg).await.unwrap();
+                let mut client = Client::connect(&cfg)
+                    .await
+                    .expect("benchmark connection failed");
                 let mut total = std::time::Duration::ZERO;
                 for _ in 0..iters {
                     let start = Instant::now();
                     let result = client
                         .simple_query("SELECT id, name, value, created_at FROM dbo.bench_rows")
                         .await
-                        .unwrap();
+                        .expect("buffered benchmark query failed");
                     let rows = result.into_first_result();
                     total += start.elapsed();
                     assert_eq!(rows.len(), 100000);
@@ -129,7 +133,7 @@ fn bench_buffered_rows(c: &mut Criterion) {
 }
 
 fn bench_into_row_stream(c: &mut Criterion) {
-    let rt = Runtime::new().unwrap();
+    let rt = Runtime::new().expect("benchmark runtime should start");
 
     rt.block_on(async {
         let cfg = test_config();
@@ -155,18 +159,20 @@ fn bench_into_row_stream(c: &mut Criterion) {
         b.iter_custom(|iters| {
             rt.block_on(async {
                 let cfg = test_config();
-                let mut client = Client::connect(&cfg).await.unwrap();
+                let mut client = Client::connect(&cfg)
+                    .await
+                    .expect("benchmark connection failed");
                 let mut total = std::time::Duration::ZERO;
                 for _ in 0..iters {
                     let start = Instant::now();
                     let result = client
                         .simple_query("SELECT id, name, value, created_at FROM dbo.bench_rows")
                         .await
-                        .unwrap();
+                        .expect("benchmark query failed");
                     let mut stream = result.into_row_stream();
                     let mut count = 0u64;
                     while let Some(row) = stream.next().await {
-                        let _ = row.unwrap();
+                        row.expect("buffered benchmark row failed");
                         count += 1;
                     }
                     total += start.elapsed();

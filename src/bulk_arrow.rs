@@ -22,7 +22,7 @@
 //! let batch = RecordBatch::try_new(schema, vec![
 //!     Arc::new(Int32Array::from(vec![1, 2, 3])),
 //!     Arc::new(StringArray::from(vec!["Ada", "Grace", "Hedy"])),
-//! ]).unwrap();
+//! ]).expect("example columns match the schema");
 //!
 //! let result = client
 //!     .bulk_insert("Users")
@@ -74,8 +74,7 @@ impl BulkLoadRow for ArrowBulkRow {
         writer: &mut StreamingBulkLoadWriter<'_>,
         column_index: &mut usize,
     ) -> TdsResult<()> {
-        for col in 0..self.batch.num_columns() {
-            let array = self.batch.column(col);
+        for array in self.batch.columns() {
             let value = arrow_value_to_column_value(array.as_ref(), self.row_idx)
                 .map_err(|e| TdsError::UsageError(e.to_string()))?;
             writer.write_column_value(*column_index, &value).await?;
@@ -87,8 +86,15 @@ impl BulkLoadRow for ArrowBulkRow {
 
 /// Convert a single Arrow array cell at `idx` into a TDS [`ColumnValues`].
 ///
-/// Returns [`Error::Tds`] (`UsageError`) for unsupported Arrow data types.
+/// Returns [`Error::Tds`] (`UsageError`) for unsupported Arrow data types,
+/// out-of-bounds indices, or values outside the destination type's range.
 pub fn arrow_value_to_column_value(array: &dyn Array, idx: usize) -> Result<ColumnValues> {
+    if idx >= array.len() {
+        return Err(usage(format!(
+            "Arrow row index {idx} is out of bounds for array length {}",
+            array.len()
+        )));
+    }
     if array.is_null(idx) {
         // Null column-value is encoded by the writer based on the destination
         // column's type, not the source. The streaming writer accepts a typed
@@ -116,7 +122,7 @@ pub fn arrow_value_to_column_value(array: &dyn Array, idx: usize) -> Result<Colu
         }
         DataType::Int8 => {
             let a = downcast::<Int8Array>(array, "Int8")?;
-            ColumnValues::SmallInt(a.value(idx) as i16)
+            ColumnValues::SmallInt(i16::from(a.value(idx)))
         }
         DataType::Int16 => {
             let a = downcast::<Int16Array>(array, "Int16")?;
@@ -136,11 +142,11 @@ pub fn arrow_value_to_column_value(array: &dyn Array, idx: usize) -> Result<Colu
         }
         DataType::UInt16 => {
             let a = downcast::<UInt16Array>(array, "UInt16")?;
-            ColumnValues::Int(a.value(idx) as i32)
+            ColumnValues::Int(i32::from(a.value(idx)))
         }
         DataType::UInt32 => {
             let a = downcast::<UInt32Array>(array, "UInt32")?;
-            ColumnValues::BigInt(a.value(idx) as i64)
+            ColumnValues::BigInt(i64::from(a.value(idx)))
         }
         DataType::Float32 => {
             let a = downcast::<Float32Array>(array, "Float32")?;
@@ -176,28 +182,38 @@ pub fn arrow_value_to_column_value(array: &dyn Array, idx: usize) -> Result<Colu
             let days = days_from_unix_epoch
                 .checked_add(ARROW_EPOCH_OFFSET_DAYS)
                 .ok_or_else(|| usage("Date32 overflow translating to TDS DATE"))?;
-            if days < 0 {
-                return Err(usage(format!(
-                    "Date32 value {days_from_unix_epoch} predates SQL Server DATE epoch (0001-01-01)"
-                )));
-            }
-            let date = SqlDate::create(days as u32).map_err(Error::Tds)?;
+            let days = u32::try_from(days).map_err(|error| {
+                usage(format!(
+                    "Date32 value {days_from_unix_epoch} predates SQL Server DATE epoch (0001-01-01): {error}"
+                ))
+            })?;
+            let date = SqlDate::create(days).map_err(Error::Tds)?;
             ColumnValues::Date(date)
         }
         DataType::Time64(unit) => {
             let nanos: u64 = match unit {
                 TimeUnit::Microsecond => {
                     let a = downcast::<Time64MicrosecondArray>(array, "Time64(µs)")?;
-                    (a.value(idx) as u64).saturating_mul(1_000)
+                    u64::try_from(a.value(idx))
+                        .map_err(|error| {
+                            usage(format!("Time64 value must not be negative: {error}"))
+                        })?
+                        .checked_mul(1_000)
+                        .ok_or_else(|| usage("Time64 overflow translating to TDS TIME"))?
                 }
                 TimeUnit::Nanosecond => {
                     let a = downcast::<Time64NanosecondArray>(array, "Time64(ns)")?;
-                    a.value(idx) as u64
+                    u64::try_from(a.value(idx)).map_err(|error| {
+                        usage(format!("Time64 value must not be negative: {error}"))
+                    })?
                 }
                 _ => {
                     return Err(usage(format!("Time64 unsupported time unit {unit:?}")));
                 }
             };
+            if nanos >= 86_400 * 1_000_000_000 {
+                return Err(usage("Time64 value must be less than one day"));
+            }
             ColumnValues::Time(SqlTime {
                 time_nanoseconds: nanos,
                 scale: DEFAULT_VARTIME_SCALE,
@@ -225,17 +241,22 @@ pub fn arrow_value_to_column_value(array: &dyn Array, idx: usize) -> Result<Colu
             // Split into days-since-1970 and intra-day nanos, then shift to TDS epoch.
             let nanos_per_day: i64 = 86_400 * 1_000_000_000;
             let days_unix = nanos_since_unix.div_euclid(nanos_per_day);
-            let intraday = nanos_since_unix.rem_euclid(nanos_per_day) as u64;
+            let intraday =
+                u64::try_from(nanos_since_unix.rem_euclid(nanos_per_day)).map_err(|error| {
+                    usage(format!(
+                        "Timestamp has invalid intraday nanoseconds: {error}"
+                    ))
+                })?;
             let days_tds = days_unix
-                .checked_add(ARROW_EPOCH_OFFSET_DAYS as i64)
+                .checked_add(i64::from(ARROW_EPOCH_OFFSET_DAYS))
                 .ok_or_else(|| usage("Timestamp overflow translating to TDS DATETIME2"))?;
-            if days_tds < 0 {
-                return Err(usage(
-                    "Timestamp predates SQL Server DATETIME2 epoch (0001-01-01)",
-                ));
-            }
+            let days_tds = u32::try_from(days_tds).map_err(|error| {
+                usage(format!(
+                    "Timestamp predates SQL Server DATETIME2 epoch (0001-01-01): {error}"
+                ))
+            })?;
             ColumnValues::DateTime2(SqlDateTime2 {
-                days: days_tds as u32,
+                days: days_tds,
                 time: SqlTime {
                     time_nanoseconds: intraday,
                     scale: DEFAULT_VARTIME_SCALE,
@@ -244,10 +265,14 @@ pub fn arrow_value_to_column_value(array: &dyn Array, idx: usize) -> Result<Colu
         }
         DataType::Decimal128(precision, scale) => {
             let a = downcast::<Decimal128Array>(array, "Decimal128")?;
+            let tds_scale = u8::try_from(*scale).map_err(|error| {
+                usage(format!(
+                    "Decimal128 negative scale is unsupported for TDS DECIMAL: {error}"
+                ))
+            })?;
             let raw: i128 = a.value(idx);
             let s = format_decimal128(raw, *scale);
-            let parts =
-                DecimalParts::from_string(&s, *precision, *scale as u8).map_err(Error::Tds)?;
+            let parts = DecimalParts::from_string(&s, *precision, tds_scale).map_err(Error::Tds)?;
             ColumnValues::Decimal(parts)
         }
         other => {
@@ -300,23 +325,20 @@ fn format_decimal128(raw: i128, scale: i8) -> String {
     if scale <= 0 {
         // Integer (no fractional digits). Multiply by 10^|scale|.
         let mut s = raw.to_string();
-        for _ in 0..(-scale) {
+        for _ in 0..scale.unsigned_abs() {
             s.push('0');
         }
         return s;
     }
-    let scale = scale as usize;
+    let scale = usize::from(scale.unsigned_abs());
     let neg = raw < 0;
-    let mag = if neg {
-        // i128::MIN abs is fine via wrapping; bulk insert won't hit this in practice.
-        raw.unsigned_abs()
-    } else {
-        raw as u128
-    };
+    let mag = raw.unsigned_abs();
     let mag_s = mag.to_string();
     let s = if mag_s.len() > scale {
         let split = mag_s.len() - scale;
-        format!("{}.{}", &mag_s[..split], &mag_s[split..])
+        let integer: String = mag_s.chars().take(split).collect();
+        let fraction: String = mag_s.chars().skip(split).collect();
+        format!("{integer}.{fraction}")
     } else {
         let zeros = "0".repeat(scale - mag_s.len());
         format!("0.{zeros}{mag_s}")
@@ -378,12 +400,13 @@ mod tests {
     };
 
     #[test]
-    fn convert_bool() {
+    fn convert_bool() -> Result<()> {
         let a = BooleanArray::from(vec![Some(true), Some(false)]);
-        match arrow_value_to_column_value(&a, 0).unwrap() {
-            ColumnValues::Bit(b) => assert!(b),
-            v => panic!("expected Bit, got {v:?}"),
+        match arrow_value_to_column_value(&a, 0)? {
+            ColumnValues::Bit(true) => {}
+            v => return Err(usage(format!("expected Bit(true), got {v:?}"))),
         }
+        Ok(())
     }
 
     #[test]
@@ -394,23 +417,23 @@ mod tests {
         let i64 = Int64Array::from(vec![5_000_000_000_i64]);
         let u8 = UInt8Array::from(vec![255]);
         assert!(matches!(
-            arrow_value_to_column_value(&i8, 0).unwrap(),
+            arrow_value_to_column_value(&i8, 0).expect("Int8 conversion should succeed"),
             ColumnValues::SmallInt(-3)
         ));
         assert!(matches!(
-            arrow_value_to_column_value(&i16, 0).unwrap(),
+            arrow_value_to_column_value(&i16, 0).expect("Int16 conversion should succeed"),
             ColumnValues::SmallInt(-300)
         ));
         assert!(matches!(
-            arrow_value_to_column_value(&i32, 0).unwrap(),
+            arrow_value_to_column_value(&i32, 0).expect("Int32 conversion should succeed"),
             ColumnValues::Int(70_000)
         ));
         assert!(matches!(
-            arrow_value_to_column_value(&i64, 0).unwrap(),
+            arrow_value_to_column_value(&i64, 0).expect("Int64 conversion should succeed"),
             ColumnValues::BigInt(5_000_000_000)
         ));
         assert!(matches!(
-            arrow_value_to_column_value(&u8, 0).unwrap(),
+            arrow_value_to_column_value(&u8, 0).expect("UInt8 conversion should succeed"),
             ColumnValues::TinyInt(255)
         ));
     }
@@ -420,80 +443,89 @@ mod tests {
         let f32 = Float32Array::from(vec![1.5_f32]);
         let f64 = Float64Array::from(vec![std::f64::consts::PI]);
         assert!(matches!(
-            arrow_value_to_column_value(&f32, 0).unwrap(),
+            arrow_value_to_column_value(&f32, 0).expect("Float32 conversion should succeed"),
             ColumnValues::Real(v) if (v - 1.5).abs() < 1e-6
         ));
         assert!(matches!(
-            arrow_value_to_column_value(&f64, 0).unwrap(),
+            arrow_value_to_column_value(&f64, 0).expect("Float64 conversion should succeed"),
             ColumnValues::Float(v) if (v - std::f64::consts::PI).abs() < 1e-12
         ));
     }
 
     #[test]
-    fn convert_string() {
+    fn convert_string() -> Result<()> {
         let s = StringArray::from(vec!["hello"]);
-        match arrow_value_to_column_value(&s, 0).unwrap() {
-            ColumnValues::String(s) => assert_eq!(s.to_utf8_string(), "hello"),
-            v => panic!("expected String, got {v:?}"),
+        match arrow_value_to_column_value(&s, 0)? {
+            ColumnValues::String(s) if s.to_utf8_string() == "hello" => {}
+            v => return Err(usage(format!("expected String(\"hello\"), got {v:?}"))),
         }
+        Ok(())
     }
 
     #[test]
-    fn convert_date32_at_unix_epoch_is_tds_epoch_offset() {
+    fn convert_date32_at_unix_epoch_is_tds_epoch_offset() -> Result<()> {
         let d = Date32Array::from(vec![0_i32]); // 1970-01-01
-        match arrow_value_to_column_value(&d, 0).unwrap() {
-            ColumnValues::Date(date) => assert_eq!(date.get_days(), ARROW_EPOCH_OFFSET_DAYS as u32),
-            v => panic!("expected Date, got {v:?}"),
+        match arrow_value_to_column_value(&d, 0)? {
+            ColumnValues::Date(date)
+                if i64::from(date.get_days()) == i64::from(ARROW_EPOCH_OFFSET_DAYS) => {}
+            v => return Err(usage(format!("expected Date at Unix epoch, got {v:?}"))),
         }
+        Ok(())
     }
 
     #[test]
-    fn convert_timestamp_us_at_unix_epoch() {
+    fn convert_timestamp_us_at_unix_epoch() -> Result<()> {
         let ts = TimestampMicrosecondArray::from(vec![0_i64]); // 1970-01-01 00:00:00
-        match arrow_value_to_column_value(&ts, 0).unwrap() {
-            ColumnValues::DateTime2(dt) => {
-                assert_eq!(dt.days, ARROW_EPOCH_OFFSET_DAYS as u32);
-                assert_eq!(dt.time.time_nanoseconds, 0);
+        match arrow_value_to_column_value(&ts, 0)? {
+            ColumnValues::DateTime2(dt)
+                if i64::from(dt.days) == i64::from(ARROW_EPOCH_OFFSET_DAYS)
+                    && dt.time.time_nanoseconds == 0 => {}
+            v => {
+                return Err(usage(format!(
+                    "expected DateTime2 at Unix epoch, got {v:?}"
+                )))
             }
-            v => panic!("expected DateTime2, got {v:?}"),
         }
+        Ok(())
     }
 
     #[test]
-    fn convert_decimal128_positive_and_negative() {
+    fn convert_decimal128_positive_and_negative() -> Result<()> {
         // 12345 with scale 2 -> "123.45"
         let d = Decimal128Array::from(vec![12_345_i128])
             .with_precision_and_scale(10, 2)
-            .unwrap();
-        match arrow_value_to_column_value(&d, 0).unwrap() {
-            ColumnValues::Decimal(p) => assert_eq!(p.to_string(), "123.45"),
-            v => panic!("expected Decimal, got {v:?}"),
+            .map_err(|error| usage(format!("decimal fixture creation failed: {error}")))?;
+        match arrow_value_to_column_value(&d, 0)? {
+            ColumnValues::Decimal(p) if p.to_string() == "123.45" => {}
+            v => return Err(usage(format!("expected Decimal(123.45), got {v:?}"))),
         }
         let d = Decimal128Array::from(vec![-12_345_i128])
             .with_precision_and_scale(10, 2)
-            .unwrap();
-        match arrow_value_to_column_value(&d, 0).unwrap() {
-            ColumnValues::Decimal(p) => assert_eq!(p.to_string(), "-123.45"),
-            v => panic!("expected Decimal, got {v:?}"),
+            .map_err(|error| usage(format!("decimal fixture creation failed: {error}")))?;
+        match arrow_value_to_column_value(&d, 0)? {
+            ColumnValues::Decimal(p) if p.to_string() == "-123.45" => {}
+            v => return Err(usage(format!("expected Decimal(-123.45), got {v:?}"))),
         }
+        Ok(())
     }
 
     #[test]
-    fn convert_decimal128_smaller_than_scale_pads_zeros() {
+    fn convert_decimal128_smaller_than_scale_pads_zeros() -> Result<()> {
         // 5 with scale 3 -> "0.005"
         let d = Decimal128Array::from(vec![5_i128])
             .with_precision_and_scale(10, 3)
-            .unwrap();
-        match arrow_value_to_column_value(&d, 0).unwrap() {
-            ColumnValues::Decimal(p) => assert_eq!(p.to_string(), "0.005"),
-            v => panic!("expected Decimal, got {v:?}"),
+            .map_err(|error| usage(format!("decimal fixture creation failed: {error}")))?;
+        match arrow_value_to_column_value(&d, 0)? {
+            ColumnValues::Decimal(p) if p.to_string() == "0.005" => {}
+            v => return Err(usage(format!("expected Decimal(0.005), got {v:?}"))),
         }
+        Ok(())
     }
 
     #[test]
     fn null_value_returns_typed_null_marker() {
         let s = StringArray::from(vec![None::<&str>]);
-        let v = arrow_value_to_column_value(&s, 0).unwrap();
+        let v = arrow_value_to_column_value(&s, 0).expect("null string conversion should succeed");
         // Conversion succeeds; the actual NULL emission happens in the writer.
         assert!(matches!(v, ColumnValues::String(_)));
     }
@@ -503,13 +535,11 @@ mod tests {
         // Date64 is intentionally unsupported in v1
         use arrow_array::Date64Array;
         let d = Date64Array::from(vec![0_i64]);
-        let err = arrow_value_to_column_value(&d, 0).unwrap_err();
-        match err {
-            Error::Tds(TdsError::UsageError(m)) => {
-                assert!(m.contains("unsupported"), "msg was: {m}");
-            }
-            e => panic!("expected UsageError, got {e:?}"),
-        }
+        let err = arrow_value_to_column_value(&d, 0).expect_err("Date64 must be rejected");
+        assert!(matches!(
+            err,
+            Error::Tds(TdsError::UsageError(m)) if m.contains("unsupported")
+        ));
     }
 
     #[test]
@@ -523,6 +553,58 @@ mod tests {
         assert_eq!(format_decimal128(1, -2), "100");
         // Magnitude exactly equals scale length: e.g. 5 with scale 1 -> "0.5"
         assert_eq!(format_decimal128(5, 1), "0.5");
+        assert_eq!(
+            format_decimal128(i128::MIN, 1),
+            "-17014118346046923173168730371588410572.8"
+        );
+        assert_eq!(
+            format_decimal128(1, i8::MIN),
+            format!("1{}", "0".repeat(128))
+        );
+    }
+
+    #[test]
+    fn out_of_bounds_indices_return_usage_error() {
+        let values = Int32Array::from(vec![Some(1), None]);
+        let empty = Int32Array::from(Vec::<i32>::new());
+        for (array, idx) in [
+            (&values as &dyn Array, values.len()),
+            (&values as &dyn Array, usize::MAX),
+            (&empty as &dyn Array, 0),
+        ] {
+            let err = arrow_value_to_column_value(array, idx)
+                .expect_err("out-of-bounds row index must fail");
+            assert!(matches!(
+                err,
+                Error::Tds(TdsError::UsageError(m)) if m.contains("out of bounds")
+            ));
+        }
+    }
+
+    #[test]
+    fn invalid_time64_values_return_usage_error() {
+        let us = Time64MicrosecondArray::from(vec![-1, 86_400_000_000, i64::MAX]);
+        let ns = Time64NanosecondArray::from(vec![-1, 86_400_000_000_000, i64::MAX]);
+        for array in [&us as &dyn Array, &ns as &dyn Array] {
+            for idx in 0..array.len() {
+                let err = arrow_value_to_column_value(array, idx)
+                    .expect_err("negative, overflowing, or out-of-day Time64 must fail");
+                assert!(matches!(err, Error::Tds(TdsError::UsageError(_))));
+            }
+        }
+    }
+
+    #[test]
+    fn negative_decimal_scale_returns_usage_error() {
+        let decimal = Decimal128Array::from(vec![1_i128])
+            .with_precision_and_scale(10, -2)
+            .expect("Arrow supports negative decimal scales");
+        let err = arrow_value_to_column_value(&decimal, 0)
+            .expect_err("TDS decimal scale cannot be negative");
+        assert!(matches!(
+            err,
+            Error::Tds(TdsError::UsageError(m)) if m.contains("negative scale")
+        ));
     }
 
     // ---- Cover every remaining Arrow → ColumnValues branch ----
@@ -532,61 +614,65 @@ mod tests {
         let u16a = UInt16Array::from(vec![60_000_u16]);
         let u32a = UInt32Array::from(vec![4_000_000_000_u32]);
         assert!(matches!(
-            arrow_value_to_column_value(&u16a, 0).unwrap(),
+            arrow_value_to_column_value(&u16a, 0).expect("UInt16 conversion should succeed"),
             ColumnValues::Int(60_000)
         ));
         assert!(matches!(
-            arrow_value_to_column_value(&u32a, 0).unwrap(),
+            arrow_value_to_column_value(&u32a, 0).expect("UInt32 conversion should succeed"),
             ColumnValues::BigInt(4_000_000_000)
         ));
     }
 
     #[test]
-    fn convert_large_utf8() {
+    fn convert_large_utf8() -> Result<()> {
         let s = LargeStringArray::from(vec!["world"]);
-        match arrow_value_to_column_value(&s, 0).unwrap() {
-            ColumnValues::String(s) => assert_eq!(s.to_utf8_string(), "world"),
-            v => panic!("expected String, got {v:?}"),
+        match arrow_value_to_column_value(&s, 0)? {
+            ColumnValues::String(s) if s.to_utf8_string() == "world" => {}
+            v => return Err(usage(format!("expected String(\"world\"), got {v:?}"))),
         }
+        Ok(())
     }
 
     #[test]
-    fn convert_binary_variants() {
+    fn convert_binary_variants() -> Result<()> {
         use arrow_array::{BinaryArray, FixedSizeBinaryArray, LargeBinaryArray};
-        let bin = BinaryArray::from(vec![&b"hi"[..]]);
-        let lbin = LargeBinaryArray::from(vec![&b"there"[..]]);
-        let fbin = FixedSizeBinaryArray::try_from_iter([&[1u8, 2, 3, 4]].into_iter()).unwrap();
+        let bin = BinaryArray::from(vec![b"hi".as_slice()]);
+        let lbin = LargeBinaryArray::from(vec![b"there".as_slice()]);
+        let fbin = FixedSizeBinaryArray::try_from_iter([&[1u8, 2, 3, 4]].into_iter())
+            .map_err(|error| usage(format!("binary fixture creation failed: {error}")))?;
 
-        match arrow_value_to_column_value(&bin, 0).unwrap() {
-            ColumnValues::Bytes(b) => assert_eq!(b, b"hi"),
-            v => panic!("expected Bytes, got {v:?}"),
+        match arrow_value_to_column_value(&bin, 0)? {
+            ColumnValues::Bytes(b) if b == b"hi" => {}
+            v => return Err(usage(format!("expected Bytes(b\"hi\"), got {v:?}"))),
         }
-        match arrow_value_to_column_value(&lbin, 0).unwrap() {
-            ColumnValues::Bytes(b) => assert_eq!(b, b"there"),
-            v => panic!("expected Bytes, got {v:?}"),
+        match arrow_value_to_column_value(&lbin, 0)? {
+            ColumnValues::Bytes(b) if b == b"there" => {}
+            v => return Err(usage(format!("expected Bytes(b\"there\"), got {v:?}"))),
         }
-        match arrow_value_to_column_value(&fbin, 0).unwrap() {
-            ColumnValues::Bytes(b) => assert_eq!(b, vec![1, 2, 3, 4]),
-            v => panic!("expected Bytes, got {v:?}"),
+        match arrow_value_to_column_value(&fbin, 0)? {
+            ColumnValues::Bytes(b) if b == [1, 2, 3, 4] => {}
+            v => return Err(usage(format!("expected Bytes([1, 2, 3, 4]), got {v:?}"))),
         }
+        Ok(())
     }
 
     #[test]
-    fn convert_time64_microsecond_and_nanosecond() {
+    fn convert_time64_microsecond_and_nanosecond() -> Result<()> {
         let us = Time64MicrosecondArray::from(vec![123_456_i64]);
         let ns = Time64NanosecondArray::from(vec![123_456_789_i64]);
-        match arrow_value_to_column_value(&us, 0).unwrap() {
-            ColumnValues::Time(t) => assert_eq!(t.time_nanoseconds, 123_456_000),
-            v => panic!("expected Time, got {v:?}"),
+        match arrow_value_to_column_value(&us, 0)? {
+            ColumnValues::Time(t) if t.time_nanoseconds == 123_456_000 => {}
+            v => return Err(usage(format!("expected Time(123456000ns), got {v:?}"))),
         }
-        match arrow_value_to_column_value(&ns, 0).unwrap() {
-            ColumnValues::Time(t) => assert_eq!(t.time_nanoseconds, 123_456_789),
-            v => panic!("expected Time, got {v:?}"),
+        match arrow_value_to_column_value(&ns, 0)? {
+            ColumnValues::Time(t) if t.time_nanoseconds == 123_456_789 => {}
+            v => return Err(usage(format!("expected Time(123456789ns), got {v:?}"))),
         }
+        Ok(())
     }
 
     #[test]
-    fn convert_timestamp_all_units() {
+    fn convert_timestamp_all_units() -> Result<()> {
         use arrow_array::{
             TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray,
         };
@@ -601,31 +687,29 @@ mod tests {
             (&us as &dyn arrow_array::Array, "us"),
             (&ns as &dyn arrow_array::Array, "ns"),
         ] {
-            match arrow_value_to_column_value(a, 0).unwrap() {
-                ColumnValues::DateTime2(dt) => {
-                    assert_eq!(
-                        dt.days, ARROW_EPOCH_OFFSET_DAYS as u32,
-                        "wrong days for unit {label}"
-                    );
-                    assert_eq!(
-                        dt.time.time_nanoseconds, 1_000_000_000,
-                        "wrong nanos for unit {label}"
-                    );
+            match arrow_value_to_column_value(a, 0)? {
+                ColumnValues::DateTime2(dt)
+                    if i64::from(dt.days) == i64::from(ARROW_EPOCH_OFFSET_DAYS)
+                        && dt.time.time_nanoseconds == 1_000_000_000 => {}
+                v => {
+                    return Err(usage(format!(
+                        "expected DateTime2 at Unix epoch + 1s for unit {label}, got {v:?}"
+                    )))
                 }
-                v => panic!("expected DateTime2 for unit {label}, got {v:?}"),
             }
         }
+        Ok(())
     }
 
     #[test]
     fn convert_date32_pre_tds_epoch_errors() {
         // Days = -1_000_000 from unix epoch lands well before 0001-01-01.
         let d = Date32Array::from(vec![-1_000_000_i32]);
-        let err = arrow_value_to_column_value(&d, 0).unwrap_err();
-        match err {
-            Error::Tds(TdsError::UsageError(m)) => assert!(m.contains("predates")),
-            e => panic!("expected UsageError, got {e:?}"),
-        }
+        let err = arrow_value_to_column_value(&d, 0).expect_err("date before TDS epoch must fail");
+        assert!(matches!(
+            err,
+            Error::Tds(TdsError::UsageError(m)) if m.contains("predates")
+        ));
     }
 
     #[test]
@@ -655,7 +739,7 @@ mod tests {
             Box::new(
                 Decimal128Array::from(vec![None::<i128>])
                     .with_precision_and_scale(10, 2)
-                    .unwrap(),
+                    .expect("precision 10 and scale 2 are valid"),
             ),
         ];
         for arr in &cases {

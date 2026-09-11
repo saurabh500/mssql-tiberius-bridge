@@ -35,10 +35,9 @@ async fn connect_without_ca_fails() {
     let mut cfg = base_config();
     cfg.encryption(EncryptionLevel::On);
     let result = Client::connect(&cfg).await;
-    assert!(
-        result.is_err(),
-        "expected TLS validation to fail when no CA is trusted"
-    );
+    result
+        .map(|_| ())
+        .expect_err("expected TLS validation to fail when no CA is trusted");
 }
 
 /// Positive case: pin the CA cert and connect successfully.
@@ -62,5 +61,10 @@ async fn connect_with_trusted_ca() {
         .await
         .expect("query failed")
         .into_first_result();
-    assert_eq!(row[0].get::<i32, _>(0usize), Some(-4));
+    assert_eq!(
+        row.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(-4)
+    );
 }

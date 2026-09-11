@@ -680,7 +680,8 @@ impl<'a> FromSql<'a> for rust_decimal::Decimal {
             }
             ColumnValues::SmallMoney(m) => Some(rust_decimal::Decimal::new(m.int_val as i64, 4)),
             ColumnValues::Money(m) => {
-                let raw = ((m.msb_part as i64) << 32) | (m.lsb_part as u32 as i64);
+                let low_bits = u32::from_ne_bytes(m.lsb_part.to_ne_bytes());
+                let raw = (i64::from(m.msb_part) << 32) | i64::from(low_bits);
                 Some(rust_decimal::Decimal::new(raw, 4))
             }
             _ => None,
@@ -860,6 +861,15 @@ mod tests {
     use mssql_tds::datatypes::column_values::ColumnValues;
     use mssql_tds::datatypes::sql_string::SqlString;
 
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
+
+    fn ensure_equal<T: PartialEq + std::fmt::Debug>(actual: T, expected: T) -> TestResult {
+        if actual != expected {
+            return Err(format!("expected {expected:?}, got {actual:?}").into());
+        }
+        Ok(())
+    }
+
     // Helper to build a Row without real metadata
     fn make_row(names: &[&str], values: Vec<ColumnValues>) -> Row {
         let columns: Vec<Column> = names
@@ -906,7 +916,10 @@ mod tests {
     #[test]
     fn try_get_missing_column() {
         let row = make_row(&["a"], vec![ColumnValues::Int(1)]);
-        assert!(row.try_get::<i32, _>("nope").is_err());
+        let error = row
+            .try_get::<i32, _>("nope")
+            .expect_err("a missing column must fail lookup");
+        assert!(matches!(error, Error::ColumnNotFound(name) if name == "nope"));
     }
 
     #[test]
@@ -937,6 +950,22 @@ mod tests {
     }
 
     #[test]
+    fn money_decimal_preserves_signed_high_and_unsigned_low_bits() {
+        for (msb_part, lsb_part, raw) in [
+            (0, -1, i64::from(u32::MAX)),
+            (-1, -1, -1),
+            (i32::MIN, 0, i64::MIN),
+            (i32::MAX, -1, i64::MAX),
+        ] {
+            let value = ColumnValues::Money(SqlMoney { msb_part, lsb_part });
+            assert_eq!(
+                rust_decimal::Decimal::from_sql(&value),
+                Some(rust_decimal::Decimal::new(raw, 4))
+            );
+        }
+    }
+
+    #[test]
     fn bytes_extraction() {
         let row = make_row(&["b"], vec![ColumnValues::Bytes(vec![1, 2, 3])]);
         assert_eq!(row.get::<Vec<u8>, _>("b"), Some(vec![1, 2, 3]));
@@ -944,7 +973,7 @@ mod tests {
     }
 
     #[test]
-    fn spatial_bytes_preserve_row_construction_and_writer_behavior() {
+    fn spatial_bytes_preserve_row_construction_and_writer_behavior() -> TestResult {
         use crate::ColumnType;
         use mssql_tds::test_client_support::udt_column_with_metadata;
 
@@ -962,36 +991,52 @@ mod tests {
 
             writer.write_null(0);
             let null = writer.take_row();
-            assert_eq!(null.columns()[0].column_type(), column_type);
-            assert_eq!(null.get::<Vec<u8>, _>(0usize), None);
-            assert_eq!(null.get::<Option<&[u8]>, _>(0usize), Some(None));
-            assert_eq!(null.raw_value(0), Some(&ColumnValues::Null));
+            ensure_equal(
+                null.columns()
+                    .first()
+                    .ok_or("missing null column")?
+                    .column_type(),
+                column_type,
+            )?;
+            ensure_equal(null.get::<Vec<u8>, _>(0usize), None)?;
+            ensure_equal(null.get::<Option<&[u8]>, _>(0usize), Some(None))?;
+            ensure_equal(null.raw_value(0), Some(&ColumnValues::Null))?;
 
             writer.write_bytes(0, Cow::Borrowed(&bytes));
             let row = writer.take_row();
-            assert_eq!(row, expected);
-            assert_eq!(row.columns()[0].column_type(), column_type);
-            assert_eq!(row.get::<Vec<u8>, _>("udt"), Some(bytes.clone()));
-            assert_eq!(
-                row.try_get::<&[u8], _>(0usize).unwrap(),
-                Some(bytes.as_slice())
-            );
+            ensure_equal(&row, &expected)?;
+            ensure_equal(
+                row.columns()
+                    .first()
+                    .ok_or("missing spatial column")?
+                    .column_type(),
+                column_type,
+            )?;
+            ensure_equal(row.get::<Vec<u8>, _>("udt"), Some(bytes.clone()))?;
+            ensure_equal(row.try_get::<&[u8], _>(0usize)?, Some(bytes.as_slice()))?;
             let Some(ColumnValues::Bytes(raw)) = row.raw_value(0) else {
-                panic!("spatial values must retain the upstream Bytes representation");
+                return Err("spatial values must retain the upstream Bytes representation".into());
             };
-            assert_eq!(row.get::<&[u8], _>("udt").unwrap().as_ptr(), raw.as_ptr());
-            assert_eq!(row.get::<String, _>("udt"), None);
-            assert_eq!(row.get::<&str, _>("udt"), None);
+            ensure_equal(
+                row.get::<&[u8], _>("udt")
+                    .ok_or("missing spatial bytes")?
+                    .as_ptr(),
+                raw.as_ptr(),
+            )?;
+            ensure_equal(row.get::<String, _>("udt"), None)?;
+            ensure_equal(row.get::<&str, _>("udt"), None)?;
 
             writer.write_bytes(0, Cow::Owned(Vec::new()));
             let empty = writer.take_row();
-            assert_eq!(empty.get::<Vec<u8>, _>("udt"), Some(Vec::new()));
-            assert_ne!(empty, null);
-            assert_eq!(
-                row, expected,
-                "reusing the writer must not alter earlier rows"
-            );
+            ensure_equal(empty.get::<Vec<u8>, _>("udt"), Some(Vec::new()))?;
+            if empty == null {
+                return Err("empty spatial bytes must differ from SQL NULL".into());
+            }
+            if row != expected {
+                return Err("reusing the writer must not alter earlier rows".into());
+            }
         }
+        Ok(())
     }
 
     #[test]
@@ -1017,7 +1062,7 @@ mod tests {
     }
 
     #[test]
-    fn case_insensitive_lookup() {
+    fn case_insensitive_lookup() -> TestResult {
         let row = make_row(
             &["UserName", "id"],
             vec![
@@ -1026,17 +1071,20 @@ mod tests {
             ],
         );
 
-        assert_eq!(row.try_get_ci::<&str>("username").unwrap(), Some("ada"));
-        assert_eq!(row.get_ci::<String>("USERNAME"), Some("ada".into()));
-        assert_eq!(row.try_get_ci::<i32>("ID").unwrap(), Some(7));
-        assert!(matches!(
+        ensure_equal(row.try_get_ci::<&str>("username")?, Some("ada"))?;
+        ensure_equal(row.get_ci::<String>("USERNAME"), Some("ada".into()))?;
+        ensure_equal(row.try_get_ci::<i32>("ID")?, Some(7))?;
+        if !matches!(
             row.try_get_ci::<i32>("missing"),
             Err(Error::ColumnNotFound(name)) if name == "missing"
-        ));
+        ) {
+            return Err("expected ColumnNotFound for missing column".into());
+        }
+        Ok(())
     }
 
     #[test]
-    fn try_get_errors_without_panicking() {
+    fn try_get_errors_without_panicking() -> TestResult {
         let row = make_row(
             &["a"],
             vec![ColumnValues::String(SqlString::from_utf8_string(
@@ -1044,19 +1092,24 @@ mod tests {
             ))],
         );
 
-        assert!(matches!(
+        if !matches!(
             row.try_get::<i32, _>(1usize),
             Err(Error::ColumnIndexOutOfBounds { index: 1, count: 1 })
-        ));
-        assert!(matches!(
+        ) {
+            return Err("expected ColumnIndexOutOfBounds for index 1".into());
+        }
+        if !matches!(
             row.try_get::<i32, _>("missing"),
             Err(Error::ColumnNotFound(name)) if name == "missing"
-        ));
-        assert_eq!(row.try_get::<i32, _>("a").unwrap(), None);
+        ) {
+            return Err("expected ColumnNotFound for missing column".into());
+        }
+        ensure_equal(row.try_get::<i32, _>("a")?, None)?;
+        Ok(())
     }
 
     #[test]
-    fn null_smallint_as_i32_returns_none_cleanly() {
+    fn null_smallint_as_i32_returns_none_cleanly() -> TestResult {
         let columns = vec![Column::test_column(
             "small",
             crate::column::ColumnType::Int2,
@@ -1066,8 +1119,9 @@ mod tests {
         let schema = Arc::new(RowSchema { columns, name_map });
         let row = Row::from_schema(schema, vec![ColumnValues::Null]);
 
-        assert_eq!(row.try_get::<i32, _>("small").unwrap(), None);
-        assert_eq!(row.try_get::<Option<i32>, _>("small").unwrap(), Some(None));
+        ensure_equal(row.try_get::<i32, _>("small")?, None)?;
+        ensure_equal(row.try_get::<Option<i32>, _>("small")?, Some(None))?;
+        Ok(())
     }
 
     #[test]

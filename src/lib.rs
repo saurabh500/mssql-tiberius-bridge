@@ -76,7 +76,7 @@
 //!
 //! - TCP transport is handled internally — no `TcpStream` boilerplate
 //! - `row.get::<&str, _>("col")` works (strings are pre-decoded from UTF-16)
-//! - Connection pooling via [`TdsManager`] + [`deadpool`]
+//! - Connection pooling via [`TdsManager`] + [`deadpool`] with native session resets
 
 pub mod bulk;
 #[cfg(feature = "arrow")]
@@ -98,7 +98,7 @@ pub use client::Client;
 pub use column::{Collation, Column, ColumnType, MultiPartName};
 pub use config::{AuthMethod, Config, EncryptionLevel, Transport};
 pub use error::{Error, Result};
-pub use pool::{Pool, PooledConnection, TdsManager};
+pub use pool::{Pool, PooledConnection, RecyclingMethod, TdsManager};
 pub use prepared::PreparedStatement;
 pub use query::{DebugParams, ExecuteResult, QueryResult, ToSql};
 pub use row::{ColumnIndex, FromSql, Row};

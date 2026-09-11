@@ -118,7 +118,7 @@ These are bugs in tiberius's TDS implementation. The bridge uses `mssql-tds`, an
 | 335 | Read-only routing examples | ⚪ | — | how-to. |
 | 375 | azure-sql-edge on macOS hangs | ⚪ | environment-specific (azure-sql-edge on macOS) | **Repro**: try connecting bridge to an azure-sql-edge container. |
 | 198 | Check if TCP connection is alive | ✅ | [#44](../../issues/44) (PR [#45](../../pull/45)) — `Client::ping()` | Feature: `Client::ping` or `is_connected`. |
-| 299 | Reset connection (`sp_reset_connection`) | 🟡 | `ping()` shipped via [#44](../../issues/44); `reset_session()` tracked in [#52](../../issues/52) | Feature for pooling. |
+| 299 | Reset connection (`sp_reset_connection`) | ✅ | `reset_session()` implemented for [#52](../../issues/52); native reset is the default pool recycling policy | Explicit `READ COMMITTED` baseline; ping-only compatibility mode remains available. |
 | 301 | How do I call `ping`? | ✅ | [#44](../../issues/44) — `Client::ping()` | how-to. |
 | 131 | Named pipes support | ✅ | [#60](../../issues/60) — Named pipe transport | Feature. mssql-tds may not support named pipes. |
 | 53 | Other connection methods than TCP | ✅ | [#60](../../issues/60) — Named pipe transport | Same theme. |
@@ -323,7 +323,6 @@ The following bridge issues were filed from this triage to track the work.
 |--------|----------|-------|
 | #1  | —    | `execute()` returns 0 affected rows for DML (needs mssql-tds DONE token row count) |
 | #48 | #224 | `Config::accept_invalid_hostnames` (blocked on mssql-tds) |
-| #52 | #299 | `Client::reset_session()` / `sp_reset_connection` (blocked on mssql-tds) |
 | #55 | #28  | Transactions API (`Client::transaction` / `Transaction` wrapper) |
 | #56 | #30  | Prepared Statements (`sp_prepare` / `sp_execute`) |
 | #58 | #54  | Always Encrypted (CEK) |

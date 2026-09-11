@@ -40,6 +40,11 @@ pub enum Error {
 
     /// A connection pool error occurred.
     Pool(String),
+
+    /// A prepared statement belongs to another client or a reset session.
+    ///
+    /// Prepare a new statement on the current client before using it.
+    InvalidPreparedStatement,
 }
 
 impl fmt::Display for Error {
@@ -52,6 +57,12 @@ impl fmt::Display for Error {
             }
             Error::Conversion(msg) => write!(f, "Conversion error: {msg}"),
             Error::Pool(msg) => write!(f, "Pool error: {msg}"),
+            Error::InvalidPreparedStatement => {
+                write!(
+                    f,
+                    "Prepared statement belongs to a different or reset client session"
+                )
+            }
         }
     }
 }
@@ -109,6 +120,10 @@ mod tests {
                 "Conversion error: invalid date",
             ),
             (Error::Pool("closed".into()), "Pool error: closed"),
+            (
+                Error::InvalidPreparedStatement,
+                "Prepared statement belongs to a different or reset client session",
+            ),
         ];
         for (error, expected) in cases {
             assert_eq!(error.to_string(), expected);

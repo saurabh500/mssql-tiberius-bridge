@@ -11,6 +11,19 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+### Changed
+
+- Use native `mssql-tds` session reset and `READ COMMITTED` isolation when
+  recycling pooled connections. Keep ping-only recycling as the explicit
+  `RecyclingMethod::Ping` compatibility policy.
+- Reject prepared statements from another client or a session invalidated by
+  `Client::reset_session()` with `Error::InvalidPreparedStatement`.
+
+### Added
+
+- `Client::reset_session()` and the no-I/O `Client::is_connection_dead()` accessor.
+- Tokio timeout support for pools built with `TdsManager::create_pool`.
+
 ## [0.1.0](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.5...v0.1.0) - 2026-09-11
 
 ### Changed

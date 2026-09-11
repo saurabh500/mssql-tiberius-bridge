@@ -13,11 +13,12 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 - `stream.into_row_stream()` — `Stream<Item = Result<Row>>` over a buffered `QueryResult` (rows pre-buffered)
 - `client.query_streamed(sql, params)` / `simple_query_streamed(sql)` — true wire-level row streaming for memory-bounded large result sets
 - `client.ping()` — lightweight liveness check for connection pools
+- `client.reset_session()` — native TDS session reset with `READ COMMITTED` isolation
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
 - `Config::new().host().port().trust_cert()` — fluent builder
 - `Config::trust_cert_ca("ca.pem")` — pin a CA certificate (mirrors tiberius)
 - `AuthMethod::aad_token(jwt)` — Microsoft Entra ID / AAD federated auth
-- deadpool connection pooling out of the box
+- deadpool connection pooling with native session reset and validation before reuse
 
 ## Quick Start
 
@@ -61,9 +62,25 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
 | `conn.simple_query(sql)` | `client.simple_query(sql)` |
 | `conn.query(sql, &[&p1])` | `client.query(sql, &[&p1])` |
 | connection-pool validation | `client.ping()` |
+| connection-pool session cleanup | `client.reset_session()` (the default `TdsManager` recycling policy) |
 | `stream.into_first_result()` | `.into_first_result()` |
 | `row.get::<&str, _>("col")` | `row.get::<&str, _>("col")` |
 | `tiberius::AuthMethod::sql_server` | `AuthMethod::sql_server` |
+
+### Pooling behavior change
+
+`TdsManager::new` and `TdsManager::create_pool` now reset reused sessions using
+`mssql-tds`'s native `RESETCONNECTION` flag, restore `READ COMMITTED` isolation,
+and validate the response. Temporary tables, changed session settings, open
+transactions, and prepared handles no longer carry over to the next borrower.
+Prepare and close statements within one checkout. Finish transactions before
+returning a connection: recycling runs at the next checkout, not at check-in.
+
+For intentional legacy session reuse, build a pool with
+`TdsManager::new(config).with_recycling_method(RecyclingMethod::Ping)`.
+See [connection pooling](docs/connection-examples.md#connection-pooling) for
+examples and timeout configuration. `deadpool` still owns capacity and checkout;
+`mssql-tds` provides the native reset and health primitives.
 
 ## Runtime requirements
 

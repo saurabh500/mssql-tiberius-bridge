@@ -538,7 +538,7 @@ fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-To preserve the old ping-only behavior explicitly:
+To retain session state and use a cached health check instead of native reset:
 
 ```rust,no_run
 fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
@@ -550,11 +550,16 @@ fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`Ping` validates with `SELECT 1` but deliberately retains session state,
-including open transactions. Use it only when that behavior is intentional.
-`Client::ping()` remains a liveness-only operation. The cheap
-`Client::is_connection_dead()` accessor does no I/O: `false` means "not observed
-dead," not proof that an idle connection is responsive.
+`Ping` calls `Client::ping()`, which checks the native
+`Client::is_connection_dead()` status without sending SQL, resetting session
+state, or consuming outstanding results. Both APIs perform no I/O. This retains
+open transactions and prepared statements, but unlike the former `SELECT 1`
+probe, does not verify server responsiveness. Success means "not observed dead";
+a connection that silently failed while idle may fail on the next operation.
+The async `client.ping().await?` call remains source-compatible. A known-dead
+connection returns `Error::Tds` containing `mssql_tds::error::Error::ConnectionClosed`.
+Use this policy only when retaining session state and relying on cached health
+are intentional; default `Reset` recycling still performs a server round trip.
 
 Outside a pool, call `client.reset_session().await?` directly for the same
 reset-and-validate behavior. Use this bridge method rather than arming a reset

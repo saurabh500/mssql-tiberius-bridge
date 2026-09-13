@@ -2,7 +2,7 @@
 //!
 //! Reused connections are reset and validated before checkout, including restoring
 //! `READ COMMITTED` isolation. Use [`RecyclingMethod::Ping`] only when retaining
-//! session state between borrowers is intentional.
+//! session state and relying on cached connection health is intentional.
 //!
 //! Connections marked dead after cancelled bridge I/O are rejected before the
 //! recycle reset or ping, so deadpool drops them and creates replacements.
@@ -45,10 +45,12 @@ pub enum RecyclingMethod {
     /// Invalidates prepared statements from previous checkouts.
     #[default]
     Reset,
-    /// Validate with `SELECT 1` without resetting session state.
+    /// Check cached connection health without I/O or resetting session state.
     ///
-    /// This preserves the bridge's legacy behavior, including temporary tables,
-    /// session settings, prepared handles, and any uncommitted transaction.
+    /// Retains temporary tables, session settings, prepared handles, uncommitted
+    /// transactions, and outstanding results. Unlike the former `SELECT 1`
+    /// probe, this does not verify server responsiveness; an undetected idle
+    /// failure may surface on the borrower's next operation.
     Ping,
 }
 

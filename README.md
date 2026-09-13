@@ -9,6 +9,7 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 **mssql-tiberius-bridge** gives you the tiberius API you know on top of the mssql-tds engine:
 
 - `row.get::<T, _>("column_name")` — named and indexed column access
+- `result.columns()` / `result.result_set_columns(index)` — column metadata, including empty result sets
 - `stream.into_first_result()` — collect results into `Vec<Row>`
 - `stream.into_row_stream()` — `Stream<Item = Result<Row>>` over a buffered `QueryResult` (rows pre-buffered)
 - `client.query_streamed(sql, params)` / `simple_query_streamed(sql)` — true wire-level row streaming for memory-bounded large result sets
@@ -104,6 +105,63 @@ polling through cleanup; an external timeout that drops the operation is differe
 Direct calls through `inner_mut()` bypass the bridge guards: after abandoning
 native I/O, mark the native client dead and discard it instead of returning it
 to a pool as healthy. See the `Client` rustdoc for the full contract.
+
+## Column metadata
+
+Metadata is available through `Row::columns()` and directly on `QueryResult`,
+including zero-row `SELECT` results. `result.columns()` returns the first
+result set's columns; `result.result_set_columns(index)` uses the same zero-based
+ordering as `into_results()`. Both return `None` for a nonexistent result set,
+not merely because there are no rows. DML-only statements do not add result sets.
+
+```rust
+let result = client
+    .simple_query("SELECT CAST(NULL AS decimal(18,4)) AS amount WHERE 1 = 0")
+    .await?;
+let amount = result
+    .columns()
+    .and_then(|columns| columns.first())
+    .expect("SELECT returns a schema even without rows");
+assert_eq!(amount.name(), "amount");
+assert_eq!(amount.precision(), Some(18));
+assert_eq!(amount.scale(), Some(4));
+assert!(result.into_first_result().is_empty());
+```
+
+Columns are shared with rows through one schema per result set. Buffered,
+parameterized, prepared, and wire-streamed rows expose the same metadata.
+
+| Accessor | Meaning |
+| --- | --- |
+| `name()`, `column_type()` | Result-column name and SQL type |
+| `nullable()`, `is_identity()`, `is_computed()` | Server-supplied result-column flags |
+| `is_case_sensitive()`, `is_sparse_column_set()`, `is_encrypted()` | TDS flags, not catalog-property inference |
+| `byte_length()` | Raw wire type length; may contain a PLP sentinel such as `0xFFFF` |
+| `char_length()` | Finite string capacity: UTF-16 code units for Unicode types, byte capacity for `CHAR`/`VARCHAR`/`TEXT` |
+| `is_plp()` | Partially length-prefixed encoding, including `(MAX)` strings/binary, XML, and CLR UDTs |
+| `precision()`, `scale()` | Declared decimal/numeric precision and scale; temporal scale where present; fixed money/smallmoney precision |
+| `collation()` | Raw collation info, LCID, comparison flags, and sort ID, not a resolved SQL collation name |
+| `user_type()`, `multi_part_name()` | User-type ordinal and optional source table-name components |
+
+`NVARCHAR(255)` reports 510 wire bytes and 255 UTF-16 code units, not necessarily
+255 Unicode characters. **`char_length()` returns `None` for `(MAX)`/PLP and
+non-string columns**, rather than turning a PLP sentinel into a finite length.
+`byte_length()` remains unchanged. Legacy `TEXT`/`NTEXT` capacities come from
+their wire descriptors, not a SQL `(n)` declaration. Money/smallmoney have fixed
+precision but no scale field in their wire descriptors, so `scale()` is `None`.
+
+Flags describe the result, not necessarily the base-table definition.
+`nullable()` mirrors `fNullable` without resolving the separate unknown-nullability
+flag. `is_case_sensitive()` mirrors `fCaseSen` (binary collations and XML), not
+all SQL collation comparison rules. `is_sparse_column_set()` identifies the
+special XML column set, **not an ordinary `SPARSE` column**. Ordinary `SPARSE`
+and `ROWGUIDCOL` properties are not exposed by TDS `COLMETADATA`; a GUID type
+does not imply `ROWGUIDCOL`. These catalog-only properties remain outside this API.
+
+Source names are retained when supplied for legacy `TEXT`, `NTEXT`, and `IMAGE`
+columns; they are not general lineage for arbitrary queries. No extra catalog
+queries are performed. Row-only streams do not emit separate metadata events
+for empty result sets; use buffered `QueryResult` metadata for that case.
 
 ## Spatial values
 

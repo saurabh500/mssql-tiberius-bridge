@@ -1,4 +1,4 @@
-//! Column type enumeration mirroring tiberius' ColumnType.
+//! Column types and result-set metadata, including tiberius' ColumnType.
 
 use mssql_tds::datatypes::sqldatatypes::TdsDataType;
 
@@ -69,14 +69,15 @@ impl From<TdsDataType> for ColumnType {
             TdsDataType::Decimal | TdsDataType::DecimalN => ColumnType::Decimaln,
             TdsDataType::Numeric | TdsDataType::NumericN => ColumnType::Numericn,
             TdsDataType::Money | TdsDataType::MoneyN => ColumnType::Money,
+            TdsDataType::Money4 => ColumnType::Money4,
             TdsDataType::Guid => ColumnType::Guid,
             TdsDataType::NVarChar => ColumnType::NVarchar,
             TdsDataType::VarChar | TdsDataType::BigVarChar => ColumnType::Varchar,
             TdsDataType::NChar => ColumnType::NChar,
-            TdsDataType::Char => ColumnType::Char,
+            TdsDataType::Char | TdsDataType::BigChar => ColumnType::Char,
             TdsDataType::NText => ColumnType::NText,
             TdsDataType::Text => ColumnType::Text,
-            TdsDataType::Binary => ColumnType::Binary,
+            TdsDataType::Binary | TdsDataType::BigBinary => ColumnType::Binary,
             TdsDataType::VarBinary | TdsDataType::BigVarBinary => ColumnType::VarBinary,
             TdsDataType::Image => ColumnType::Image,
             TdsDataType::Xml => ColumnType::Xml,
@@ -137,6 +138,8 @@ impl ColumnType {
 }
 
 /// SQL Server collation metadata exposed through a bridge-owned type.
+///
+/// These are wire identifiers and flags, not a resolved SQL collation name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Collation {
     /// Raw 32-bit collation info value.
@@ -160,7 +163,10 @@ impl From<mssql_tds::token::tokens::SqlCollation> for Collation {
     }
 }
 
-/// Four-part source table name for a column, when supplied by SQL Server.
+/// Source table name components, when supplied by SQL Server.
+///
+/// `COLMETADATA` supplies these for legacy `TEXT`, `NTEXT`, and `IMAGE`
+/// columns. This is not general base-table lineage for arbitrary result columns.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MultiPartName {
     /// Server name portion.
@@ -173,7 +179,22 @@ pub struct MultiPartName {
     pub table_name: String,
 }
 
+impl From<&mssql_tds::query::metadata::MultiPartName> for MultiPartName {
+    fn from(value: &mssql_tds::query::metadata::MultiPartName) -> Self {
+        Self {
+            server_name: value.server_name().map(str::to_owned),
+            catalog_name: value.catalog_name().map(str::to_owned),
+            schema_name: value.schema_name().map(str::to_owned),
+            table_name: value.table_name().to_owned(),
+        }
+    }
+}
+
 /// Column metadata exposed to facade consumers.
+///
+/// Flags describe the returned result column, not necessarily its base-table
+/// definition. Ordinary `SPARSE` and `ROWGUIDCOL` properties are not present in
+/// TDS result metadata; [`Self::is_sparse_column_set`] is a different property.
 #[derive(Debug, Clone)]
 pub struct Column {
     /// Column name.
@@ -186,7 +207,7 @@ pub struct Column {
     pub(crate) is_identity: bool,
     /// Whether the column is computed by SQL Server.
     pub(crate) is_computed: bool,
-    /// Whether the column collation is case-sensitive.
+    /// The server's `fCaseSen` flag.
     pub(crate) is_case_sensitive: bool,
     /// Whether the column is a sparse column set.
     pub(crate) is_sparse_column_set: bool,
@@ -196,6 +217,8 @@ pub struct Column {
     pub(crate) is_plp: bool,
     /// Wire byte length from TDS type info.
     pub(crate) byte_length: usize,
+    /// Numeric precision, when available.
+    pub(crate) precision: Option<u8>,
     /// Decimal/numeric/time scale, when supplied by SQL Server.
     pub(crate) scale: Option<u8>,
     /// String collation metadata, when supplied by SQL Server.
@@ -217,7 +240,10 @@ impl Column {
         self.column_type
     }
 
-    /// Returns whether the column is nullable.
+    /// Returns the server's `fNullable` flag for this result column.
+    ///
+    /// This is not a base-table constraint lookup and does not resolve the
+    /// separate TDS unknown-nullability flag.
     pub fn nullable(&self) -> bool {
         self.nullable
     }
@@ -232,12 +258,17 @@ impl Column {
         self.is_computed
     }
 
-    /// Returns whether the column collation is case-sensitive.
+    /// Returns the server's `fCaseSen` flag.
+    ///
+    /// SQL Server sets this for binary collations and XML. It does not describe
+    /// all SQL collation comparison rules.
     pub fn is_case_sensitive(&self) -> bool {
         self.is_case_sensitive
     }
 
-    /// Returns whether the column is a sparse column set.
+    /// Returns whether the column is the special XML sparse column set.
+    ///
+    /// This does not indicate whether an ordinary column is declared `SPARSE`.
     pub fn is_sparse_column_set(&self) -> bool {
         self.is_sparse_column_set
     }
@@ -247,25 +278,34 @@ impl Column {
         self.is_encrypted
     }
 
-    /// Returns whether the column uses partially length-prefixed (`max`) encoding.
+    /// Returns whether the column uses partially length-prefixed (PLP) encoding.
+    ///
+    /// This includes `(MAX)` strings/binary data, XML, and CLR UDTs.
     pub fn is_plp(&self) -> bool {
         self.is_plp
     }
 
     /// Returns the TDS wire byte length for the column.
+    ///
+    /// This is the type descriptor's length, not the current value's length.
+    /// PLP types may report a sentinel such as `0xFFFF`, not a finite capacity.
     pub fn byte_length(&self) -> usize {
         self.byte_length
     }
 
-    /// Returns decimal/numeric/time scale metadata, when available.
+    /// Returns decimal/numeric or temporal scale metadata, when supplied in
+    /// the TDS type descriptor.
     pub fn scale(&self) -> Option<u8> {
         self.scale
     }
 
-    /// Returns decimal/numeric precision metadata, when available.
+    /// Returns numeric precision metadata, when available.
+    ///
+    /// Decimal/numeric types report their declared precision. Money and
+    /// smallmoney report their fixed precisions of 19 and 10, respectively.
+    /// Other types return `None`.
     pub fn precision(&self) -> Option<u8> {
-        // TODO: blocked on upstream get_precision().
-        None
+        self.precision
     }
 
     /// Returns string collation metadata, when available.
@@ -283,10 +323,19 @@ impl Column {
         self.multi_part_name.as_ref()
     }
 
-    /// Declared column character length (e.g. `255` for `NVARCHAR(255)`).
-    /// For unicode types (NVARCHAR/NCHAR/NTEXT) this is `byte_length / 2`.
-    /// For non-string types, returns `None`.
+    /// Returns the finite string capacity (e.g. `255` for `NVARCHAR(255)`).
+    ///
+    /// Unicode types (`NVARCHAR`/`NCHAR`/`NTEXT`) report UTF-16 code units
+    /// (`byte_length / 2`), not Unicode scalar values. `VARCHAR`/`CHAR`/`TEXT`
+    /// report byte capacity, which may differ from character count.
+    /// Legacy LOB types report their wire-declared capacity.
+    ///
+    /// Returns `None` for `(MAX)`/PLP and non-string types. Use [`Self::is_plp`]
+    /// to distinguish PLP encoding; [`Self::byte_length`] retains its raw value.
     pub fn char_length(&self) -> Option<usize> {
+        if self.is_plp {
+            return None;
+        }
         match self.column_type {
             ColumnType::NVarchar | ColumnType::NChar | ColumnType::NText => {
                 Some(self.byte_length / 2)
@@ -309,10 +358,11 @@ impl Column {
             is_encrypted: meta.is_encrypted(),
             is_plp: meta.is_plp(),
             byte_length: meta.type_info.length,
+            precision: meta.get_precision(),
             scale: meta.get_scale(),
             collation: meta.get_collation().map(Collation::from),
             user_type: meta.user_type,
-            multi_part_name: None,
+            multi_part_name: meta.multi_part_name.as_ref().map(MultiPartName::from),
         }
     }
 
@@ -329,6 +379,7 @@ impl Column {
             is_encrypted: false,
             is_plp: false,
             byte_length,
+            precision: None,
             scale: None,
             collation: None,
             user_type: 0,
@@ -340,7 +391,261 @@ impl Column {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mssql_tds::datatypes::sqldatatypes::TypeInfo;
+    use mssql_tds::query::metadata::ColumnMetadata;
     use mssql_tds::test_client_support::{int_columns, udt_column, udt_column_with_metadata};
+    use mssql_tds::token::tokens::SqlCollation;
+
+    fn metadata_with_type_info(type_info: TypeInfo) -> ColumnMetadata {
+        let mut metadata = int_columns(1).into_iter().next().expect("one column");
+        metadata.column_name = "value".to_owned();
+        metadata.data_type = type_info.tds_type;
+        metadata.type_info = type_info;
+        metadata
+    }
+
+    #[test]
+    fn metadata_flags_are_independent() {
+        for flags in [
+            0, 0x0001, 0x0002, 0x0010, 0x0020, 0x0400, 0x0800, 0x1000, 0x2000, 0x4000, 0x8000,
+            0x0433, 0xFFFF,
+        ] {
+            let mut metadata = metadata_with_type_info(
+                TypeInfo::fixed_len(TdsDataType::Int4).expect("integer descriptor"),
+            );
+            metadata.flags = flags;
+            metadata.user_type = 12345;
+            metadata.column_name = "aliased.name".to_owned();
+            let column = Column::from_tds(&metadata);
+            assert_eq!(column.name(), "aliased.name");
+            assert_eq!(column.user_type(), 12345);
+            assert_eq!(column.nullable(), flags & 0x0001 != 0, "{flags:#06x}");
+            assert_eq!(
+                column.is_case_sensitive(),
+                flags & 0x0002 != 0,
+                "{flags:#06x}"
+            );
+            assert_eq!(column.is_identity(), flags & 0x0010 != 0, "{flags:#06x}");
+            assert_eq!(column.is_computed(), flags & 0x0020 != 0, "{flags:#06x}");
+            assert_eq!(
+                column.is_sparse_column_set(),
+                flags & 0x0400 != 0,
+                "{flags:#06x}"
+            );
+            assert_eq!(column.is_encrypted(), flags & 0x0800 != 0, "{flags:#06x}");
+            assert!(!column.is_plp());
+            assert_eq!(column.precision(), None);
+            assert_eq!(column.scale(), None);
+            assert_eq!(column.collation(), None);
+        }
+    }
+
+    #[test]
+    fn metadata_decimal_precision_is_not_inferred_from_byte_length() {
+        for data_type in [
+            TdsDataType::Decimal,
+            TdsDataType::DecimalN,
+            TdsDataType::Numeric,
+            TdsDataType::NumericN,
+        ] {
+            for (length, precision, scale) in [
+                (5, 1, 0),
+                (5, 9, 4),
+                (9, 10, 0),
+                (9, 18, 4),
+                (17, 38, 0),
+                (17, 38, 38),
+            ] {
+                let metadata = metadata_with_type_info(
+                    TypeInfo::var_len_precision_scale(data_type, length, precision, scale)
+                        .expect("decimal/numeric descriptor"),
+                );
+                let column = Column::from_tds(&metadata);
+                assert_eq!(column.precision(), Some(precision));
+                assert_eq!(column.scale(), Some(scale));
+                assert_eq!(column.byte_length(), length);
+                assert_eq!(column.char_length(), None);
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_money_precision_and_types() {
+        for (type_info, column_type, precision) in [
+            (
+                TypeInfo::fixed_len(TdsDataType::Money).expect("money descriptor"),
+                ColumnType::Money,
+                19,
+            ),
+            (
+                TypeInfo::fixed_len(TdsDataType::Money4).expect("smallmoney descriptor"),
+                ColumnType::Money4,
+                10,
+            ),
+            (
+                TypeInfo::var_len(TdsDataType::MoneyN, 8).expect("nullable money descriptor"),
+                ColumnType::Money,
+                19,
+            ),
+            (
+                TypeInfo::var_len(TdsDataType::MoneyN, 4).expect("nullable smallmoney descriptor"),
+                ColumnType::Money4,
+                10,
+            ),
+        ] {
+            let column = Column::from_tds(&metadata_with_type_info(type_info));
+            assert_eq!(column.column_type(), column_type);
+            assert_eq!(column.precision(), Some(precision));
+            assert_eq!(column.scale(), None);
+        }
+    }
+
+    #[test]
+    fn metadata_temporal_scale_has_no_numeric_precision() {
+        for (data_type, length, scale) in [
+            (TdsDataType::TimeN, 3, 0),
+            (TdsDataType::TimeN, 5, 7),
+            (TdsDataType::DateTime2N, 8, 7),
+            (TdsDataType::DateTimeOffsetN, 10, 7),
+        ] {
+            let column = Column::from_tds(&metadata_with_type_info(
+                TypeInfo::var_len_scale(data_type, length, scale).expect("temporal descriptor"),
+            ));
+            assert_eq!(column.scale(), Some(scale));
+            assert_eq!(column.precision(), None);
+        }
+    }
+
+    #[test]
+    fn metadata_finite_string_lengths_and_collation() {
+        let collation = SqlCollation {
+            info: 0x0010_0409,
+            lcid_language_id: 1033,
+            col_flags: 1,
+            sort_id: 52,
+        };
+        for (data_type, length, character_length, column_type) in [
+            (TdsDataType::NVarChar, 510, 255, ColumnType::NVarchar),
+            (TdsDataType::NChar, 510, 255, ColumnType::NChar),
+            (TdsDataType::BigVarChar, 255, 255, ColumnType::Varchar),
+            (TdsDataType::BigChar, 255, 255, ColumnType::Char),
+            (TdsDataType::Text, 1024, 1024, ColumnType::Text),
+            (TdsDataType::NText, 1024, 512, ColumnType::NText),
+        ] {
+            for collation in [Some(collation), None] {
+                let column = Column::from_tds(&metadata_with_type_info(
+                    TypeInfo::var_len_string(data_type, length, collation)
+                        .expect("finite string descriptor"),
+                ));
+                assert_eq!(column.column_type(), column_type);
+                assert_eq!(column.byte_length(), length);
+                assert_eq!(column.char_length(), Some(character_length));
+                assert_eq!(column.collation(), collation.map(Collation::from));
+                assert_eq!(column.precision(), None);
+                assert_eq!(column.scale(), None);
+                assert!(!column.is_plp());
+            }
+        }
+    }
+
+    #[test]
+    fn metadata_plp_lengths_are_not_finite_capacities() {
+        let collation = SqlCollation {
+            info: 0x0010_0409,
+            lcid_language_id: 1033,
+            col_flags: 1,
+            sort_id: 52,
+        };
+        for data_type in [TdsDataType::NVarChar, TdsDataType::BigVarChar] {
+            for collation in [Some(collation), None] {
+                let column = Column::from_tds(&metadata_with_type_info(
+                    TypeInfo::partial_len(data_type, usize::from(u16::MAX), collation)
+                        .expect("PLP string descriptor"),
+                ));
+                assert!(column.is_plp());
+                assert_eq!(column.byte_length(), usize::from(u16::MAX));
+                assert_eq!(column.char_length(), None);
+                assert_eq!(column.collation(), collation.map(Collation::from));
+            }
+        }
+        for data_type in [
+            TdsDataType::BigVarBinary,
+            TdsDataType::Xml,
+            TdsDataType::Udt,
+        ] {
+            let column = Column::from_tds(&metadata_with_type_info(
+                TypeInfo::partial_len(data_type, usize::from(u16::MAX), None)
+                    .expect("PLP descriptor"),
+            ));
+            assert!(column.is_plp());
+            assert_eq!(column.byte_length(), usize::from(u16::MAX));
+            assert_eq!(column.char_length(), None);
+            assert_eq!(column.collation(), None);
+        }
+    }
+
+    #[test]
+    fn metadata_binary_lengths_and_types() {
+        for (data_type, column_type) in [
+            (TdsDataType::BigBinary, ColumnType::Binary),
+            (TdsDataType::BigVarBinary, ColumnType::VarBinary),
+        ] {
+            let column = Column::from_tds(&metadata_with_type_info(
+                TypeInfo::var_len(data_type, 255).expect("binary descriptor"),
+            ));
+            assert_eq!(column.column_type(), column_type);
+            assert_eq!(column.byte_length(), 255);
+            assert_eq!(column.char_length(), None);
+            assert_eq!(column.collation(), None);
+            assert!(!column.is_plp());
+        }
+    }
+
+    #[test]
+    fn metadata_source_name_preserves_absence_and_empty_table_name() {
+        let mut metadata = metadata_with_type_info(
+            TypeInfo::fixed_len(TdsDataType::Int4).expect("integer descriptor"),
+        );
+        assert_eq!(Column::from_tds(&metadata).multi_part_name(), None);
+        metadata.multi_part_name = Some(mssql_tds::query::metadata::MultiPartName::default());
+        assert_eq!(
+            Column::from_tds(&metadata).multi_part_name(),
+            Some(&MultiPartName {
+                server_name: None,
+                catalog_name: None,
+                schema_name: None,
+                table_name: String::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn metadata_rows_preserve_precision_without_changing_equality() {
+        use crate::{ColumnValues, Row};
+
+        let left = metadata_with_type_info(
+            TypeInfo::var_len_precision_scale(TdsDataType::DecimalN, 9, 10, 2)
+                .expect("decimal(10,2) descriptor"),
+        );
+        let right = metadata_with_type_info(
+            TypeInfo::var_len_precision_scale(TdsDataType::DecimalN, 9, 18, 4)
+                .expect("decimal(18,4) descriptor"),
+        );
+        let left = Row::from_tds(&[left], vec![ColumnValues::Null]);
+        let right = Row::from_tds(&[right], vec![ColumnValues::Null]);
+        assert_eq!(
+            left.columns().first().expect("column").precision(),
+            Some(10)
+        );
+        assert_eq!(
+            right.columns().first().expect("column").precision(),
+            Some(18)
+        );
+        assert_eq!(
+            left, right,
+            "non-type metadata must not affect row equality"
+        );
+    }
 
     #[test]
     fn spatial_column_types_use_udt_identity() {
@@ -399,6 +704,7 @@ mod tests {
             is_encrypted: true,
             is_plp: true,
             byte_length: 4,
+            precision: Some(18),
             scale: Some(2),
             collation: Some(Collation {
                 info: 0x0010_0409,
@@ -426,7 +732,7 @@ mod tests {
         assert!(column.is_plp());
         assert_eq!(column.byte_length(), 4);
         assert_eq!(column.scale(), Some(2));
-        assert_eq!(column.precision(), None);
+        assert_eq!(column.precision(), Some(18));
         assert_eq!(
             column.collation().expect("column has a collation").sort_id,
             52

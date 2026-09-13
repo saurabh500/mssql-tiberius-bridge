@@ -131,9 +131,9 @@ These are bugs in tiberius's TDS implementation. The bridge uses `mssql-tds`, an
 |---|-------|--------|--------|-------|
 | 404 | Implement `Debug` for `ToSql` | ✅ | [#64](../../issues/64) — `Debug` for `ToSql` | Trait surface improvement. |
 | 402 | Implement `Eq` for `Row` and `TokenRow` | ✅ | [#65](../../issues/65) — `PartialEq`/`Eq` for `Row` | For test asserts. |
-| 397 | Expose `BaseMetaDataColumn` & `TypeInfo` | ✅ | [#63](../../issues/63) — column metadata | Bridge's `Column` already exposes type/precision/scale to some extent — verify completeness. |
-| 403 | `BaseMetaDataColumn` does not retrieve Identity flag | ✅ | [#63](../../issues/63) — column metadata | **Check**: bridge's column metadata — does it carry IDENTITY/nullable/size? |
-| 217 | Column nullable/size/scale enhancement | ✅ | [#63](../../issues/63) — column metadata | Same theme. |
+| 397 | Expose `BaseMetaDataColumn` & `TypeInfo` | ✅ | [#63](../../issues/63) — column metadata | Bridge-owned metadata includes precision, scale, collation, and supplied source names; `QueryResult` retains schemas even without rows. |
+| 403 | `BaseMetaDataColumn` does not retrieve Identity flag | ✅ | [#63](../../issues/63) — column metadata | Identity, nullable, computed, and sparse-column-set flags are copied from TDS and covered by conversion and SQL tests. |
+| 217 | Column nullable/size/scale enhancement | ✅ | [#63](../../issues/63) — column metadata | Finite byte/UTF-16 capacities and numeric metadata are exposed; `(MAX)` character length is `None`. Catalog-only SPARSE/ROWGUIDCOL remain deferred. |
 | 383 | Constructing a `Row` for tests | 🔵 | — | Bridge `Row::from_schema` is `pub` already; verify usable for tests. |
 | 262 | Make `QueryIdx` public | ✅ | [#39](../../issues/39) (PR [#43](../../pull/43)) — `ColumnIndex` public | **Check**: bridge has `ColumnIndex` trait — public? |
 | 258 | How to write wrapper for try_get? | ⚪ | — | how-to (related to #262). |
@@ -309,7 +309,7 @@ The following bridge issues were filed from this triage to track the work.
 | #60 | —  | #131, #53 | Named pipe + shared-memory transport |
 | #61 | —  | #337 | MultiSubnetFailover |
 | #62 | —  | #412 | TDS 8.0 Strict encryption (verify wiring) |
-| #63 | —  | #397, #403, #217 | Full column metadata (Identity, nullable, size, scale, collation) |
+| #63 | —  | #397, #403, #217 | Wire column metadata and empty-result schemas; catalog-only SPARSE/ROWGUIDCOL deferred |
 | #64 | —  | #404 | `Debug` for `ToSql` |
 | #65 | —  | #402 | `PartialEq`/`Eq` for `Row` |
 | #67 | —  | #277 | `time` crate `ToSql`/`IntoSql` |

@@ -12,7 +12,9 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::operation::{ensure_usable, Operation};
-use crate::query::{build_params_with_string_encoding, ExecuteResult, QueryResult, ToSql};
+use crate::query::{
+    build_params_with_string_encoding, BufferedResultSet, ExecuteResult, QueryResult, ToSql,
+};
 
 /// An async SQL Server client with tiberius-style query methods.
 ///
@@ -612,18 +614,18 @@ impl Client {
 
     /// Collect all result sets from the current execution into a [`QueryResult`].
     async fn collect_results(inner: &mut TdsClient) -> Result<QueryResult> {
-        let mut result_sets: Vec<Vec<crate::row::Row>> = Vec::new();
+        let mut result_sets: Vec<BufferedResultSet> = Vec::new();
 
         while inner.on_rows() || inner.advance_to_rows().await.map_err(Error::Tds)? {
             let schema = crate::row::RowSchema::from_metadata(inner.get_metadata());
-            let mut writer = crate::row::BridgeRowWriter::new(schema);
+            let mut writer = crate::row::BridgeRowWriter::new(Arc::clone(&schema));
             let mut rows: Vec<crate::row::Row> = Vec::new();
 
             while inner.next_row_into(&mut writer).await.map_err(Error::Tds)? {
                 rows.push(writer.take_row());
             }
 
-            result_sets.push(rows);
+            result_sets.push(BufferedResultSet { schema, rows });
 
             if !inner.advance_to_rows().await.map_err(Error::Tds)? {
                 break;
@@ -663,6 +665,78 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mssql_tds::test_client_support::{
+        col_metadata, done_more, done_no_more, int_columns, tds_client_from_int_rows,
+        tds_client_from_tokens,
+    };
+
+    fn test_client(inner: TdsClient) -> Client {
+        Client {
+            inner,
+            send_string_parameters_as_unicode: true,
+            prepared_session: Arc::new(()),
+        }
+    }
+
+    #[tokio::test]
+    async fn metadata_collection_keeps_each_empty_result_schema() {
+        let named_columns = |name: &str| {
+            let mut columns = int_columns(1);
+            columns.first_mut().expect("one column").column_name = name.to_owned();
+            columns
+        };
+        let mut client = test_client(tds_client_from_tokens(vec![
+            col_metadata(named_columns("first")),
+            done_more(),
+            col_metadata(named_columns("middle")),
+            done_more(),
+            col_metadata(named_columns("last")),
+            done_no_more(),
+        ]));
+        let result = client
+            .simple_query("scripted empty result sets")
+            .await
+            .expect("collect empty result sets");
+        assert_eq!(result.result_set_count(), 3);
+        for (index, name) in ["first", "middle", "last"].into_iter().enumerate() {
+            assert_eq!(
+                result
+                    .result_set_columns(index)
+                    .and_then(|columns| columns.first())
+                    .map(crate::Column::name),
+                Some(name)
+            );
+        }
+        assert!(result.into_results().iter().all(Vec::is_empty));
+    }
+
+    #[tokio::test]
+    async fn metadata_collection_does_not_invent_a_schema_for_dml() {
+        let mut client = test_client(tds_client_from_tokens(vec![done_no_more()]));
+        let result = client
+            .simple_query("scripted no-row statement")
+            .await
+            .expect("collect a no-row statement");
+        assert!(result.columns().is_none());
+        assert!(result.result_set_columns(0).is_none());
+        assert_eq!(result.result_set_count(), 0);
+    }
+
+    #[tokio::test]
+    async fn metadata_collection_shares_the_result_schema_with_rows() {
+        let mut client = test_client(tds_client_from_int_rows(vec![vec![1], vec![2]]));
+        let result = client
+            .simple_query("scripted rows")
+            .await
+            .expect("collect rows");
+        let columns = result.columns().expect("result schema").as_ptr();
+        let rows = result.into_first_result();
+        assert_eq!(rows.len(), 2);
+        for row in &rows {
+            assert_eq!(row.columns().as_ptr(), columns);
+            assert_eq!(row.columns().first().expect("column").name(), "c1");
+        }
+    }
 
     #[test]
     fn config_to_datasource() {

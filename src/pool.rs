@@ -1,11 +1,12 @@
-//! Connection pooling via [`deadpool`] with native mssql-tds session resets.
+//! Connection pooling via [`deadpool`] and optional [`bb8`] with native mssql-tds
+//! session resets.
 //!
 //! Reused connections are reset and validated before checkout, including restoring
 //! `READ COMMITTED` isolation. Use [`RecyclingMethod::Ping`] only when retaining
 //! session state and relying on cached connection health is intentional.
 //!
 //! Connections marked dead after cancelled bridge I/O are rejected before the
-//! recycle reset or ping, so deadpool drops them and creates replacements.
+//! recycle reset or ping, so pools drop them and create replacements.
 //! Healthy connections follow the selected recycling policy. See [`Client`]'s
 //! cancellation safety contract, including the unguarded [`Client::inner_mut`]
 //! escape hatch.
@@ -35,6 +36,14 @@ pub type PooledConnection = deadpool::managed::Object<TdsManager>;
 
 /// Connection pool type alias.
 pub type Pool = deadpool::managed::Pool<TdsManager>;
+
+/// A bb8 connection pool.
+#[cfg(feature = "bb8")]
+pub type Bb8Pool = bb8::Pool<TdsManager>;
+
+/// A checked-out bb8 connection.
+#[cfg(feature = "bb8")]
+pub type Bb8PooledConnection<'a> = bb8::PooledConnection<'a, TdsManager>;
 
 /// How an existing connection is prepared for its next borrower.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -96,6 +105,36 @@ impl TdsManager {
             .runtime(deadpool::Runtime::Tokio1)
             .build()
     }
+
+    /// Build a [`Bb8Pool`] with native reset recycling and the given maximum size.
+    ///
+    /// The builder explicitly enables checkout validation, which invokes
+    /// [`bb8::ManageConnection::is_valid`] and therefore the configured
+    /// [`RecyclingMethod`].
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if bb8 cannot establish its configured minimum connections.
+    #[cfg(feature = "bb8")]
+    pub async fn create_bb8_pool(config: Config, max_size: u32) -> Result<Bb8Pool, Error> {
+        bb8::Pool::builder()
+            .max_size(max_size)
+            .test_on_check_out(true)
+            .build(TdsManager::new(config))
+            .await
+    }
+
+    async fn create_connection(&self) -> Result<Client, Error> {
+        Client::connect(&self.config).await
+    }
+
+    async fn recycle_connection(&self, conn: &mut Client) -> Result<(), Error> {
+        conn.ensure_usable()?;
+        match self.recycling_method {
+            RecyclingMethod::Reset => conn.reset_session().await,
+            RecyclingMethod::Ping => conn.ping().await,
+        }
+    }
 }
 
 impl Manager for TdsManager {
@@ -103,16 +142,31 @@ impl Manager for TdsManager {
     type Error = Error;
 
     async fn create(&self) -> Result<Self::Type, Self::Error> {
-        Client::connect(&self.config).await
+        self.create_connection().await
     }
 
     async fn recycle(&self, conn: &mut Self::Type, _: &Metrics) -> RecycleResult<Self::Error> {
-        conn.ensure_usable().map_err(RecycleError::Backend)?;
-        match self.recycling_method {
-            RecyclingMethod::Reset => conn.reset_session().await,
-            RecyclingMethod::Ping => conn.ping().await,
-        }
-        .map_err(RecycleError::Backend)
+        self.recycle_connection(conn)
+            .await
+            .map_err(RecycleError::Backend)
+    }
+}
+
+#[cfg(feature = "bb8")]
+impl bb8::ManageConnection for TdsManager {
+    type Connection = Client;
+    type Error = Error;
+
+    async fn connect(&self) -> Result<Self::Connection, Self::Error> {
+        self.create_connection().await
+    }
+
+    async fn is_valid(&self, conn: &mut Self::Connection) -> Result<(), Self::Error> {
+        self.recycle_connection(conn).await
+    }
+
+    fn has_broken(&self, conn: &mut Self::Connection) -> bool {
+        conn.is_connection_dead()
     }
 }
 
@@ -147,5 +201,18 @@ mod tests {
             .build()
             .expect("pool configuration should be valid");
         assert_eq!(pool.status().max_size, 2);
+    }
+
+    #[cfg(feature = "bb8")]
+    #[tokio::test]
+    async fn bb8_manager_uses_the_same_recycling_configuration() {
+        fn assert_manager<T: bb8::ManageConnection<Connection = Client, Error = Error>>() {}
+
+        assert_manager::<TdsManager>();
+        let pool = bb8::Pool::builder()
+            .max_size(2)
+            .test_on_check_out(true)
+            .build_unchecked(TdsManager::new(Config::new()));
+        assert_eq!(pool.state().connections, 0);
     }
 }

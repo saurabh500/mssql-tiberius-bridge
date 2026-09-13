@@ -2,6 +2,34 @@
 
 Terse examples for every connection option exposed by `mssql-tiberius-bridge` `0.1.0-preview.2`. All samples assume they run inside an async context.
 
+## Connection pooling
+
+`TdsManager` supports deadpool by default. Enable the optional bb8 adapter with
+`mssql-tiberius-bridge = { version = "0.1.0", features = ["bb8"] }`:
+
+```rust,no_run
+use mssql_tiberius_bridge::{AuthMethod, Config, TdsManager};
+
+async fn example() -> Result<(), mssql_tiberius_bridge::Error> {
+    let mut cfg = Config::new();
+    cfg.host("localhost")
+        .authentication(AuthMethod::sql_server("sa", "password"))
+        .trust_cert();
+    let pool = TdsManager::create_bb8_pool(cfg, 10).await?;
+    let mut connection = pool.get().await.expect("bb8 checkout succeeds");
+    connection.simple_query("SELECT 1").await?;
+    Ok(())
+}
+```
+
+`create_bb8_pool` enables bb8's `test_on_check_out` option, so every reused
+connection runs the manager's selected recycling method. If you construct a bb8
+pool directly and disable that option, `is_valid()` is bypassed: no reset occurs
+at checkout. Configure bb8's builder timeouts and capacity for your workload.
+As with deadpool, commit or roll back before returning a connection because
+checkout-time reset does not release an abandoned transaction's locks while the
+connection remains idle.
+
 ## Quick start
 
 ```rust,no_run

@@ -155,6 +155,31 @@ async fn native_pool_reset_isolates_borrowers_on_the_same_connection() {
     ));
 }
 
+#[cfg(feature = "bb8")]
+#[tokio::test]
+async fn bb8_pool_resets_reused_connections() {
+    let Some(config) = test_config() else {
+        return;
+    };
+    let pool = TdsManager::create_bb8_pool(config, 1)
+        .await
+        .expect("build bb8 connection pool");
+    let mut conn = pool.get().await.expect("bb8 checkout failed");
+    let spid = scalar(&mut conn, "SELECT @@SPID").await;
+    let original_lock_timeout = scalar(&mut conn, "SELECT @@LOCK_TIMEOUT").await;
+    conn.simple_query("SET LOCK_TIMEOUT 1234")
+        .await
+        .expect("set lock timeout");
+    drop(conn);
+
+    let mut conn = pool.get().await.expect("bb8 checkout failed");
+    assert_eq!(scalar(&mut conn, "SELECT @@SPID").await, spid);
+    assert_eq!(
+        scalar(&mut conn, "SELECT @@LOCK_TIMEOUT").await,
+        original_lock_timeout
+    );
+}
+
 #[tokio::test]
 async fn repeated_pool_reuse_does_not_leak_validation_result_sets() {
     let Some(config) = test_config() else {

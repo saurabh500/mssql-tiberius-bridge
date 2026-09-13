@@ -111,6 +111,8 @@ impl TdsManager {
     /// The builder explicitly enables checkout validation, which invokes
     /// [`bb8::ManageConnection::is_valid`] and therefore the configured
     /// [`RecyclingMethod`].
+    /// Build [`bb8::Pool`] directly with a configured [`TdsManager`] to use
+    /// another recycling method or other bb8 builder settings.
     ///
     /// # Errors
     ///
@@ -205,7 +207,7 @@ mod tests {
 
     #[cfg(feature = "bb8")]
     #[tokio::test]
-    async fn bb8_manager_uses_the_same_recycling_configuration() {
+    async fn bb8_manager_implements_manage_connection() {
         fn assert_manager<T: bb8::ManageConnection<Connection = Client, Error = Error>>() {}
 
         assert_manager::<TdsManager>();

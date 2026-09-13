@@ -1,6 +1,6 @@
 # Connection examples
 
-Terse examples for every connection option exposed by `mssql-tiberius-bridge` `0.1.0-preview.2`. All samples assume they run inside an async context.
+Terse examples for every connection option exposed by `mssql-tiberius-bridge` `0.1.0`. All samples assume they run inside an async context.
 
 ## Connection pooling
 
@@ -26,6 +26,9 @@ async fn example() -> Result<(), mssql_tiberius_bridge::Error> {
 connection runs the manager's selected recycling method. If you construct a bb8
 pool directly and disable that option, `is_valid()` is bypassed: no reset occurs
 at checkout. Configure bb8's builder timeouts and capacity for your workload.
+For a custom builder or `RecyclingMethod::Ping`, add `bb8 = "0.9"` to your
+dependencies and build `bb8::Pool` with a configured `TdsManager`; retain
+`test_on_check_out(true)` unless deliberately bypassing recycle validation.
 As with deadpool, commit or roll back before returning a connection because
 checkout-time reset does not release an abandoned transaction's locks while the
 connection remains idle.

@@ -19,7 +19,7 @@ unimplemented = "warn"
 unreachable = "warn"
 get_unwrap = "warn"
 unwrap_in_result = "warn"
-unchecked_duration_subtraction = "warn"
+unchecked_time_subtraction = "warn"
 panic_in_result_fn = "warn"
 
 # Futures and error handling

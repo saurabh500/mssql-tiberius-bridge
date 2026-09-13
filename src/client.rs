@@ -31,9 +31,10 @@ use crate::query::{
 /// discards dead connections on recycle. [`is_connection_dead`](Self::is_connection_dead)
 /// observes this state without I/O.
 ///
-/// This applies to queries, execution, prepared statements, ping, and bulk
+/// This applies to queries, execution, prepared statements, and bulk
 /// sends, including response collection and cleanup. Unpolled futures and
-/// unused bulk builders do not affect the connection. For wire streams, dropping
+/// unused bulk builders do not affect the connection. [`ping`](Self::ping) only
+/// checks cached health and completes on its first poll. For wire streams, dropping
 /// between fully yielded rows remains safe: the next operation drains the unread
 /// results. Dropping a stream while its I/O is pending marks the connection dead.
 /// Dropping only a pending `next()` future leaves the stream's internal future
@@ -116,9 +117,9 @@ impl Client {
     /// Return whether the driver has observed the connection to be dead.
     ///
     /// This performs no I/O. A `false` result does not prove that an idle
-    /// connection is still responsive; use [`ping`](Self::ping) or
-    /// [`reset_session`](Self::reset_session) to validate it. A known-dead client
-    /// must be discarded.
+    /// connection is still responsive. [`ping`](Self::ping) uses this same
+    /// cached status; a query or [`reset_session`](Self::reset_session) is
+    /// needed to verify a server round trip. A known-dead client must be discarded.
     pub fn is_connection_dead(&self) -> bool {
         self.inner.is_connection_dead()
     }
@@ -159,18 +160,21 @@ impl Client {
         Ok(())
     }
 
-    /// Check whether the connection is alive and responsive.
+    /// Check whether the connection is not known to be dead.
     ///
-    /// This sends a tiny `SELECT 1` batch and drains the result so the client is
-    /// ready for the next request. Connection pools can use this as a cheap
-    /// validation step before handing out an existing connection.
+    /// Uses [`is_connection_dead`](Self::is_connection_dead) without sending
+    /// SQL or consuming outstanding results. Success means the driver has not
+    /// observed a failure, not that the server is currently responsive: a
+    /// connection that silently failed while idle may fail on its next operation.
+    /// The async signature is retained for compatibility.
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Tds`] if the batch fails or the connection cannot be used.
+    /// Returns [`Error::Tds`] containing
+    /// [`ConnectionClosed`](mssql_tds::error::Error::ConnectionClosed) if the
+    /// driver has marked the connection dead.
     pub async fn ping(&mut self) -> Result<()> {
-        let _ = self.simple_query("SELECT 1").await?.into_first_result();
-        Ok(())
+        self.ensure_usable()
     }
 
     pub(crate) fn ensure_usable(&self) -> Result<()> {
@@ -670,7 +674,7 @@ mod tests {
         tds_client_from_tokens,
     };
 
-    fn test_client(inner: TdsClient) -> Client {
+    fn client_for_test(inner: TdsClient) -> Client {
         Client {
             inner,
             send_string_parameters_as_unicode: true,
@@ -685,7 +689,7 @@ mod tests {
             columns.first_mut().expect("one column").column_name = name.to_owned();
             columns
         };
-        let mut client = test_client(tds_client_from_tokens(vec![
+        let mut client = client_for_test(tds_client_from_tokens(vec![
             col_metadata(named_columns("first")),
             done_more(),
             col_metadata(named_columns("middle")),
@@ -712,7 +716,7 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_collection_does_not_invent_a_schema_for_dml() {
-        let mut client = test_client(tds_client_from_tokens(vec![done_no_more()]));
+        let mut client = client_for_test(tds_client_from_tokens(vec![done_no_more()]));
         let result = client
             .simple_query("scripted no-row statement")
             .await
@@ -724,7 +728,7 @@ mod tests {
 
     #[tokio::test]
     async fn metadata_collection_shares_the_result_schema_with_rows() {
-        let mut client = test_client(tds_client_from_int_rows(vec![vec![1], vec![2]]));
+        let mut client = client_for_test(tds_client_from_int_rows(vec![vec![1], vec![2]]));
         let result = client
             .simple_query("scripted rows")
             .await
@@ -736,6 +740,82 @@ mod tests {
             assert_eq!(row.columns().as_ptr(), columns);
             assert_eq!(row.columns().first().expect("column").name(), "c1");
         }
+    }
+
+    #[tokio::test]
+    async fn ping_uses_cached_status_without_a_server_response() {
+        // An empty replay transport fails any request that tries to read a response.
+        let mut client = client_for_test(tds_client_from_tokens(Vec::new()));
+        client
+            .ping()
+            .await
+            .expect("cached ping should not require a server response");
+        assert!(!client.is_connection_dead());
+
+        client.inner.mark_connection_dead();
+        assert!(matches!(
+            client.ping().await,
+            Err(Error::Tds(mssql_tds::error::Error::ConnectionClosed(_)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn ping_rejects_a_closed_connection() {
+        let mut client = client_for_test(tds_client_from_tokens(Vec::new()));
+        client
+            .inner
+            .close_connection()
+            .await
+            .expect("scripted connection should close successfully");
+        assert!(matches!(
+            client.ping().await,
+            Err(Error::Tds(mssql_tds::error::Error::ConnectionClosed(_)))
+        ));
+    }
+
+    #[tokio::test]
+    async fn ping_preserves_outstanding_results() {
+        let mut client = client_for_test(tds_client_from_int_rows(vec![vec![7], vec![8]]));
+        client
+            .inner
+            .execute("SELECT application_rows".into(), ())
+            .await
+            .expect("scripted query should start successfully");
+        let session = Arc::clone(&client.prepared_session);
+
+        client
+            .ping()
+            .await
+            .expect("cached ping should preserve an outstanding query");
+
+        assert!(Arc::ptr_eq(&session, &client.prepared_session));
+        let results = Client::collect_results(&mut client.inner)
+            .await
+            .expect("outstanding results should remain readable after ping")
+            .into_results();
+        assert_eq!(results.len(), 1);
+        let rows = results.first().expect("expected the scripted result set");
+        let values: Vec<_> = rows.iter().map(|row| row.get::<i32, _>(0)).collect();
+        assert_eq!(values, [Some(7), Some(8)]);
+    }
+
+    #[tokio::test]
+    async fn ping_recycling_uses_cached_status() {
+        use deadpool::managed::{Manager, Metrics};
+
+        let manager = crate::TdsManager::new(Config::new())
+            .with_recycling_method(crate::RecyclingMethod::Ping);
+        let mut client = client_for_test(tds_client_from_tokens(Vec::new()));
+        manager
+            .recycle(&mut client, &Metrics::default())
+            .await
+            .expect("Ping recycling should not require a server response");
+
+        client.inner.mark_connection_dead();
+        assert!(manager
+            .recycle(&mut client, &Metrics::default())
+            .await
+            .is_err());
     }
 
     #[test]

@@ -263,13 +263,15 @@ async fn stream_result_advancement_timeout_retires_connection() {
 }
 
 #[tokio::test]
-async fn cancelling_ping_during_prior_result_cleanup_retires_connection() {
+async fn ping_does_not_drain_pending_prior_results() {
     let Some(mut client) = live_client().await else {
         return;
     };
     drop(delayed_results(&mut client).await);
     assert!(!client.is_connection_dead());
-    cancel_after_poll(client.ping()).await;
+    assert!(matches!(poll_once(client.ping()), Poll::Ready(Ok(()))));
+    assert!(!client.is_connection_dead());
+    cancel_after_poll(client.simple_query("SELECT 1 AS n")).await;
     assert_retired(&mut client);
 }
 

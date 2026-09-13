@@ -110,10 +110,6 @@ impl Row {
     /// # Panics
     ///
     /// Panics if column lookup fails. Use [`Self::try_get`] for fallible access.
-    #[expect(
-        clippy::unwrap_in_result,
-        reason = "Preserve the tiberius-compatible get panic; try_get provides fallible access"
-    )]
     pub fn get<'a, T: FromSql<'a>, I: ColumnIndex>(&'a self, col: I) -> Option<T> {
         self.try_get(col).expect("column not found")
     }
@@ -130,10 +126,6 @@ impl Row {
     /// # Panics
     ///
     /// Panics if column lookup fails. Use [`Self::try_get_ci`] for fallible access.
-    #[expect(
-        clippy::unwrap_in_result,
-        reason = "Preserve the documented get_ci panic; try_get_ci provides fallible access"
-    )]
     pub fn get_ci<'a, T: FromSql<'a>>(&'a self, name: &str) -> Option<T> {
         self.try_get_ci(name).expect("column not found")
     }

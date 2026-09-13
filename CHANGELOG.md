@@ -13,6 +13,10 @@ when the Release PR is opened.
 
 ### Changed
 
+- Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached
+  `is_connection_dead()` check, including for `RecyclingMethod::Ping`.
+  The async API is unchanged, but success no longer verifies server
+  responsiveness or drains outstanding results; no network I/O is performed.
 - Use native `mssql-tds` session reset and `READ COMMITTED` isolation when
   recycling pooled connections. Keep ping-only recycling as the explicit
   `RecyclingMethod::Ping` compatibility policy.

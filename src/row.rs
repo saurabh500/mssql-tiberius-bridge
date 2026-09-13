@@ -105,7 +105,11 @@ impl Row {
     }
 
     /// Get a column value by name or index. Returns `None` if the column is NULL
-    /// or the type doesn't match. Panics if the column doesn't exist.
+    /// or the type doesn't match.
+    ///
+    /// # Panics
+    ///
+    /// Panics if column lookup fails. Use [`Self::try_get`] for fallible access.
     pub fn get<'a, T: FromSql<'a>, I: ColumnIndex>(&'a self, col: I) -> Option<T> {
         self.try_get(col).expect("column not found")
     }
@@ -117,8 +121,11 @@ impl Row {
     }
 
     /// Get a column value by name using case-insensitive lookup. Returns `None`
-    /// if the column is NULL or the type doesn't match. Panics if the column
-    /// doesn't exist.
+    /// if the column is NULL or the type doesn't match.
+    ///
+    /// # Panics
+    ///
+    /// Panics if column lookup fails. Use [`Self::try_get_ci`] for fallible access.
     pub fn get_ci<'a, T: FromSql<'a>>(&'a self, name: &str) -> Option<T> {
         self.try_get_ci(name).expect("column not found")
     }
@@ -920,6 +927,27 @@ mod tests {
             .try_get::<i32, _>("nope")
             .expect_err("a missing column must fail lookup");
         assert!(matches!(error, Error::ColumnNotFound(name) if name == "nope"));
+    }
+
+    #[test]
+    #[should_panic(expected = "column not found")]
+    fn get_missing_column_panics() {
+        let row = make_row(&["id"], vec![ColumnValues::Int(1)]);
+        let _value = row.get::<i32, _>("missing");
+    }
+
+    #[test]
+    #[should_panic(expected = "column not found")]
+    fn get_missing_index_panics() {
+        let row = make_row(&["id"], vec![ColumnValues::Int(1)]);
+        let _value = row.get::<i32, _>(1usize);
+    }
+
+    #[test]
+    #[should_panic(expected = "column not found")]
+    fn get_ci_missing_column_panics() {
+        let row = make_row(&["id"], vec![ColumnValues::Int(1)]);
+        let _value = row.get_ci::<i32>("MISSING");
     }
 
     #[test]

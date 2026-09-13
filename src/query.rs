@@ -7,8 +7,10 @@
 use mssql_tds::datatypes::sql_string::SqlString;
 use mssql_tds::datatypes::sqltypes::SqlType;
 use mssql_tds::message::parameters::rpc_parameters::{RpcParameter, StatusFlags};
+use std::sync::Arc;
 
-use crate::row::Row;
+use crate::column::Column;
+use crate::row::{Row, RowSchema};
 
 /// Result of an `execute()` call, containing row counts per statement.
 #[derive(Debug, Clone)]
@@ -32,16 +34,56 @@ impl ExecuteResult {
     }
 }
 
+pub(crate) struct BufferedResultSet {
+    pub(crate) schema: Arc<RowSchema>,
+    pub(crate) rows: Vec<Row>,
+}
+
 /// Collected query results from one or more SQL statements.
 ///
 /// Use [`into_first_result()`](Self::into_first_result) for single-statement
 /// queries (most common), or [`into_results()`](Self::into_results) for
-/// multi-statement batches.
+/// multi-statement batches. [`columns()`](Self::columns) and
+/// [`result_set_columns()`](Self::result_set_columns) expose the schema even
+/// when a result set has no rows.
 pub struct QueryResult {
-    pub(crate) result_sets: Vec<Vec<Row>>,
+    pub(crate) result_sets: Vec<BufferedResultSet>,
 }
 
 impl QueryResult {
+    /// Column metadata for the first result set, including an empty result set.
+    ///
+    /// Returns `None` only when there is no row result set, such as a DML-only
+    /// batch. A present result set with zero columns returns `Some(&[])`.
+    ///
+    /// ```rust,no_run
+    /// # async fn example(client: &mut mssql_tiberius_bridge::Client)
+    /// #     -> mssql_tiberius_bridge::Result<()> {
+    /// let result = client.simple_query(
+    ///     "SELECT CAST(NULL AS nvarchar(255)) AS name WHERE 1 = 0",
+    /// ).await?;
+    /// let column = result.columns()
+    ///     .and_then(|columns| columns.first())
+    ///     .expect("SELECT returns column metadata even without rows");
+    /// assert_eq!(column.name(), "name");
+    /// assert_eq!(column.char_length(), Some(255));
+    /// assert!(result.into_first_result().is_empty());
+    /// # Ok(()) }
+    /// ```
+    pub fn columns(&self) -> Option<&[Column]> {
+        self.result_set_columns(0)
+    }
+
+    /// Column metadata for a zero-based result-set index, even without rows.
+    ///
+    /// Returns `None` when the index does not exist. Indexes match
+    /// [`Self::into_results`]; DML-only statements do not add result sets.
+    pub fn result_set_columns(&self, index: usize) -> Option<&[Column]> {
+        self.result_sets
+            .get(index)
+            .map(|result| result.schema.columns.as_slice())
+    }
+
     /// Consume the first result set into a `Vec<Row>`.
     ///
     /// This is the most common access pattern, equivalent to tiberius'
@@ -49,11 +91,11 @@ impl QueryResult {
     ///
     /// Returns an empty `Vec` if the query produced no result set.
     pub fn into_first_result(self) -> Vec<Row> {
-        let mut sets = self.result_sets;
-        if sets.is_empty() {
-            return Vec::new();
-        }
-        sets.remove(0)
+        self.result_sets
+            .into_iter()
+            .next()
+            .map(|result| result.rows)
+            .unwrap_or_default()
     }
 
     /// Consume all result sets into a `Vec<Vec<Row>>`.
@@ -61,6 +103,9 @@ impl QueryResult {
     /// Use for multi-statement batches like `SELECT 1; SELECT 2`.
     pub fn into_results(self) -> Vec<Vec<Row>> {
         self.result_sets
+            .into_iter()
+            .map(|result| result.rows)
+            .collect()
     }
 
     /// Number of result sets.
@@ -104,9 +149,13 @@ impl QueryResult {
     /// # }
     /// ```
     pub fn into_row_stream(self) -> RowStream {
-        let total: usize = self.result_sets.iter().map(|s| s.len()).sum();
+        let total: usize = self.result_sets.iter().map(|s| s.rows.len()).sum();
         let mut sets = self.result_sets.into_iter();
-        let current = sets.next().unwrap_or_default().into_iter();
+        let current = sets
+            .next()
+            .map(|result| result.rows)
+            .unwrap_or_default()
+            .into_iter();
         RowStream {
             sets,
             current,
@@ -134,7 +183,7 @@ impl QueryResult {
 /// **Note:** rows are pre-buffered (see
 /// [`QueryResult::into_row_stream`] for the limitation and roadmap).
 pub struct RowStream {
-    sets: std::vec::IntoIter<Vec<Row>>,
+    sets: std::vec::IntoIter<BufferedResultSet>,
     current: std::vec::IntoIter<Row>,
     remaining: usize,
 }
@@ -153,7 +202,7 @@ impl futures_core::Stream for RowStream {
             }
             match self.sets.next() {
                 Some(next_set) => {
-                    self.current = next_set.into_iter();
+                    self.current = next_set.rows.into_iter();
                 }
                 None => return std::task::Poll::Ready(None),
             }
@@ -685,9 +734,121 @@ pub(crate) fn build_params_with_string_encoding(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mssql_tds::datatypes::column_values::ColumnValues;
+    use mssql_tds::test_client_support::int_columns;
     use serde_json::json;
 
     type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn metadata_result_set(name: &str, values: &[i32]) -> BufferedResultSet {
+        let mut metadata = int_columns(1);
+        metadata.first_mut().expect("one column").column_name = name.to_owned();
+        let schema = RowSchema::from_metadata(&metadata);
+        let rows = values
+            .iter()
+            .map(|&value| Row::from_schema(Arc::clone(&schema), vec![ColumnValues::Int(value)]))
+            .collect();
+        BufferedResultSet { schema, rows }
+    }
+
+    #[test]
+    fn metadata_accessors_preserve_empty_result_set_positions() {
+        let result = QueryResult {
+            result_sets: vec![
+                metadata_result_set("first", &[]),
+                metadata_result_set("second", &[1, 2]),
+                metadata_result_set("third", &[]),
+                metadata_result_set("fourth", &[3]),
+                metadata_result_set("fifth", &[]),
+            ],
+        };
+        assert_eq!(result.result_set_count(), 5);
+        assert!(std::ptr::eq(
+            result.columns().expect("first schema"),
+            result.result_set_columns(0).expect("schema at index zero"),
+        ));
+        for (index, name) in ["first", "second", "third", "fourth", "fifth"]
+            .into_iter()
+            .enumerate()
+        {
+            let column = result
+                .result_set_columns(index)
+                .and_then(|columns| columns.first())
+                .expect("each result set retains its column");
+            assert_eq!(column.name(), name);
+            assert_eq!(column.column_type(), crate::ColumnType::Int4);
+        }
+        assert!(result.result_set_columns(5).is_none());
+        assert!(result.result_set_columns(usize::MAX).is_none());
+        let sets = result.into_results();
+        assert_eq!(
+            sets.iter().map(Vec::len).collect::<Vec<_>>(),
+            vec![0, 2, 0, 1, 0]
+        );
+        assert_eq!(
+            sets.iter()
+                .flatten()
+                .map(|row| row.get::<i32, _>(0))
+                .collect::<Vec<_>>(),
+            vec![Some(1), Some(2), Some(3)]
+        );
+    }
+
+    #[test]
+    fn metadata_absent_and_zero_column_schemas_are_distinct() {
+        let absent = QueryResult::empty();
+        assert!(absent.columns().is_none());
+        assert!(absent.result_set_columns(0).is_none());
+        assert_eq!(absent.result_set_count(), 0);
+        assert!(absent.into_results().is_empty());
+        assert!(QueryResult::empty().into_first_result().is_empty());
+
+        let present = QueryResult {
+            result_sets: vec![BufferedResultSet {
+                schema: RowSchema::from_metadata(&[]),
+                rows: Vec::new(),
+            }],
+        };
+        assert_eq!(present.columns().map(<[Column]>::len), Some(0));
+        assert_eq!(present.result_set_count(), 1);
+        assert!(present.into_first_result().is_empty());
+    }
+
+    #[test]
+    fn metadata_first_result_does_not_skip_an_empty_set() {
+        let result = QueryResult {
+            result_sets: vec![
+                metadata_result_set("empty", &[]),
+                metadata_result_set("populated", &[1]),
+            ],
+        };
+        assert_eq!(
+            result
+                .columns()
+                .and_then(|columns| columns.first())
+                .map(Column::name),
+            Some("empty")
+        );
+        assert!(result.into_first_result().is_empty());
+    }
+
+    #[test]
+    fn metadata_rows_keep_the_shared_schema_after_consumption() {
+        let set = metadata_result_set("answer", &[1, 2]);
+        let schema = Arc::downgrade(&set.schema);
+        let result = QueryResult {
+            result_sets: vec![set],
+        };
+        let columns = result.columns().expect("schema").as_ptr();
+        let rows = result.into_first_result();
+        assert_eq!(schema.strong_count(), 2);
+        for row in &rows {
+            assert_eq!(row.columns().as_ptr(), columns);
+            assert_eq!(row.columns().first().expect("column").name(), "answer");
+        }
+        drop(rows);
+        assert!(schema.upgrade().is_none());
+    }
 
     fn ensure_equal<T: PartialEq + std::fmt::Debug>(actual: T, expected: T) -> TestResult {
         if actual != expected {
@@ -791,11 +952,15 @@ mod tests {
     async fn buffered_stream_skips_empty_sets_and_tracks_remaining_rows() -> TestResult {
         use futures_core::Stream;
         use futures_util::StreamExt;
-        use mssql_tds::datatypes::column_values::ColumnValues;
 
-        let row = |n| Row::from_tds(&[], vec![ColumnValues::Int(n)]);
         let mut stream = QueryResult {
-            result_sets: vec![vec![], vec![row(1), row(2)], vec![], vec![row(3)], vec![]],
+            result_sets: vec![
+                metadata_result_set("first", &[]),
+                metadata_result_set("second", &[1, 2]),
+                metadata_result_set("third", &[]),
+                metadata_result_set("fourth", &[3]),
+                metadata_result_set("fifth", &[]),
+            ],
         }
         .into_row_stream();
         for expected in 1..=3 {

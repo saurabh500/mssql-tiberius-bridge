@@ -22,11 +22,21 @@ when the Release PR is opened.
   `RecyclingMethod::Ping` compatibility policy.
 - Reject prepared statements from another client or a session invalidated by
   `Client::reset_session()` with `Error::InvalidPreparedStatement`.
+- Return `None` from `Column::char_length()` for `(MAX)`/PLP columns instead of
+  reporting a sentinel-derived finite length; raw `byte_length()` is unchanged.
 
 ### Added
 
 - `Client::reset_session()` and the no-I/O `Client::is_connection_dead()` accessor.
 - Tokio timeout support for pools built with `TdsManager::create_pool`.
+- `QueryResult::columns()` and `result_set_columns()` expose shared column
+  metadata even when a result set has no rows.
+
+### Fixed
+
+- Populate numeric precision and supplied legacy-LOB source table names from
+  the driver's column metadata.
+- Recognize modern CHAR/BINARY wire types and fixed SMALLMONEY column types.
 
 ## [0.1.0](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.5...v0.1.0) - 2026-09-11
 

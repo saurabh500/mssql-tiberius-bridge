@@ -100,7 +100,7 @@ mod tests {
     async fn dropping_pending_operation_marks_dead() {
         let mut health = Health::default();
         let mut future = Box::pin(async {
-            let operation = Operation::new(&mut health).unwrap();
+            let operation = Operation::new(&mut health).expect("connection is healthy");
             pending::<()>().await;
             operation.complete(())
         });
@@ -115,9 +115,9 @@ mod tests {
         let mut health = Health::default();
         let borrowed = &mut health;
         let mut stream = Box::pin(async_stream::stream! {
-            Operation::new(borrowed).unwrap().complete(());
+            Operation::new(borrowed).expect("connection is healthy").complete(());
             yield 1;
-            let operation = Operation::new(borrowed).unwrap();
+            let operation = Operation::new(borrowed).expect("completed operation preserves health");
             pending::<()>().await;
             operation.complete(());
             yield 2;
@@ -132,9 +132,9 @@ mod tests {
         let mut health = Health::default();
         let borrowed = &mut health;
         let mut stream = Box::pin(async_stream::stream! {
-            Operation::new(borrowed).unwrap().complete(());
+            Operation::new(borrowed).expect("connection is healthy").complete(());
             yield 1;
-            let operation = Operation::new(borrowed).unwrap();
+            let operation = Operation::new(borrowed).expect("completed operation preserves health");
             pending::<()>().await;
             operation.complete(());
             yield 2;
@@ -152,13 +152,13 @@ mod tests {
         let borrowed = &mut health;
         let (sender, receiver) = tokio::sync::oneshot::channel::<()>();
         let mut stream = Box::pin(async_stream::stream! {
-            let operation = Operation::new(borrowed).unwrap();
+            let operation = Operation::new(borrowed).expect("connection is healthy");
             let result = receiver.await;
-            operation.complete(result).unwrap();
+            operation.complete(result).expect("sender should deliver completion");
             yield 1;
         });
         assert!(poll!(stream.next()).is_pending());
-        sender.send(()).unwrap();
+        sender.send(()).expect("receiver is still alive");
         assert_eq!(stream.next().await, Some(1));
         drop(stream);
         assert!(!health.dead);
@@ -168,7 +168,7 @@ mod tests {
     fn dropping_unpolled_operation_does_not_mark_dead() {
         let mut health = Health::default();
         let future = async {
-            let operation = Operation::new(&mut health).unwrap();
+            let operation = Operation::new(&mut health).expect("connection is healthy");
             pending::<()>().await;
             operation.complete(())
         };
@@ -179,9 +179,14 @@ mod tests {
     #[test]
     fn completed_success_and_error_do_not_mark_dead() {
         let mut health = Health::default();
-        assert_eq!(Operation::new(&mut health).unwrap().complete(42), 42);
+        assert_eq!(
+            Operation::new(&mut health)
+                .expect("connection is healthy")
+                .complete(42),
+            42
+        );
         let result: Result<()> = Operation::new(&mut health)
-            .unwrap()
+            .expect("completed operation preserves health")
             .complete(Err(Error::Conversion("test error".into())));
         assert!(matches!(result, Err(Error::Conversion(_))));
         assert!(!health.dead);
@@ -191,7 +196,7 @@ mod tests {
     #[test]
     fn completion_does_not_revive_native_dead_state() {
         let mut health = Health::default();
-        let mut operation = Operation::new(&mut health).unwrap();
+        let mut operation = Operation::new(&mut health).expect("connection is healthy");
         operation.mark_dead();
         operation.complete(());
         assert!(health.dead);

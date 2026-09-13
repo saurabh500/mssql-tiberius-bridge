@@ -133,8 +133,7 @@ mod tests {
     #[test]
     fn create_pool_builder() {
         let cfg = Config::new();
-        let pool = TdsManager::create_pool(cfg, 10);
-        assert!(pool.is_ok());
+        TdsManager::create_pool(cfg, 10).expect("pool configuration should be valid");
     }
 
     #[test]
@@ -143,7 +142,10 @@ mod tests {
         assert_eq!(manager.recycling_method, RecyclingMethod::Reset);
         let manager = manager.with_recycling_method(RecyclingMethod::Ping);
         assert_eq!(manager.recycling_method, RecyclingMethod::Ping);
-        let pool = Pool::builder(manager).max_size(2).build().unwrap();
+        let pool = Pool::builder(manager)
+            .max_size(2)
+            .build()
+            .expect("pool configuration should be valid");
         assert_eq!(pool.status().max_size, 2);
     }
 }

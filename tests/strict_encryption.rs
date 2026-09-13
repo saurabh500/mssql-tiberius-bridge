@@ -69,7 +69,12 @@ async fn strict_select_one() {
         .into_first_result();
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<i32, _>("value"), Some(1));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("value"),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -91,7 +96,9 @@ async fn strict_reports_encrypted_session() {
         .expect("query failed")
         .into_first_result();
 
-    let encrypted: String = rows[0]
+    let encrypted: String = rows
+        .first()
+        .expect("expected row at index 0")
         .get("encrypted")
         .expect("encrypt_option column missing");
     assert_eq!(
@@ -119,5 +126,10 @@ async fn strict_ignores_trust_cert_flag() {
         .await
         .expect("query failed")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("value"), Some(1));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("value"),
+        Some(1)
+    );
 }

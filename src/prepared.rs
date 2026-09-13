@@ -289,15 +289,17 @@ mod tests {
     fn prepare_declarations_preserve_parameter_types_and_encoding() {
         let params: &[&dyn ToSql] = &[&0i32, &"", &false];
         assert_eq!(
-            PreparedStatement::parameter_declaration(params, true).unwrap(),
+            PreparedStatement::parameter_declaration(params, true)
+                .expect("valid Unicode parameters"),
             "@P1 int, @P2 nvarchar(4000), @P3 bit"
         );
         assert_eq!(
-            PreparedStatement::parameter_declaration(params, false).unwrap(),
+            PreparedStatement::parameter_declaration(params, false).expect("valid ANSI parameters"),
             "@P1 int, @P2 varchar(4000), @P3 bit"
         );
         assert_eq!(
-            PreparedStatement::parameter_declaration(&[], true).unwrap(),
+            PreparedStatement::parameter_declaration(&[], true)
+                .expect("empty parameters are valid"),
             ""
         );
     }
@@ -317,7 +319,9 @@ mod tests {
             (SqlType::NChar(None, 12), "nchar(12)"),
             (SqlType::Numeric(None), "numeric(18,10)"),
             (
-                SqlType::Decimal(Some(DecimalParts::from_string("1.25", 8, 2).unwrap())),
+                SqlType::Decimal(Some(
+                    DecimalParts::from_string("1.25", 8, 2).expect("valid decimal"),
+                )),
                 "decimal(8,2)",
             ),
             (SqlType::Time(None), "time(7)"),
@@ -333,7 +337,7 @@ mod tests {
         ];
         for (value, expected) in cases {
             assert_eq!(
-                PreparedStatement::sql_declaration(&value).unwrap(),
+                PreparedStatement::sql_declaration(&value).expect("supported SQL type"),
                 expected
             );
         }
@@ -363,7 +367,8 @@ mod tests {
     fn prepared_statement_is_bound_to_one_session() {
         let mut session = Arc::new(());
         let stmt = PreparedStatement::new(7, "SELECT 1".into(), Arc::clone(&session));
-        assert!(stmt.validate_session(&session).is_ok());
+        stmt.validate_session(&session)
+            .expect("statement belongs to this session");
         assert!(matches!(
             stmt.validate_session(&Arc::new(())),
             Err(Error::InvalidPreparedStatement)

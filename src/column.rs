@@ -427,9 +427,18 @@ mod tests {
         assert_eq!(column.byte_length(), 4);
         assert_eq!(column.scale(), Some(2));
         assert_eq!(column.precision(), None);
-        assert_eq!(column.collation().unwrap().sort_id, 52);
+        assert_eq!(
+            column.collation().expect("column has a collation").sort_id,
+            52
+        );
         assert_eq!(column.user_type(), 7);
-        assert_eq!(column.multi_part_name().unwrap().table_name, "users");
+        assert_eq!(
+            column
+                .multi_part_name()
+                .expect("column has a table name")
+                .table_name,
+            "users"
+        );
     }
 
     #[test]

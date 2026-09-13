@@ -681,7 +681,10 @@ mod tests {
     async fn ping_uses_cached_status_without_a_server_response() {
         // An empty replay transport fails any request that tries to read a response.
         let mut client = client_for_test(tds_client_from_tokens(Vec::new()));
-        client.ping().await.unwrap();
+        client
+            .ping()
+            .await
+            .expect("cached ping should not require a server response");
         assert!(!client.is_connection_dead());
 
         client.inner.mark_connection_dead();
@@ -694,7 +697,11 @@ mod tests {
     #[tokio::test]
     async fn ping_rejects_a_closed_connection() {
         let mut client = client_for_test(tds_client_from_tokens(Vec::new()));
-        client.inner.close_connection().await.unwrap();
+        client
+            .inner
+            .close_connection()
+            .await
+            .expect("scripted connection should close successfully");
         assert!(matches!(
             client.ping().await,
             Err(Error::Tds(mssql_tds::error::Error::ConnectionClosed(_)))
@@ -708,20 +715,23 @@ mod tests {
             .inner
             .execute("SELECT application_rows".into(), ())
             .await
-            .unwrap();
+            .expect("scripted query should start successfully");
         let session = Arc::clone(&client.prepared_session);
 
-        client.ping().await.unwrap();
+        client
+            .ping()
+            .await
+            .expect("cached ping should preserve an outstanding query");
 
         assert!(Arc::ptr_eq(&session, &client.prepared_session));
         let results = Client::collect_results(&mut client.inner)
             .await
-            .unwrap()
+            .expect("outstanding results should remain readable after ping")
             .into_results();
         assert_eq!(results.len(), 1);
-        assert_eq!(results[0].len(), 2);
-        assert_eq!(results[0][0].get::<i32, _>(0), Some(7));
-        assert_eq!(results[0][1].get::<i32, _>(0), Some(8));
+        let rows = results.first().expect("expected the scripted result set");
+        let values: Vec<_> = rows.iter().map(|row| row.get::<i32, _>(0)).collect();
+        assert_eq!(values, [Some(7), Some(8)]);
     }
 
     #[tokio::test]
@@ -734,7 +744,7 @@ mod tests {
         manager
             .recycle(&mut client, &Metrics::default())
             .await
-            .unwrap();
+            .expect("Ping recycling should not require a server response");
 
         client.inner.mark_connection_dead();
         assert!(manager

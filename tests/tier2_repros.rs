@@ -33,15 +33,15 @@ fn test_316_datetime_before_1900_chrono_does_not_panic() {
         time: 0,
     });
 
-    let got = std::panic::catch_unwind(|| chrono::NaiveDateTime::from_sql(&value));
-    assert!(got.is_ok(), "chrono conversion panicked");
+    let got = std::panic::catch_unwind(|| chrono::NaiveDateTime::from_sql(&value))
+        .expect("chrono conversion panicked");
     assert_eq!(
-        got.unwrap(),
+        got,
         Some(
             chrono::NaiveDate::from_ymd_opt(1899, 12, 30)
-                .unwrap()
+                .expect("valid test date")
                 .and_hms_opt(0, 0, 0)
-                .unwrap()
+                .expect("valid test time")
         )
     );
 }
@@ -152,11 +152,45 @@ async fn test_380_into_results_preserves_empty_middle_result_set() {
         .into_results();
 
     assert_eq!(results.len(), 3);
-    assert_eq!(results[0].len(), 1);
-    assert_eq!(results[1].len(), 0);
-    assert_eq!(results[2].len(), 1);
-    assert_eq!(results[0][0].get::<i32, _>(0usize), Some(1));
-    assert_eq!(results[2][0].get::<i32, _>(0usize), Some(3));
+    assert_eq!(
+        results
+            .first()
+            .expect("expected result set at index 0")
+            .len(),
+        1
+    );
+    assert_eq!(
+        results
+            .get(1)
+            .expect("expected result set at index 1")
+            .len(),
+        0
+    );
+    assert_eq!(
+        results
+            .get(2)
+            .expect("expected result set at index 2")
+            .len(),
+        1
+    );
+    assert_eq!(
+        results
+            .first()
+            .expect("expected result set at index 0")
+            .first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(1)
+    );
+    assert_eq!(
+        results
+            .get(2)
+            .expect("expected result set at index 2")
+            .first()
+            .expect("expected row at index 0")
+            .get::<i32, _>(0usize),
+        Some(3)
+    );
 }
 
 #[tokio::test]
@@ -215,15 +249,21 @@ async fn test_282_stored_procedure_string_parameter_has_no_added_quotes() {
         .expect("drop procedure");
 
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<String, _>("v"), Some("hello".into()));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<String, _>("v"),
+        Some("hello".into())
+    );
 }
 
 #[tokio::test]
 #[ignore]
-async fn test_221_nan_parameter_errors_without_poisoning_connection() {
+async fn test_221_nan_parameter_errors_without_poisoning_connection(
+) -> Result<(), Box<dyn std::error::Error>> {
     let Some(mut client) = live_client().await else {
         eprintln!("BRIDGE_TEST_SERVER/TEST_DB_PASSWORD not set; skipping #221 live repro");
-        return;
+        return Ok(());
     };
 
     client
@@ -242,13 +282,23 @@ async fn test_221_nan_parameter_errors_without_poisoning_connection() {
     let rows = client
         .simple_query("SELECT 1 AS ok; DROP TABLE IF EXISTS dbo.t_bridge_tier2_221;")
         .await
-        .unwrap_or_else(|follow_up| {
-            panic!(
+        .map_err(|follow_up| {
+            format!(
                 "connection was poisoned after NaN error {err:?}; follow-up failed: {follow_up:?}"
             )
-        })
+        })?
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("ok"), Some(1));
+    let value = rows
+        .first()
+        .ok_or("follow-up query after NaN error returned no rows")?
+        .get::<i32, _>("ok");
+    if value != Some(1) {
+        return Err(format!(
+            "follow-up query after NaN error returned {value:?}, expected Some(1)"
+        )
+        .into());
+    }
+    Ok(())
 }
 
 #[tokio::test]
@@ -265,15 +315,19 @@ async fn test_316_live_datetime_before_1900_chrono_does_not_panic() {
         .expect("select pre-1900 datetime")
         .into_first_result();
 
-    let got = std::panic::catch_unwind(|| rows[0].get::<chrono::NaiveDateTime, _>("dt"));
-    assert!(got.is_ok(), "reading pre-1900 datetime panicked");
+    let got = std::panic::catch_unwind(|| {
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<chrono::NaiveDateTime, _>("dt")
+    })
+    .expect("reading pre-1900 datetime panicked");
     assert_eq!(
-        got.unwrap(),
+        got,
         Some(
             chrono::NaiveDate::from_ymd_opt(1899, 12, 30)
-                .unwrap()
+                .expect("valid test date")
                 .and_hms_opt(0, 0, 0)
-                .unwrap()
+                .expect("valid test time")
         )
     );
 }
@@ -307,7 +361,12 @@ async fn test_333_special_character_password_connect_fails_cleanly_or_succeeds()
                 .await
                 .expect("query with special-character password login")
                 .into_first_result();
-            assert_eq!(rows[0].get::<i32, _>("ok"), Some(1));
+            assert_eq!(
+                rows.first()
+                    .expect("expected row at index 0")
+                    .get::<i32, _>("ok"),
+                Some(1)
+            );
         }
         Err(err) => {
             let message = format!("{err:?}").to_lowercase();

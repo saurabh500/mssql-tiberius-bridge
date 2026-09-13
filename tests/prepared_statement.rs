@@ -57,7 +57,11 @@ async fn prepare_select_arithmetic_runs_many_times_with_single_plan() {
             .expect("query_prepared")
             .into_first_result();
         assert_eq!(rows.len(), 1);
-        let sum: i32 = rows[0].get("s").expect("s column");
+        let sum: i32 = rows
+            .first()
+            .expect("expected row at index 0")
+            .get("s")
+            .expect("s column");
         assert_eq!(sum, expected, "{a} + {b} should be {expected}");
     }
 
@@ -70,7 +74,12 @@ async fn prepare_select_arithmetic_runs_many_times_with_single_plan() {
         .expect("simple_query after unprepare")
         .into_first_result();
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].get::<i32, _>("one"), Some(1));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("one"),
+        Some(1)
+    );
 }
 
 #[tokio::test]
@@ -89,10 +98,21 @@ async fn prepare_with_string_param_and_multiple_executions() {
             .await
             .expect("query_prepared")
             .into_first_result();
-        let msg: &str = rows[0].get("msg").unwrap();
-        let n: i32 = rows[0].get("n").unwrap();
+        let msg: &str = rows
+            .first()
+            .expect("expected row at index 0")
+            .get("msg")
+            .expect("expected non-NULL column msg");
+        let n: i32 = rows
+            .first()
+            .expect("expected row at index 0")
+            .get("n")
+            .expect("expected non-NULL column n");
         assert_eq!(msg, s);
-        assert_eq!(n as usize, s.len());
+        assert_eq!(
+            usize::try_from(n).expect("string length must be nonnegative"),
+            s.len()
+        );
     }
 
     stmt.close(&mut client).await.expect("sp_unprepare");
@@ -113,7 +133,12 @@ async fn prepare_with_no_params_works() {
         .await
         .expect("query no-params")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("answer"), Some(42));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("answer"),
+        Some(42)
+    );
 
     stmt.close(&mut client).await.expect("close");
 }
@@ -145,7 +170,9 @@ async fn prepared_execute_against_dml() {
         .expect("count before execution")
         .into_first_result();
     assert_eq!(
-        rows[0].get::<i32, _>("c"),
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("c"),
         Some(0),
         "prepare must not execute sample values"
     );
@@ -163,5 +190,10 @@ async fn prepared_execute_against_dml() {
         .await
         .expect("count")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("c"), Some(3));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("c"),
+        Some(3)
+    );
 }

@@ -164,7 +164,16 @@ impl<'de, 'a: 'de> MapAccess<'de> for RowMapAccess<'a> {
         if self.idx >= self.row.len() {
             return Ok(None);
         }
-        let name = self.row.columns()[self.idx].name.as_str();
+        let name = self
+            .row
+            .columns()
+            .get(self.idx)
+            .ok_or(Error::ColumnIndexOutOfBounds {
+                index: self.idx,
+                count: self.row.columns().len(),
+            })?
+            .name
+            .as_str();
         // Use IntoDeserializer for &str → produces a borrowed-str deserializer.
         seed.deserialize(name.into_deserializer()).map(Some)
     }
@@ -607,6 +616,22 @@ mod tests {
     }
 
     #[test]
+    fn row_map_rejects_values_without_column_metadata() {
+        let schema = Arc::new(RowSchema {
+            columns: vec![],
+            name_map: HashMap::new(),
+        });
+        let row = Row::from_schema(schema, vec![ColumnValues::Int(1)]);
+        let error = row
+            .deserialize::<HashMap<String, i32>>()
+            .expect_err("map keys require column metadata");
+        assert!(matches!(
+            error,
+            Error::ColumnIndexOutOfBounds { index: 0, count: 0 }
+        ));
+    }
+
+    #[test]
     fn integer_coercion_checks_bounds_and_rejects_non_integers() {
         macro_rules! check {
             ($($ty:ty),+ $(,)?) => {$(
@@ -614,29 +639,33 @@ mod tests {
                     ColumnValues::TinyInt(1), ColumnValues::SmallInt(1),
                     ColumnValues::Int(1), ColumnValues::BigInt(1), ColumnValues::Bit(true),
                 ] {
-                    assert_eq!(cell::<$ty>(&value, None).unwrap(), 1);
+                    assert_eq!(cell::<$ty>(&value, None).expect("one fits every integer type"), 1);
                 }
-                let error = cell::<$ty>(&s("1"), Some("1")).unwrap_err();
+                let error = cell::<$ty>(&s("1"), Some("1")).expect_err("strings are not integer values");
                 assert!(error.to_string().contains(concat!("as ", stringify!($ty))));
             )+};
         }
         check!(i8, i16, i32, i64, i128, u8, u16, u32, u64, u128);
         assert_eq!(
-            cell::<i64>(&ColumnValues::BigInt(i64::MIN), None).unwrap(),
+            cell::<i64>(&ColumnValues::BigInt(i64::MIN), None).expect("i64 minimum fits an i64"),
             i64::MIN
         );
-        assert_eq!(cell::<u8>(&ColumnValues::TinyInt(255), None).unwrap(), 255);
+        assert_eq!(
+            cell::<u8>(&ColumnValues::TinyInt(255), None).expect("255 fits a u8"),
+            255
+        );
         assert!(cell::<i8>(&ColumnValues::TinyInt(128), None)
-            .unwrap_err()
+            .expect_err("128 exceeds the i8 range")
             .to_string()
             .contains("128 out of range for i8"));
         assert!(cell::<u64>(&ColumnValues::Int(-1), None)
-            .unwrap_err()
+            .expect_err("negative integers cannot deserialize as u64")
             .to_string()
             .contains("-1 out of range for u64"));
-        assert!(cell::<i32>(&ColumnValues::BigInt(i64::MAX), None).is_err());
+        cell::<i32>(&ColumnValues::BigInt(i64::MAX), None)
+            .expect_err("i64 maximum exceeds the i32 range");
         assert!(cell::<bool>(&ColumnValues::Int(1), None)
-            .unwrap_err()
+            .expect_err("integer columns cannot deserialize as bool")
             .to_string()
             .contains("as bool"));
     }
@@ -663,15 +692,18 @@ mod tests {
                 -1.25,
             ),
         ] {
-            assert_eq!(cell::<f32>(&value, None).unwrap(), expected as f32);
-            assert_eq!(cell::<f64>(&value, None).unwrap(), expected);
-            assert_eq!(
-                cell::<serde_json::Value>(&value, None).unwrap().as_f64(),
-                Some(expected)
-            );
+            let single = cell::<f32>(&value, None).expect("numeric column converts to f32");
+            let double = cell::<f64>(&value, None).expect("numeric column converts to f64");
+            let dynamic = cell::<serde_json::Value>(&value, None)
+                .expect("numeric column converts to JSON")
+                .as_f64()
+                .expect("numeric JSON value converts to f64");
+            assert!((single - expected as f32).abs() < f32::EPSILON);
+            assert!((double - expected).abs() < f64::EPSILON);
+            assert!((dynamic - expected).abs() < f64::EPSILON);
         }
-        assert!(cell::<f32>(&ColumnValues::Null, None).is_err());
-        assert!(cell::<f64>(&ColumnValues::Bit(true), None).is_err());
+        cell::<f32>(&ColumnValues::Null, None).expect_err("NULL is not a float");
+        cell::<f64>(&ColumnValues::Bit(true), None).expect_err("bit columns are not floats");
     }
 
     #[test]
@@ -686,7 +718,7 @@ mod tests {
         };
         let cases = [
             (
-                ColumnValues::Date(SqlDate::create(0).unwrap()),
+                ColumnValues::Date(SqlDate::create(0).expect("day zero is a valid SQL date")),
                 "0001-01-01",
             ),
             (ColumnValues::Time(time()), "00:00:01.234567800"),
@@ -716,11 +748,17 @@ mod tests {
                 "0001-01-01T01:00:01.234567800+01:00",
             ),
             (
-                ColumnValues::Decimal(DecimalParts::from_string("-12.50", 4, 2).unwrap()),
+                ColumnValues::Decimal(
+                    DecimalParts::from_string("-12.50", 4, 2)
+                        .expect("negative decimal fixture fits precision and scale"),
+                ),
                 "-12.50",
             ),
             (
-                ColumnValues::Numeric(DecimalParts::from_string("12.50", 4, 2).unwrap()),
+                ColumnValues::Numeric(
+                    DecimalParts::from_string("12.50", 4, 2)
+                        .expect("positive decimal fixture fits precision and scale"),
+                ),
                 "12.50",
             ),
             (
@@ -729,22 +767,28 @@ mod tests {
             ),
         ];
         for (value, expected) in cases {
-            assert_eq!(cell::<String>(&value, None).unwrap(), expected);
             assert_eq!(
-                cell::<serde_json::Value>(&value, None).unwrap(),
+                cell::<String>(&value, None).expect("column has a string representation"),
+                expected
+            );
+            assert_eq!(
+                cell::<serde_json::Value>(&value, None).expect("column converts to JSON"),
                 serde_json::json!(expected)
             );
         }
         assert_eq!(
-            cell::<serde_json::Value>(&ColumnValues::Null, None).unwrap(),
+            cell::<serde_json::Value>(&ColumnValues::Null, None)
+                .expect("NULL converts to JSON null"),
             serde_json::Value::Null
         );
         assert_eq!(
-            cell::<serde_json::Value>(&ColumnValues::Bit(true), None).unwrap(),
+            cell::<serde_json::Value>(&ColumnValues::Bit(true), None)
+                .expect("bit converts to JSON boolean"),
             serde_json::json!(true)
         );
         assert_eq!(
-            cell::<serde_json::Value>(&s("héllo"), Some("héllo")).unwrap(),
+            cell::<serde_json::Value>(&s("héllo"), Some("héllo"))
+                .expect("Unicode string converts to JSON"),
             serde_json::json!("héllo")
         );
         let invalid = ColumnValues::Time(SqlTime {
@@ -752,42 +796,48 @@ mod tests {
             scale: 7,
         });
         for error in [
-            cell::<String>(&invalid, None).unwrap_err(),
-            cell::<serde_json::Value>(&invalid, None).unwrap_err(),
+            cell::<String>(&invalid, None).expect_err("invalid time cannot render as a string"),
+            cell::<serde_json::Value>(&invalid, None)
+                .expect_err("invalid time cannot render as JSON"),
         ] {
             assert!(error.to_string().contains("invalid temporal value"));
         }
         assert!(cell::<String>(&ColumnValues::Int(1), None)
-            .unwrap_err()
+            .expect_err("integer columns cannot deserialize as strings")
             .to_string()
             .contains("as &str"));
     }
 
     #[test]
     fn characters_and_binary_values_validate_shape_and_borrow_storage() {
-        assert_eq!(cell::<char>(&s("🦀"), Some("🦀")).unwrap(), '🦀');
+        assert_eq!(
+            cell::<char>(&s("🦀"), Some("🦀")).expect("one Unicode scalar converts to char"),
+            '🦀'
+        );
         for text in ["", "ab"] {
             assert!(cell::<char>(&s(text), Some(text))
-                .unwrap_err()
+                .expect_err("char requires exactly one Unicode scalar")
                 .to_string()
                 .contains("multi-char"));
         }
         assert!(cell::<char>(&ColumnValues::Int(1), None)
-            .unwrap_err()
+            .expect_err("integer columns cannot deserialize as char")
             .to_string()
             .contains("as char"));
-        let bytes = ColumnValues::Bytes(vec![0, 255, 42]);
-        let borrowed: &[u8] = cell(&bytes, None).unwrap();
-        let ColumnValues::Bytes(original) = &bytes else {
-            unreachable!()
-        };
-        assert_eq!(borrowed, original);
-        assert_eq!(borrowed.as_ptr(), original.as_ptr());
+        let original = vec![0, 255, 42];
+        let original_ptr = original.as_ptr();
+        let bytes = ColumnValues::Bytes(original);
+        let borrowed: &[u8] = cell(&bytes, None).expect("binary column lends its bytes");
+        assert_eq!(borrowed, &[0, 255, 42]);
+        assert_eq!(borrowed.as_ptr(), original_ptr);
         let id = uuid::Uuid::from_bytes([42; 16]);
         let value = ColumnValues::Uuid(id);
-        assert_eq!(cell::<&[u8]>(&value, None).unwrap(), id.as_bytes());
+        assert_eq!(
+            cell::<&[u8]>(&value, None).expect("UUID column lends its bytes"),
+            id.as_bytes()
+        );
         assert!(cell::<&[u8]>(&ColumnValues::Int(1), None)
-            .unwrap_err()
+            .expect_err("integer columns cannot deserialize as bytes")
             .to_string()
             .contains("as bytes"));
 
@@ -811,7 +861,7 @@ mod tests {
                     decoded: None
                 }
                 .deserialize_byte_buf(OwnedBytesVisitor)
-                .unwrap(),
+                .expect("binary and UUID columns deserialize to owned bytes"),
                 expected
             );
         }
@@ -820,7 +870,7 @@ mod tests {
             decoded: None
         }
         .deserialize_byte_buf(OwnedBytesVisitor)
-        .unwrap_err()
+        .expect_err("NULL cannot deserialize to owned bytes")
         .to_string()
         .contains("as byte buf"));
     }
@@ -836,23 +886,33 @@ mod tests {
             ("text", ColumnType::NVarchar, s("seven")),
         ]);
         assert_eq!(
-            row.clone().deserialize::<Wrapped>().unwrap(),
+            row.clone()
+                .deserialize::<Wrapped>()
+                .expect("row deserializes through a newtype wrapper"),
             Wrapped(Pair(7, "seven".into()))
         );
-        let dynamic = row.deserialize::<serde_json::Value>().unwrap();
+        let dynamic = row
+            .deserialize::<serde_json::Value>()
+            .expect("row deserializes as a JSON object");
         assert_eq!(dynamic, serde_json::json!({"n": 7, "text": "seven"}));
         let row = make_row(vec![
             ("a", ColumnType::Int4, ColumnValues::Int(1)),
             ("b", ColumnType::Int4, ColumnValues::Int(2)),
         ]);
-        assert_eq!(row.clone().deserialize::<Vec<i32>>().unwrap(), vec![1, 2]);
         assert_eq!(
-            row.deserialize::<HashMap<String, i32>>().unwrap(),
+            row.clone()
+                .deserialize::<Vec<i32>>()
+                .expect("integer row deserializes as a sequence"),
+            vec![1, 2]
+        );
+        assert_eq!(
+            row.deserialize::<HashMap<String, i32>>()
+                .expect("integer row deserializes as a map"),
             HashMap::from([("a".into(), 1), ("b".into(), 2)])
         );
         assert!(make_row(vec![])
             .deserialize::<Vec<i32>>()
-            .unwrap()
+            .expect("empty row deserializes as an empty sequence")
             .is_empty());
 
         #[derive(Debug, Deserialize, PartialEq)]
@@ -860,16 +920,23 @@ mod tests {
         #[derive(Debug, Deserialize, PartialEq)]
         struct Unit;
         assert_eq!(
-            cell::<Number>(&ColumnValues::Int(7), None).unwrap(),
+            cell::<Number>(&ColumnValues::Int(7), None)
+                .expect("integer column deserializes through a newtype"),
             Number(7)
         );
-        assert_eq!(cell::<Unit>(&ColumnValues::Null, None).unwrap(), Unit);
+        assert_eq!(
+            cell::<Unit>(&ColumnValues::Null, None).expect("NULL deserializes as unit"),
+            Unit
+        );
     }
 
     #[test]
     fn column_containers_and_data_carrying_enum_variants_are_rejected() {
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "payload variants exercise unsupported deserialization"
+        )]
         enum State {
             Ready,
             Number(i32),
@@ -877,7 +944,7 @@ mod tests {
             Named { value: i32 },
         }
         assert!(matches!(
-            cell::<State>(&s("Ready"), Some("Ready")).unwrap(),
+            cell::<State>(&s("Ready"), Some("Ready")).expect("unit enum variants are supported"),
             State::Ready
         ));
         for (variant, expected) in [
@@ -886,33 +953,40 @@ mod tests {
             ("Named", "struct enum"),
         ] {
             assert!(cell::<State>(&s(variant), Some(variant))
-                .unwrap_err()
+                .expect_err("data-carrying enum variants are unsupported")
                 .to_string()
                 .contains(expected));
         }
         assert!(cell::<State>(&s("Unknown"), Some("Unknown"))
-            .unwrap_err()
+            .expect_err("unknown enum variants are rejected")
             .to_string()
             .contains("unknown variant"));
         let value = ColumnValues::Int(1);
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "fields exercise unsupported tuple deserialization"
+        )]
         struct Pair(i32, i32);
         #[derive(Debug, Deserialize)]
-        #[allow(dead_code)]
+        #[expect(
+            dead_code,
+            reason = "field exercises unsupported struct deserialization"
+        )]
         struct Record {
             value: i32,
         }
         for error in [
-            cell::<Vec<i32>>(&value, None).unwrap_err(),
-            cell::<(i32, i32)>(&value, None).unwrap_err(),
-            cell::<Pair>(&value, None).unwrap_err(),
+            cell::<Vec<i32>>(&value, None).expect_err("column cannot deserialize as a sequence"),
+            cell::<(i32, i32)>(&value, None).expect_err("column cannot deserialize as a tuple"),
+            cell::<Pair>(&value, None).expect_err("column cannot deserialize as a tuple struct"),
         ] {
             assert!(error.to_string().contains("as a sequence"));
         }
         for error in [
-            cell::<HashMap<String, i32>>(&value, None).unwrap_err(),
-            cell::<Record>(&value, None).unwrap_err(),
+            cell::<HashMap<String, i32>>(&value, None)
+                .expect_err("column cannot deserialize as a map"),
+            cell::<Record>(&value, None).expect_err("column cannot deserialize as a struct"),
         ] {
             assert!(error.to_string().contains("as a map"));
         }
@@ -931,7 +1005,7 @@ mod tests {
             ("name", ColumnType::NVarchar, s("alice")),
             ("active", ColumnType::Bit, ColumnValues::Bit(true)),
         ]);
-        let u: User = row.deserialize().unwrap();
+        let u: User = row.deserialize().expect("row matches the User fields");
         assert_eq!(
             u,
             User {
@@ -953,7 +1027,9 @@ mod tests {
             ("email", ColumnType::NVarchar, s("a@b")),
             ("phone", ColumnType::NVarchar, ColumnValues::Null),
         ]);
-        let v: R = row.deserialize().unwrap();
+        let v: R = row
+            .deserialize()
+            .expect("nullable columns match Option fields");
         assert_eq!(v.email.as_deref(), Some("a@b"));
         assert_eq!(v.phone, None);
     }
@@ -980,13 +1056,17 @@ mod tests {
             ),
             ("missing", ColumnType::Geography, ColumnValues::Null),
         ]);
-        let value: Spatial<'_> = row.deserialize_borrowed().unwrap();
+        let value: Spatial<'_> = row
+            .deserialize_borrowed()
+            .expect("spatial columns lend their binary storage");
         assert_eq!(value.geography, &[1, 2]);
         assert_eq!(value.geometry, &[3, 4]);
         assert_eq!(value.missing, None);
         assert_eq!(
             value.geography.as_ptr(),
-            row.get::<&[u8], _>("geography").unwrap().as_ptr()
+            row.get::<&[u8], _>("geography")
+                .expect("geography column contains bytes")
+                .as_ptr()
         );
     }
 
@@ -1005,7 +1085,7 @@ mod tests {
             ("int_", ColumnType::Int4, ColumnValues::Int(1_000_000)),
             ("big", ColumnType::Int8, ColumnValues::BigInt(i64::MAX)),
         ]);
-        let r: R = row.deserialize().unwrap();
+        let r: R = row.deserialize().expect("integer columns widen to i64");
         assert_eq!(r.tiny, 7);
         assert_eq!(r.small, -3);
         assert_eq!(r.int_, 1_000_000);
@@ -1027,7 +1107,9 @@ mod tests {
                 ColumnValues::Float(std::f64::consts::PI),
             ),
         ]);
-        let r: R = row.deserialize().unwrap();
+        let r: R = row
+            .deserialize()
+            .expect("float columns match the float fields");
         assert!((r.r - 1.5).abs() < 1e-6);
         assert!((r.f - std::f64::consts::PI).abs() < 1e-12);
     }
@@ -1038,9 +1120,12 @@ mod tests {
         struct R {
             id: String,
         }
-        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let id = uuid::Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000")
+            .expect("UUID fixture is valid");
         let row = make_row(vec![("id", ColumnType::Guid, ColumnValues::Uuid(id))]);
-        let r: R = row.deserialize().unwrap();
+        let r: R = row
+            .deserialize()
+            .expect("UUID column deserializes as a string");
         assert_eq!(r.id, "550e8400-e29b-41d4-a716-446655440000");
     }
 
@@ -1051,7 +1136,9 @@ mod tests {
             name: &'a str,
         }
         let row = make_row(vec![("name", ColumnType::NVarchar, s("borrowed"))]);
-        let r: R<'_> = row.deserialize_borrowed().unwrap();
+        let r: R<'_> = row
+            .deserialize_borrowed()
+            .expect("string column lends its decoded storage");
         assert_eq!(r.name, "borrowed");
     }
 
@@ -1062,25 +1149,32 @@ mod tests {
             d: String,
         }
         // SqlDate::create takes days-since-0001-01-01. Pick a known date.
-        let date_val = mssql_tds::datatypes::column_values::SqlDate::create(737_790).unwrap();
+        let date_val = mssql_tds::datatypes::column_values::SqlDate::create(737_790)
+            .expect("date fixture is within the SQL date range");
         let row = make_row(vec![("d", ColumnType::Date, ColumnValues::Date(date_val))]);
-        let r: R = row.deserialize().unwrap();
+        let r: R = row
+            .deserialize()
+            .expect("date column renders as an ISO date");
         assert_eq!(r.d.len(), 10);
-        assert_eq!(&r.d[4..5], "-");
-        assert_eq!(&r.d[7..8], "-");
+        assert_eq!(r.d.get(4..5), Some("-"));
+        assert_eq!(r.d.get(7..8), Some("-"));
     }
 
     #[test]
     fn deserialize_missing_column_field_errors() {
-        #[derive(Deserialize)]
-        #[allow(dead_code)]
+        #[derive(Debug, Deserialize)]
+        #[expect(
+            dead_code,
+            reason = "fields exercise missing-field deserialization errors"
+        )]
         struct R {
             a: i32,
             b: i32,
         }
         let row = make_row(vec![("a", ColumnType::Int4, ColumnValues::Int(1))]);
         let res: Result<R> = row.deserialize();
-        assert!(res.is_err(), "expected missing-field error, got Ok");
+        let error = res.expect_err("row lacks the required field b");
+        assert!(error.to_string().contains("missing field `b`"));
     }
 
     #[test]
@@ -1090,7 +1184,9 @@ mod tests {
             ("y", ColumnType::NVarchar, s("two")),
             ("z", ColumnType::Bit, ColumnValues::Bit(false)),
         ]);
-        let t: (i32, String, bool) = row.deserialize().unwrap();
+        let t: (i32, String, bool) = row
+            .deserialize()
+            .expect("row columns match the positional tuple");
         assert_eq!(t, (1, "two".to_string(), false));
     }
 
@@ -1105,7 +1201,7 @@ mod tests {
             ("a", ColumnType::Int4, ColumnValues::Int(11)),
             ("b", ColumnType::Int4, ColumnValues::Int(22)),
         ]);
-        let r: R = row.deserialize().unwrap();
+        let r: R = row.deserialize().expect("extra columns are ignored");
         assert_eq!(r.a, 11);
     }
 
@@ -1117,7 +1213,9 @@ mod tests {
             full_name: String,
         }
         let row = make_row(vec![("FullName", ColumnType::NVarchar, s("Ada Lovelace"))]);
-        let r: R = row.deserialize().unwrap();
+        let r: R = row
+            .deserialize()
+            .expect("renamed field matches the column name");
         assert_eq!(r.full_name, "Ada Lovelace");
     }
 }

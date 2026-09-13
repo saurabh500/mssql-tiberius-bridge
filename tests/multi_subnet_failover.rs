@@ -51,5 +51,10 @@ async fn multi_subnet_failover_connects_to_single_endpoint() {
         .await
         .expect("query failed")
         .into_first_result();
-    assert_eq!(rows[0].get::<i32, _>("value"), Some(1));
+    assert_eq!(
+        rows.first()
+            .expect("expected row at index 0")
+            .get::<i32, _>("value"),
+        Some(1)
+    );
 }

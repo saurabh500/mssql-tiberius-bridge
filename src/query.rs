@@ -23,7 +23,10 @@ impl ExecuteResult {
     }
 
     /// Iterate over per-statement row counts.
-    #[allow(clippy::should_implement_trait)]
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "Preserve the tiberius-compatible inherent into_iter API"
+    )]
     pub fn into_iter(self) -> impl Iterator<Item = u64> {
         self.counts.into_iter()
     }
@@ -112,7 +115,7 @@ impl QueryResult {
     }
 
     /// Create an empty QueryResult.
-    #[allow(dead_code)]
+    #[cfg(test)]
     pub(crate) fn empty() -> Self {
         QueryResult {
             result_sets: Vec::new(),
@@ -185,6 +188,12 @@ impl futures_core::Stream for RowStream {
 /// | `Option<T>` | Nullable version of inner type |
 pub trait ToSql: Send + Sync {
     /// Convert this value into an mssql-tds `SqlType` for parameter binding.
+    ///
+    /// # Panics
+    ///
+    /// Date-bearing temporal implementations panic if the stored date is outside
+    /// SQL Server's range (0001-01-01 through 9999-12-31). For offset datetimes,
+    /// this range applies to the UTC date.
     fn to_sql(&self) -> SqlType;
 
     fn debug_fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -330,12 +339,8 @@ impl ToSql for rust_decimal::Decimal {
         let decimal_str = self.to_string();
         let scale = self.scale() as u8;
 
-        let mantissa = self.mantissa().abs();
-        let precision = if mantissa == 0 {
-            1
-        } else {
-            ((mantissa as f64).log10().floor() as u32 + 1) as u8
-        };
+        let digits = self.mantissa().unsigned_abs().checked_ilog10().unwrap_or(0) + 1;
+        let precision = u8::try_from(digits).expect("a decimal mantissa has at most 29 digits");
 
         let precision = precision.max(scale);
 
@@ -432,7 +437,8 @@ mod chrono_to_sql {
     fn naive_date_to_sql(d: &NaiveDate) -> SqlDate {
         // SqlDate stores days where 0 = 0001-01-01; chrono's num_days_from_ce
         // counts 0001-01-01 as day 1.
-        let days = (d.num_days_from_ce() - 1) as u32;
+        let days = u32::try_from(d.num_days_from_ce() - 1)
+            .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)");
         SqlDate::create(days).expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)")
     }
 
@@ -449,7 +455,7 @@ mod chrono_to_sql {
 
     fn naive_dt_to_sql(dt: &NaiveDateTime) -> SqlDateTime2 {
         SqlDateTime2 {
-            days: (dt.date().num_days_from_ce() - 1) as u32,
+            days: naive_date_to_sql(&dt.date()).get_days(),
             time: naive_time_to_sql(&dt.time()),
         }
     }
@@ -506,8 +512,9 @@ mod time_to_sql {
         let chrono_date =
             chrono::NaiveDate::from_ymd_opt(d.year(), u8::from(d.month()) as u32, d.day() as u32)
                 .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)");
-        SqlDate::create((chrono_date.num_days_from_ce() - 1) as u32)
-            .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)")
+        let days = u32::try_from(chrono_date.num_days_from_ce() - 1)
+            .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)");
+        SqlDate::create(days).expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)")
     }
 
     fn time_to_sql(t: Time) -> SqlTime {
@@ -568,18 +575,23 @@ mod jiff_to_sql {
     };
 
     fn date_to_sql(d: civil::Date) -> SqlDate {
-        let chrono_date =
-            chrono::NaiveDate::from_ymd_opt(d.year() as i32, d.month() as u32, d.day() as u32)
-                .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)");
-        SqlDate::create((chrono_date.num_days_from_ce() - 1) as u32)
-            .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)")
+        let chrono_date = chrono::NaiveDate::from_ymd_opt(
+            i32::from(d.year()),
+            u32::try_from(d.month()).expect("jiff months are in 1..=12"),
+            u32::try_from(d.day()).expect("jiff days are in 1..=31"),
+        )
+        .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)");
+        let days = u32::try_from(chrono_date.num_days_from_ce() - 1)
+            .expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)");
+        SqlDate::create(days).expect("date out of SQL Server DATE range (0001-01-01..=9999-12-31)")
     }
 
     fn time_to_sql(t: civil::Time) -> SqlTime {
-        let nanos_since_midnight = (t.hour() as u64) * 3_600_000_000_000
-            + (t.minute() as u64) * 60_000_000_000
-            + (t.second() as u64) * 1_000_000_000
-            + t.subsec_nanosecond() as u64;
+        let nanos_since_midnight = u64::try_from(t.hour()).expect("jiff hours are in 0..=23")
+            * 3_600_000_000_000
+            + u64::try_from(t.minute()).expect("jiff minutes are in 0..=59") * 60_000_000_000
+            + u64::try_from(t.second()).expect("jiff seconds are in 0..=59") * 1_000_000_000
+            + u64::try_from(t.subsec_nanosecond()).expect("jiff nanoseconds are nonnegative");
         SqlTime {
             time_nanoseconds: nanos_since_midnight / 100,
             scale: DEFAULT_VARTIME_SCALE,
@@ -675,30 +687,74 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+    fn ensure_equal<T: PartialEq + std::fmt::Debug>(actual: T, expected: T) -> TestResult {
+        if actual != expected {
+            return Err(format!("expected {expected:?}, got {actual:?}").into());
+        }
+        Ok(())
+    }
+
+    fn ensure(condition: bool, message: &'static str) -> TestResult {
+        if !condition {
+            return Err(message.into());
+        }
+        Ok(())
+    }
+
     #[test]
-    fn to_sql_primitives() {
-        assert!(matches!(42i32.to_sql(), SqlType::Int(Some(42))));
-        assert!(matches!(255u8.to_sql(), SqlType::TinyInt(Some(255))));
-        assert!(matches!((-12i16).to_sql(), SqlType::SmallInt(Some(-12))));
-        assert!(matches!(i64::MAX.to_sql(), SqlType::BigInt(Some(i64::MAX))));
-        assert!(matches!(true.to_sql(), SqlType::Bit(Some(true))));
-        assert!(matches!(1.5f32.to_sql(), SqlType::Real(Some(1.5))));
-        assert!(matches!(2.5f64.to_sql(), SqlType::Float(Some(2.5))));
-        assert!(matches!(Some(7i32).to_sql(), SqlType::Int(Some(7))));
-        assert!(matches!(
-            None::<i32>.to_sql(),
-            SqlType::NVarchar(None, 4000)
-        ));
+    fn to_sql_primitives() -> TestResult {
+        ensure(
+            matches!(42i32.to_sql(), SqlType::Int(Some(42))),
+            "expected int",
+        )?;
+        ensure(
+            matches!(255u8.to_sql(), SqlType::TinyInt(Some(255))),
+            "expected tinyint",
+        )?;
+        ensure(
+            matches!((-12i16).to_sql(), SqlType::SmallInt(Some(-12))),
+            "expected smallint",
+        )?;
+        ensure(
+            matches!(i64::MAX.to_sql(), SqlType::BigInt(Some(i64::MAX))),
+            "expected bigint",
+        )?;
+        ensure(
+            matches!(true.to_sql(), SqlType::Bit(Some(true))),
+            "expected bit",
+        )?;
+        ensure(
+            matches!(1.5f32.to_sql(), SqlType::Real(Some(1.5))),
+            "expected real",
+        )?;
+        ensure(
+            matches!(2.5f64.to_sql(), SqlType::Float(Some(2.5))),
+            "expected float",
+        )?;
+        ensure(
+            matches!(Some(7i32).to_sql(), SqlType::Int(Some(7))),
+            "expected optional int",
+        )?;
+        ensure(
+            matches!(None::<i32>.to_sql(), SqlType::NVarchar(None, 4000)),
+            "expected SQL NULL",
+        )?;
         for value in ["hello".to_sql(), "hello".to_owned().to_sql()] {
             let SqlType::NVarchar(Some(value), 4000) = value else {
-                panic!("expected nvarchar");
+                return Err("expected nvarchar".into());
             };
-            assert_eq!(value.to_utf8_string(), "hello");
+            ensure_equal(value.to_utf8_string().as_str(), "hello")?;
         }
         let bytes = vec![0, 255, 42];
         for value in [bytes.to_sql(), bytes.as_slice().to_sql()] {
-            assert!(matches!(value, SqlType::VarBinaryMax(Some(v)) if v == bytes));
+            ensure(
+                matches!(value, SqlType::VarBinaryMax(Some(v)) if v == bytes),
+                "expected binary bytes",
+            )?;
         }
+        Ok(())
     }
 
     #[test]
@@ -732,7 +788,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn buffered_stream_skips_empty_sets_and_tracks_remaining_rows() {
+    async fn buffered_stream_skips_empty_sets_and_tracks_remaining_rows() -> TestResult {
         use futures_core::Stream;
         use futures_util::StreamExt;
         use mssql_tds::datatypes::column_values::ColumnValues;
@@ -743,111 +799,129 @@ mod tests {
         }
         .into_row_stream();
         for expected in 1..=3 {
-            let remaining = 4 - expected as usize;
-            assert_eq!(stream.size_hint(), (remaining, Some(remaining)));
-            assert_eq!(
-                stream.next().await.unwrap().unwrap().get::<i32, _>(0),
-                Some(expected)
-            );
+            let remaining = 4 - usize::try_from(expected)?;
+            ensure_equal(stream.size_hint(), (remaining, Some(remaining)))?;
+            ensure_equal(
+                stream
+                    .next()
+                    .await
+                    .ok_or("expected another row")??
+                    .get::<i32, _>(0),
+                Some(expected),
+            )?;
         }
-        assert_eq!(stream.size_hint(), (0, Some(0)));
-        assert!(stream.next().await.is_none());
-        assert!(stream.next().await.is_none());
-        assert!(QueryResult::empty()
-            .into_row_stream()
-            .next()
-            .await
-            .is_none());
+        ensure_equal(stream.size_hint(), (0, Some(0)))?;
+        ensure(stream.next().await.is_none(), "expected end of stream")?;
+        ensure(
+            stream.next().await.is_none(),
+            "stream must remain exhausted",
+        )?;
+        ensure(
+            QueryResult::empty()
+                .into_row_stream()
+                .next()
+                .await
+                .is_none(),
+            "empty results must not yield rows",
+        )?;
         let result = ExecuteResult {
             counts: vec![0, 2, 3],
         };
-        assert_eq!(result.total(), 5);
-        assert_eq!(result.into_iter().collect::<Vec<_>>(), [0, 2, 3]);
+        ensure_equal(result.total(), 5)?;
+        ensure_equal(result.into_iter().collect::<Vec<_>>(), vec![0, 2, 3])?;
+        Ok(())
     }
 
     #[cfg(feature = "time")]
     #[test]
-    fn time_temporals_roundtrip_with_fractional_seconds_and_offset() {
+    fn time_temporals_roundtrip_with_fractional_seconds_and_offset() -> TestResult {
         use crate::FromSql;
         use mssql_tds::datatypes::column_values::ColumnValues;
-        let time = time::Time::from_hms_nano(23, 45, 56, 123_456_700).unwrap();
-        let date = time::Date::from_calendar_date(2024, time::Month::February, 29).unwrap();
+        let time = time::Time::from_hms_nano(23, 45, 56, 123_456_700)?;
+        let date = time::Date::from_calendar_date(2024, time::Month::February, 29)?;
         let dt = time::PrimitiveDateTime::new(date, time);
         let SqlType::Time(Some(value)) = time.to_sql() else {
-            panic!("expected time")
+            return Err("expected time".into());
         };
-        assert_eq!(time::Time::from_sql(&ColumnValues::Time(value)), Some(time));
+        ensure_equal(time::Time::from_sql(&ColumnValues::Time(value)), Some(time))?;
         let SqlType::DateTime2(Some(value)) = dt.to_sql() else {
-            panic!("expected datetime2")
+            return Err("expected datetime2".into());
         };
-        assert_eq!(
+        ensure_equal(
             time::PrimitiveDateTime::from_sql(&ColumnValues::DateTime2(value)),
-            Some(dt)
-        );
+            Some(dt),
+        )?;
         for offset in [-330, 0, 345] {
-            let dt = dt.assume_offset(time::UtcOffset::from_whole_seconds(offset * 60).unwrap());
+            let dt = dt.assume_offset(time::UtcOffset::from_whole_seconds(offset * 60)?);
             let SqlType::DateTimeOffset(Some(value)) = dt.to_sql() else {
-                panic!("expected datetimeoffset")
+                return Err("expected datetimeoffset".into());
             };
-            assert_eq!(value.offset, offset as i16);
-            let actual =
-                time::OffsetDateTime::from_sql(&ColumnValues::DateTimeOffset(value)).unwrap();
-            assert_eq!(actual, dt);
-            assert_eq!(actual.offset(), dt.offset());
-            assert_eq!(actual.date(), dt.date());
-            assert_eq!(actual.time(), dt.time());
+            ensure_equal(value.offset, offset as i16)?;
+            let actual = time::OffsetDateTime::from_sql(&ColumnValues::DateTimeOffset(value))
+                .ok_or("expected decoded datetimeoffset")?;
+            ensure_equal(actual, dt)?;
+            ensure_equal(actual.offset(), dt.offset())?;
+            ensure_equal(actual.date(), dt.date())?;
+            ensure_equal(actual.time(), dt.time())?;
         }
-        assert!(time::Time::from_sql(&ColumnValues::Null).is_none());
-        assert!(time::PrimitiveDateTime::from_sql(&ColumnValues::Null).is_none());
-        assert!(time::OffsetDateTime::from_sql(&ColumnValues::Null).is_none());
+        ensure_equal(time::Time::from_sql(&ColumnValues::Null), None)?;
+        ensure_equal(time::PrimitiveDateTime::from_sql(&ColumnValues::Null), None)?;
+        ensure_equal(time::OffsetDateTime::from_sql(&ColumnValues::Null), None)?;
+        Ok(())
     }
 
     #[cfg(feature = "jiff")]
     #[test]
-    fn jiff_temporals_roundtrip_with_fractional_seconds_and_offset() {
+    fn jiff_temporals_roundtrip_with_fractional_seconds_and_offset() -> TestResult {
         use crate::FromSql;
         use mssql_tds::datatypes::column_values::ColumnValues;
-        let dt = jiff::civil::DateTime::new(2024, 2, 29, 23, 45, 56, 123_456_700).unwrap();
+        let dt = jiff::civil::DateTime::new(2024, 2, 29, 23, 45, 56, 123_456_700)
+            .map_err(|error| error.to_string())?;
         let SqlType::Time(Some(value)) = dt.time().to_sql() else {
-            panic!("expected time")
+            return Err("expected time".into());
         };
-        assert_eq!(
+        ensure_equal(
             jiff::civil::Time::from_sql(&ColumnValues::Time(value)),
-            Some(dt.time())
-        );
+            Some(dt.time()),
+        )?;
         let SqlType::DateTime2(Some(value)) = dt.to_sql() else {
-            panic!("expected datetime2")
+            return Err("expected datetime2".into());
         };
-        assert_eq!(
+        ensure_equal(
             jiff::civil::DateTime::from_sql(&ColumnValues::DateTime2(value)),
-            Some(dt)
-        );
+            Some(dt),
+        )?;
         for offset in [-330, 0, 345] {
             let zone = jiff::tz::Offset::from_seconds(offset * 60)
-                .unwrap()
+                .map_err(|error| error.to_string())?
                 .to_time_zone();
-            let zoned = dt.to_zoned(zone).unwrap();
+            let zoned = dt.to_zoned(zone).map_err(|error| error.to_string())?;
             let SqlType::DateTimeOffset(Some(value)) = zoned.to_sql() else {
-                panic!("expected datetimeoffset")
+                return Err("expected datetimeoffset".into());
             };
-            assert_eq!(value.offset, offset as i16);
-            let actual = jiff::Zoned::from_sql(&ColumnValues::DateTimeOffset(value)).unwrap();
-            assert_eq!(actual.timestamp(), zoned.timestamp());
-            assert_eq!(actual.offset(), zoned.offset());
-            assert_eq!(actual.datetime(), dt);
+            ensure_equal(value.offset, offset as i16)?;
+            let actual = jiff::Zoned::from_sql(&ColumnValues::DateTimeOffset(value))
+                .ok_or("expected decoded datetimeoffset")?;
+            ensure_equal(actual.timestamp(), zoned.timestamp())?;
+            ensure_equal(actual.offset(), zoned.offset())?;
+            ensure_equal(actual.datetime(), dt)?;
             let SqlType::DateTimeOffset(Some(value)) = zoned.timestamp().to_sql() else {
-                panic!("expected datetimeoffset")
+                return Err("expected datetimeoffset".into());
             };
-            assert_eq!(value.offset, 0);
-            assert_eq!(
+            ensure_equal(value.offset, 0)?;
+            ensure_equal(
                 jiff::Timestamp::from_sql(&ColumnValues::DateTimeOffset(value)),
-                Some(zoned.timestamp())
-            );
+                Some(zoned.timestamp()),
+            )?;
         }
-        assert!(jiff::civil::Time::from_sql(&ColumnValues::Null).is_none());
-        assert!(jiff::civil::DateTime::from_sql(&ColumnValues::Null).is_none());
-        assert!(jiff::Timestamp::from_sql(&ColumnValues::Null).is_none());
-        assert!(jiff::Zoned::from_sql(&ColumnValues::Null).is_none());
+        ensure_equal(jiff::civil::Time::from_sql(&ColumnValues::Null), None)?;
+        ensure_equal(jiff::civil::DateTime::from_sql(&ColumnValues::Null), None)?;
+        ensure_equal(jiff::Timestamp::from_sql(&ColumnValues::Null), None)?;
+        ensure(
+            jiff::Zoned::from_sql(&ColumnValues::Null).is_none(),
+            "SQL NULL must not decode to a zoned datetime",
+        )?;
+        Ok(())
     }
 
     #[test]
@@ -874,7 +948,7 @@ mod tests {
     }
 
     #[test]
-    fn decimal_roundtrips_through_column_data() {
+    fn decimal_roundtrips_through_column_data() -> TestResult {
         use mssql_tds::datatypes::column_values::ColumnValues;
         use rust_decimal::Decimal;
 
@@ -884,7 +958,7 @@ mod tests {
         // Extract DecimalParts from SqlType
         let decimal_parts = match sql_type {
             SqlType::Numeric(Some(dp)) => dp,
-            _ => panic!("expected SqlType::Numeric with DecimalParts"),
+            _ => return Err("expected SqlType::Numeric with DecimalParts".into()),
         };
 
         // Wrap in ColumnValues::Numeric
@@ -892,11 +966,12 @@ mod tests {
 
         // Convert back using FromSql
         let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
-        assert_eq!(roundtripped, Some(original));
+        ensure_equal(roundtripped, Some(original))?;
+        Ok(())
     }
 
     #[test]
-    fn decimal_zero_roundtrips() {
+    fn decimal_zero_roundtrips() -> TestResult {
         use mssql_tds::datatypes::column_values::ColumnValues;
         use rust_decimal::Decimal;
 
@@ -904,15 +979,16 @@ mod tests {
         let sql_type = original.to_sql();
         let decimal_parts = match sql_type {
             SqlType::Numeric(Some(dp)) => dp,
-            _ => panic!("expected SqlType::Numeric"),
+            _ => return Err("expected SqlType::Numeric".into()),
         };
         let column_val = ColumnValues::Numeric(decimal_parts);
         let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
-        assert_eq!(roundtripped, Some(original));
+        ensure_equal(roundtripped, Some(original))?;
+        Ok(())
     }
 
     #[test]
-    fn decimal_negative_roundtrips() {
+    fn decimal_negative_roundtrips() -> TestResult {
         use mssql_tds::datatypes::column_values::ColumnValues;
         use rust_decimal::Decimal;
 
@@ -920,15 +996,16 @@ mod tests {
         let sql_type = original.to_sql();
         let decimal_parts = match sql_type {
             SqlType::Numeric(Some(dp)) => dp,
-            _ => panic!("expected SqlType::Numeric"),
+            _ => return Err("expected SqlType::Numeric".into()),
         };
         let column_val = ColumnValues::Numeric(decimal_parts);
         let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
-        assert_eq!(roundtripped, Some(original));
+        ensure_equal(roundtripped, Some(original))?;
+        Ok(())
     }
 
     #[test]
-    fn decimal_high_precision_roundtrips() {
+    fn decimal_high_precision_roundtrips() -> TestResult {
         use mssql_tds::datatypes::column_values::ColumnValues;
         use rust_decimal::Decimal;
 
@@ -937,11 +1014,12 @@ mod tests {
         let sql_type = original.to_sql();
         let decimal_parts = match sql_type {
             SqlType::Numeric(Some(dp)) => dp,
-            _ => panic!("expected SqlType::Numeric"),
+            _ => return Err("expected SqlType::Numeric".into()),
         };
         let column_val = ColumnValues::Numeric(decimal_parts);
         let roundtripped: Option<Decimal> = crate::FromSql::from_sql(&column_val);
-        assert_eq!(roundtripped, Some(original));
+        ensure_equal(roundtripped, Some(original))?;
+        Ok(())
     }
 
     #[test]
@@ -960,9 +1038,35 @@ mod tests {
         use std::str::FromStr;
 
         // A value with 28 significant digits — the maximum for rust_decimal.
-        let d = Decimal::from_str("9999999999999999999999999999").unwrap();
+        let d = Decimal::from_str("9999999999999999999999999999")
+            .expect("28 significant digits fit a decimal mantissa");
         let sql_type = d.to_sql();
         assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
+    }
+
+    #[test]
+    fn decimal_precision_is_exact_near_powers_of_ten() -> TestResult {
+        for (text, precision) in [
+            ("0", 1),
+            ("9", 1),
+            ("10", 2),
+            ("9999999999999999999999999999", 28),
+            ("10000000000000000000000000000", 29),
+            ("-9999999999999999999999999999", 28),
+        ] {
+            let decimal: rust_decimal::Decimal = text.parse()?;
+            let SqlType::Numeric(Some(parts)) = decimal.to_sql() else {
+                return Err("expected a non-null SQL numeric".into());
+            };
+            ensure_equal(parts.precision, precision)?;
+            ensure_equal(
+                crate::FromSql::from_sql(
+                    &mssql_tds::datatypes::column_values::ColumnValues::Numeric(parts),
+                ),
+                Some(decimal),
+            )?;
+        }
+        Ok(())
     }
 
     #[test]
@@ -986,34 +1090,73 @@ mod tests {
         use rust_decimal::Decimal;
 
         // Scale=28, mantissa=1 → "0.0000000000000000000000000001"
-        // precision from log10(1)=0 → 1, but scale=28, so precision.max(28)=28
+        // precision from ilog10(1)=0 → 1, but scale=28, so precision.max(28)=28
         let d = Decimal::new(1, 28);
         let sql_type = d.to_sql();
         assert!(matches!(sql_type, SqlType::Numeric(Some(_))));
     }
 
+    #[test]
+    fn chrono_datetime_sql_date_boundaries_roundtrip() -> TestResult {
+        use mssql_tds::datatypes::column_values::ColumnValues;
+
+        for (year, month, day) in [(1, 1, 1), (9999, 12, 31)] {
+            let datetime = chrono::NaiveDate::from_ymd_opt(year, month, day)
+                .and_then(|date| date.and_hms_opt(0, 0, 0))
+                .ok_or("expected a valid SQL date boundary")?;
+            let SqlType::DateTime2(Some(value)) = datetime.to_sql() else {
+                return Err("expected SQL datetime2".into());
+            };
+            ensure_equal(
+                crate::FromSql::from_sql(&ColumnValues::DateTime2(value)),
+                Some(datetime),
+            )?;
+        }
+        Ok(())
+    }
+
+    #[test]
+    #[should_panic(expected = "date out of SQL Server DATE range")]
+    fn chrono_datetime_rejects_dates_before_sql_epoch() {
+        let datetime = chrono::NaiveDate::from_ymd_opt(0, 12, 31)
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .expect("chrono supports dates before the SQL epoch");
+        let _ = datetime.to_sql();
+    }
+
+    #[test]
+    #[should_panic(expected = "date out of SQL Server DATE range")]
+    fn chrono_datetime_rejects_dates_after_sql_range() {
+        let datetime = chrono::NaiveDate::from_ymd_opt(10000, 1, 1)
+            .and_then(|date| date.and_hms_opt(0, 0, 0))
+            .expect("chrono supports years after 9999");
+        let _ = datetime.to_sql();
+    }
+
     #[cfg(feature = "time")]
     #[test]
-    fn time_date_roundtrips_through_column_data() {
+    fn time_date_roundtrips_through_column_data() -> TestResult {
         use mssql_tds::datatypes::column_values::ColumnValues;
-        let date = time::Date::from_calendar_date(2024, time::Month::February, 29).unwrap();
+        let date = time::Date::from_calendar_date(2024, time::Month::February, 29)?;
         let SqlType::Date(Some(sql_date)) = date.to_sql() else {
-            panic!("expected SQL date")
+            return Err("expected SQL date".into());
         };
         let value = ColumnValues::Date(sql_date);
-        assert_eq!(crate::FromSql::from_sql(&value), Some(date));
+        ensure_equal(crate::FromSql::from_sql(&value), Some(date))?;
+        Ok(())
     }
 
     #[cfg(feature = "jiff")]
     #[test]
-    fn jiff_date_roundtrips_through_column_data() {
+    fn jiff_date_roundtrips_through_column_data() -> TestResult {
         use mssql_tds::datatypes::column_values::ColumnValues;
         let date = jiff::civil::date(2024, 2, 29);
         let SqlType::Date(Some(sql_date)) = date.to_sql() else {
-            panic!("expected SQL date")
+            return Err("expected SQL date".into());
         };
         let value = ColumnValues::Date(sql_date);
-        assert_eq!(crate::FromSql::from_sql(&value), Some(date));
+        ensure_equal(crate::FromSql::from_sql(&value), Some(date))?;
+        Ok(())
     }
 
     #[test]
@@ -1036,35 +1179,51 @@ mod tests {
     }
 
     #[test]
-    fn json_value_to_sql_dispatches_by_variant() {
-        assert!(matches!(
-            serde_json::Value::Null.to_sql(),
-            SqlType::NVarchar(None, 4000)
-        ));
-        assert!(matches!(json!(true).to_sql(), SqlType::Bit(Some(true))));
-        assert!(matches!(json!(42).to_sql(), SqlType::BigInt(Some(42))));
-        assert!(
-            matches!(json!(2.5).to_sql(), SqlType::Float(Some(v)) if (v - 2.5).abs() < f64::EPSILON)
-        );
+    fn json_value_to_sql_dispatches_by_variant() -> TestResult {
+        ensure(
+            matches!(
+                serde_json::Value::Null.to_sql(),
+                SqlType::NVarchar(None, 4000)
+            ),
+            "expected SQL NULL",
+        )?;
+        ensure(
+            matches!(json!(true).to_sql(), SqlType::Bit(Some(true))),
+            "expected JSON bit",
+        )?;
+        ensure(
+            matches!(json!(42).to_sql(), SqlType::BigInt(Some(42))),
+            "expected JSON bigint",
+        )?;
+        ensure(
+            matches!(json!(2.5).to_sql(), SqlType::Float(Some(v)) if (v - 2.5).abs() < f64::EPSILON),
+            "expected JSON float",
+        )?;
 
         let ty = json!("alice").to_sql();
-        assert!(matches!(ty, SqlType::NVarchar(_, 4000)));
+        ensure(
+            matches!(ty, SqlType::NVarchar(_, 4000)),
+            "expected nvarchar string",
+        )?;
         if let SqlType::NVarchar(Some(value), 4000) = ty {
-            assert_eq!(value.to_utf8_string(), "alice");
+            ensure_equal(value.to_utf8_string().as_str(), "alice")?;
+        } else {
+            return Err("expected NVarchar text for string".into());
         }
 
         let array = json!([1, 2, 3]);
         if let SqlType::NVarchar(Some(value), 4000) = array.to_sql() {
-            assert_eq!(value.to_utf8_string(), array.to_string());
+            ensure_equal(value.to_utf8_string(), array.to_string())?;
         } else {
-            panic!("expected NVarchar JSON text for array");
+            return Err("expected NVarchar JSON text for array".into());
         }
 
         let object = json!({"name":"alice"});
         if let SqlType::NVarchar(Some(value), 4000) = object.to_sql() {
-            assert_eq!(value.to_utf8_string(), object.to_string());
+            ensure_equal(value.to_utf8_string(), object.to_string())?;
         } else {
-            panic!("expected NVarchar JSON text for object");
+            return Err("expected NVarchar JSON text for object".into());
         }
+        Ok(())
     }
 }

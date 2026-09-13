@@ -108,9 +108,10 @@ mod tests {
 
     #[test]
     fn from_sql_vector() {
-        let sv = SqlVector::try_from_f32(vec![1.0, 2.0, 3.0]).unwrap();
+        let sv = SqlVector::try_from_f32(vec![1.0, 2.0, 3.0])
+            .expect("three float32 dimensions form a valid SQL vector");
         let cv = ColumnValues::Vector(sv);
-        let v = VectorValue::from_sql(&cv).unwrap();
+        let v = VectorValue::from_sql(&cv).expect("a SQL vector decodes to VectorValue");
         assert_eq!(v.dimensions(), &[1.0, 2.0, 3.0]);
     }
 
@@ -124,9 +125,9 @@ mod tests {
     fn to_sql_roundtrip() {
         let v = VectorValue::new(vec![1.5, 2.5, 3.5]);
         let sql_type = v.to_sql();
-        match sql_type {
-            SqlType::Vector(Some(_), 3, VectorBaseType::Float32) => {}
-            _ => panic!("Expected SqlType::Vector(Some(_), 3, Float32)"),
-        }
+        assert!(matches!(
+            sql_type,
+            SqlType::Vector(Some(_), 3, VectorBaseType::Float32)
+        ));
     }
 }

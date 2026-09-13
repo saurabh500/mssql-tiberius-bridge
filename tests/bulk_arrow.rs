@@ -59,10 +59,11 @@ async fn bulk_insert_send_arrow_mixed_types() {
     let n = 1000_i32;
     let ids: Int32Array = (0..n).collect();
     let names = StringArray::from((0..n).map(|i| format!("user-{i}")).collect::<Vec<_>>());
-    let prices = Decimal128Array::from((0..n).map(|i| (i as i128) * 100 + 99).collect::<Vec<_>>())
-        .with_precision_and_scale(10, 2)
-        .unwrap();
-    let ratings = Float64Array::from((0..n).map(|i| i as f64 / 10.0).collect::<Vec<_>>());
+    let prices =
+        Decimal128Array::from((0..n).map(|i| i128::from(i) * 100 + 99).collect::<Vec<_>>())
+            .with_precision_and_scale(10, 2)
+            .expect("valid decimal precision and scale");
+    let ratings = Float64Array::from((0..n).map(|i| f64::from(i) / 10.0).collect::<Vec<_>>());
     let actives = BooleanArray::from((0..n).map(|i| i % 2 == 0).collect::<Vec<_>>());
 
     let schema = Arc::new(Schema::new(vec![
@@ -92,14 +93,21 @@ async fn bulk_insert_send_arrow_mixed_types() {
         .await
         .expect("send_arrow failed");
 
-    assert_eq!(result.rows_affected, n as u64);
+    assert_eq!(
+        result.rows_affected,
+        u64::try_from(n).expect("row count must be nonnegative")
+    );
 
     let count_rows = client
         .simple_query("SELECT COUNT(*) AS n FROM #BridgeBulkArrow")
         .await
         .expect("select count failed")
         .into_first_result();
-    let count: i32 = count_rows[0].get("n").expect("missing count");
+    let count: i32 = count_rows
+        .first()
+        .expect("expected row at index 0")
+        .get("n")
+        .expect("missing count");
     assert_eq!(count, n);
 }
 
@@ -129,7 +137,8 @@ async fn bulk_insert_send_arrow_batches() {
                     .map(|i| format!("u{i}"))
                     .collect::<Vec<_>>(),
             );
-            RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(names)]).unwrap()
+            RecordBatch::try_new(schema.clone(), vec![Arc::new(ids), Arc::new(names)])
+                .expect("build record batch matching schema")
         })
         .collect();
 

@@ -108,7 +108,8 @@ connection.simple_query("SELECT 1").await?;
 ```
 
 The convenience builder enables bb8 checkout validation. If you build a bb8
-pool yourself, keep `test_on_check_out(true)` enabled to run reset recycling;
+pool yourself, keep `test_on_check_out(true)` enabled to run the configured
+recycling method (`Reset` by default, or the cached, no-I/O `Ping` check);
 otherwise, `is_valid()` is bypassed. Add `bb8 = "0.9"` to your dependencies
 when constructing a custom `bb8::Pool` builder for timeouts or
 `RecyclingMethod::Ping`.

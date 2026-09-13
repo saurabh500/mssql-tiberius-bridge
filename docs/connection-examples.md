@@ -2,37 +2,6 @@
 
 Terse examples for every connection option exposed by `mssql-tiberius-bridge` `0.1.0`. All samples assume they run inside an async context.
 
-## Connection pooling
-
-`TdsManager` supports deadpool by default. Enable the optional bb8 adapter with
-`mssql-tiberius-bridge = { version = "0.1.0", features = ["bb8"] }`:
-
-```rust,no_run
-use mssql_tiberius_bridge::{AuthMethod, Config, TdsManager};
-
-async fn example() -> Result<(), mssql_tiberius_bridge::Error> {
-    let mut cfg = Config::new();
-    cfg.host("localhost")
-        .authentication(AuthMethod::sql_server("sa", "password"))
-        .trust_cert();
-    let pool = TdsManager::create_bb8_pool(cfg, 10).await?;
-    let mut connection = pool.get().await.expect("bb8 checkout succeeds");
-    connection.simple_query("SELECT 1").await?;
-    Ok(())
-}
-```
-
-`create_bb8_pool` enables bb8's `test_on_check_out` option, so every reused
-connection runs the manager's selected recycling method. If you construct a bb8
-pool directly and disable that option, `is_valid()` is bypassed: no reset occurs
-at checkout. Configure bb8's builder timeouts and capacity for your workload.
-For a custom builder or `RecyclingMethod::Ping`, add `bb8 = "0.9"` to your
-dependencies and build `bb8::Pool` with a configured `TdsManager`; retain
-`test_on_check_out(true)` unless deliberately bypassing recycle validation.
-As with deadpool, commit or roll back before returning a connection because
-checkout-time reset does not release an abandoned transaction's locks while the
-connection remains idle.
-
 ## Quick start
 
 ```rust,no_run
@@ -493,9 +462,10 @@ async fn example() -> mssql_tiberius_bridge::Result<()> {
 ## Connection pooling
 
 `Client` owns one connection and is not cloneable; use `TdsManager` with
-`deadpool` for shared concurrency. Connections are created lazily with
-`Client::connect(&config)`. Dropping a checked-out connection returns it to the
-pool; native reset and validation happen before its next checkout.
+`deadpool` or the optional bb8 adapter for shared concurrency. The convenience
+builders create connections lazily with `Client::connect(&config)`. Dropping a
+checked-out connection returns it to the pool; native reset and validation
+happen before its next checkout.
 
 The default `RecyclingMethod::Reset` rejects connections known to be dead and
 calls `Client::reset_session()`. This drains any outstanding query, sets
@@ -517,7 +487,7 @@ release an abandoned transaction's locks while the connection sits idle.
 
 If a bridge operation is dropped while I/O is pending (for example by
 `tokio::time::timeout`), the client is marked dead. Recycling checks that native
-state before reset or ping and rejects the client so deadpool replaces it. Outside a pool,
+state before reset or ping and rejects the client so the pool replaces it. Outside a pool,
 drop the client and reconnect; later bridge calls return a typed `ConnectionClosed`
 error without I/O. `Client::is_connection_dead()` is a cached, no-I/O check.
 
@@ -595,6 +565,62 @@ are intentional; default `Reset` recycling still performs a server round trip.
 Outside a pool, call `client.reset_session().await?` directly for the same
 reset-and-validate behavior. Use this bridge method rather than arming a reset
 through `inner_mut()` so bridge-owned prepared handles are also invalidated.
+
+### bb8 pools
+
+`TdsManager` supports deadpool by default. Enable the optional bb8 adapter with
+`mssql-tiberius-bridge = { version = "0.1.0", features = ["bb8"] }`:
+
+```rust,no_run
+use mssql_tiberius_bridge::{AuthMethod, Config, TdsManager};
+
+async fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    let mut cfg = Config::new();
+    cfg.host("localhost")
+        .authentication(AuthMethod::sql_server("sa", "password"))
+        .trust_cert();
+    let pool = TdsManager::create_bb8_pool(cfg, 10).await?;
+    let mut connection = pool.get().await?;
+    connection.simple_query("SELECT 1").await?;
+    Ok(())
+}
+```
+
+`create_bb8_pool` enables bb8's `test_on_check_out` option, so checkout runs the
+manager's selected recycling method (`Reset` by default). If you construct a
+bb8 pool directly and disable that option, `is_valid()` is bypassed: no reset
+occurs at checkout. Commit or roll back before returning a connection because
+checkout-time reset does not release an abandoned transaction's locks while the
+connection remains idle.
+
+For a custom builder or `RecyclingMethod::Ping`, add `bb8 = "0.9"` to your
+dependencies and build `bb8::Pool` with a configured `TdsManager`. Retain
+`test_on_check_out(true)` to invoke the configured policy; with `Ping`, validation
+checks cached health without resetting state or consuming outstanding results.
+
+```rust,no_run
+async fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
+    use std::time::Duration;
+    use mssql_tiberius_bridge::{Config, RecyclingMethod, TdsManager};
+
+    let manager = TdsManager::new(Config::new())
+        .with_recycling_method(RecyclingMethod::Ping);
+    let pool = bb8::Pool::builder()
+        .max_size(8)
+        .connection_timeout(Duration::from_secs(5))
+        .test_on_check_out(true)
+        .build(manager)
+        .await?;
+    let mut connection = pool.get().await?;
+    connection.simple_query("SELECT 1").await?;
+    Ok(())
+}
+```
+
+Unlike the deadpool convenience builder, bb8 applies a 30-second connection
+timeout by default. Its `connection_timeout` bounds checkout, including reset
+validation. A failed or cancelled reset retires the connection rather than
+returning a partially reset session to another borrower.
 
 ## Tiberius API mapping
 

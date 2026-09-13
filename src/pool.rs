@@ -1,4 +1,4 @@
-//! Connection pooling via [`deadpool`] and optional [`bb8`] with native mssql-tds
+//! Connection pooling via [`deadpool`] and optional [`bb8`][bb8] with native mssql-tds
 //! session resets.
 //!
 //! Reused connections are reset and validated before checkout, including restoring
@@ -24,6 +24,8 @@
 //! # Ok(())
 //! # }
 //! ```
+//!
+//! [bb8]: https://docs.rs/bb8/0.9.1/bb8/
 
 use deadpool::managed::{Manager, Metrics, RecycleError, RecycleResult};
 
@@ -63,7 +65,7 @@ pub enum RecyclingMethod {
     Ping,
 }
 
-/// [`deadpool::managed::Manager`] implementation for mssql-tds connections.
+/// Connection manager for [`deadpool`] and, with the `bb8` feature, bb8.
 ///
 /// Creates and recycles [`Client`] connections using the provided [`Config`].
 /// Recycling occurs on checkout, not when a connection is returned. Commit or
@@ -206,15 +208,21 @@ mod tests {
     }
 
     #[cfg(feature = "bb8")]
-    #[tokio::test]
-    async fn bb8_manager_implements_manage_connection() {
+    #[test]
+    fn bb8_manager_implements_manage_connection() {
         fn assert_manager<T: bb8::ManageConnection<Connection = Client, Error = Error>>() {}
 
         assert_manager::<TdsManager>();
-        let pool = bb8::Pool::builder()
-            .max_size(2)
-            .test_on_check_out(true)
-            .build_unchecked(TdsManager::new(Config::new()));
+    }
+
+    #[cfg(feature = "bb8")]
+    #[tokio::test]
+    async fn create_bb8_pool_builder() {
+        let pool: Bb8Pool = TdsManager::create_bb8_pool(Config::new(), 2)
+            .await
+            .expect("pool configuration should be valid");
+        assert_eq!(pool.config().max_size, 2);
+        assert!(pool.config().test_on_check_out);
         assert_eq!(pool.state().connections, 0);
     }
 }

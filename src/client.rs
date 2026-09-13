@@ -753,6 +753,79 @@ mod tests {
             .is_err());
     }
 
+    #[cfg(feature = "bb8")]
+    #[test]
+    fn bb8_ping_validation_performs_no_io() {
+        use bb8::ManageConnection;
+        use futures_util::FutureExt;
+
+        let manager = crate::TdsManager::new(Config::new())
+            .with_recycling_method(crate::RecyclingMethod::Ping);
+        let mut client = client_for_test(tds_client_from_tokens(Vec::new()));
+        assert!(!manager.has_broken(&mut client));
+        assert!(matches!(
+            manager.is_valid(&mut client).now_or_never(),
+            Some(Ok(()))
+        ));
+        assert!(!manager.has_broken(&mut client));
+
+        client.inner.mark_connection_dead();
+        assert!(manager.has_broken(&mut client));
+        assert!(matches!(
+            manager.is_valid(&mut client).now_or_never(),
+            Some(Err(Error::Tds(mssql_tds::error::Error::ConnectionClosed(
+                _
+            ))))
+        ));
+    }
+
+    #[cfg(feature = "bb8")]
+    #[tokio::test]
+    async fn bb8_ping_validation_preserves_outstanding_results() {
+        use bb8::ManageConnection;
+        use futures_util::FutureExt;
+
+        let manager = crate::TdsManager::new(Config::new())
+            .with_recycling_method(crate::RecyclingMethod::Ping);
+        let mut client = client_for_test(tds_client_from_int_rows(vec![vec![7], vec![8]]));
+        client
+            .inner
+            .execute("SELECT application_rows".into(), ())
+            .await
+            .expect("scripted query should start successfully");
+        let session = Arc::clone(&client.prepared_session);
+
+        assert!(matches!(
+            manager.is_valid(&mut client).now_or_never(),
+            Some(Ok(()))
+        ));
+        assert!(Arc::ptr_eq(&session, &client.prepared_session));
+        let results = Client::collect_results(&mut client.inner)
+            .await
+            .expect("bb8 validation must leave outstanding results readable")
+            .into_results();
+        assert_eq!(results.len(), 1);
+        let rows = results.first().expect("expected the scripted result set");
+        let values: Vec<_> = rows.iter().map(|row| row.get::<i32, _>(0)).collect();
+        assert_eq!(values, [Some(7), Some(8)]);
+        assert!(!manager.has_broken(&mut client));
+    }
+
+    #[cfg(feature = "bb8")]
+    #[tokio::test]
+    async fn bb8_reset_validation_retires_failed_connection() {
+        use bb8::ManageConnection;
+
+        let manager = crate::TdsManager::new(Config::new());
+        let mut client = client_for_test(tds_client_from_tokens(Vec::new()));
+        assert!(!manager.has_broken(&mut client));
+        manager
+            .is_valid(&mut client)
+            .await
+            .expect_err("reset cannot succeed without a server response");
+        assert!(manager.has_broken(&mut client));
+    }
+
     #[test]
     fn config_to_datasource() {
         let mut cfg = Config::new();

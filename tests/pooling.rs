@@ -180,6 +180,180 @@ async fn bb8_pool_resets_reused_connections() {
     );
 }
 
+#[cfg(feature = "bb8")]
+mod bb8_lifecycle {
+    use super::*;
+    use bb8::ManageConnection;
+    use futures_util::{poll, FutureExt};
+    use mssql_tiberius_bridge::Bb8Pool;
+
+    async fn build_pool(manager: TdsManager) -> Bb8Pool {
+        Bb8Pool::builder()
+            .max_size(1)
+            .connection_timeout(Duration::from_secs(10))
+            .test_on_check_out(true)
+            .build(manager)
+            .await
+            .expect("build bb8 connection pool")
+    }
+
+    async fn assert_replacement(pool: &Bb8Pool) {
+        let mut replacement = pool.get().await.expect("bb8 replacement checkout failed");
+        assert!(!replacement.is_connection_dead());
+        assert_eq!(pool.state().statistics.connections_created, 2);
+        assert_eq!(scalar(&mut replacement, "SELECT 42").await, 42);
+    }
+
+    #[tokio::test]
+    async fn ping_preserves_session_state() {
+        let Some(config) = test_config() else {
+            return;
+        };
+        let manager = TdsManager::new(config).with_recycling_method(RecyclingMethod::Ping);
+        let pool = build_pool(manager).await;
+        let mut conn = pool.get().await.expect("bb8 checkout failed");
+        let spid = scalar(&mut conn, "SELECT @@SPID").await;
+        let statement = conn
+            .prepare("SELECT 42", &[])
+            .await
+            .expect("prepare statement");
+        conn.simple_query(
+            "CREATE TABLE #bridge_bb8_ping (value int); \
+             SET LOCK_TIMEOUT 1234; BEGIN TRANSACTION; \
+             INSERT INTO #bridge_bb8_ping VALUES (7)",
+        )
+        .await
+        .expect("set session state for Ping recycling");
+        drop(conn);
+
+        let mut conn = pool
+            .get()
+            .now_or_never()
+            .expect("Ping checkout of an idle connection must complete on its first poll")
+            .expect("bb8 Ping checkout failed");
+        assert_eq!(pool.state().statistics.connections_created, 1);
+        assert_eq!(scalar(&mut conn, "SELECT @@SPID").await, spid);
+        assert_eq!(scalar(&mut conn, "SELECT @@LOCK_TIMEOUT").await, 1234);
+        assert_eq!(scalar(&mut conn, "SELECT @@TRANCOUNT").await, 1);
+        assert_eq!(
+            scalar(&mut conn, "SELECT value FROM #bridge_bb8_ping").await,
+            7
+        );
+        let rows = statement
+            .query(&mut conn, &[])
+            .await
+            .expect("Ping must preserve the prepared statement")
+            .into_first_result();
+        assert_eq!(
+            rows.first()
+                .expect("expected prepared query row")
+                .get::<i32, _>(0),
+            Some(42)
+        );
+        conn.simple_query("ROLLBACK TRANSACTION")
+            .await
+            .expect("roll back Ping test transaction");
+        statement
+            .close(&mut conn)
+            .await
+            .expect("close prepared statement");
+    }
+
+    #[tokio::test]
+    async fn both_methods_discard_known_dead_connections() {
+        let Some(config) = test_config() else {
+            return;
+        };
+        for method in [RecyclingMethod::Reset, RecyclingMethod::Ping] {
+            let manager = TdsManager::new(config.clone()).with_recycling_method(method);
+            let pool = build_pool(manager.clone()).await;
+            let mut conn = pool.get().await.expect("bb8 checkout failed");
+            assert!(!manager.has_broken(&mut conn));
+            conn.inner_mut()
+                .close_connection()
+                .await
+                .expect("close connection");
+            assert!(manager.has_broken(&mut conn));
+            assert!(matches!(
+                manager.is_valid(&mut conn).now_or_never(),
+                Some(Err(Error::Tds(mssql_tds::error::Error::ConnectionClosed(
+                    _
+                ))))
+            ));
+            drop(conn);
+
+            assert_eq!(pool.state().statistics.connections_closed_broken, 1);
+            assert_replacement(&pool).await;
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_reset_discards_connection() {
+        let Some(config) = test_config() else {
+            return;
+        };
+        let pool = build_pool(TdsManager::new(config)).await;
+        let mut conn = pool.get().await.expect("bb8 checkout failed");
+        conn.inner_mut()
+            .execute(
+                "SELECT 1; THROW 50000, 'bb8 recycle drain failure', 1".into(),
+                (),
+            )
+            .await
+            .expect("start query with a pending SQL error");
+        drop(conn);
+
+        assert_replacement(&pool).await;
+        assert_eq!(pool.state().statistics.connections_closed_invalid, 1);
+        assert_eq!(pool.state().statistics.connections_closed_broken, 1);
+    }
+
+    #[tokio::test]
+    async fn cancelled_validation_marks_connection_broken() {
+        let Some(config) = test_config() else {
+            return;
+        };
+        let manager = TdsManager::new(config);
+        let pool = build_pool(manager.clone()).await;
+        let mut conn = pool.get().await.expect("bb8 checkout failed");
+        start_waiting_batch(&mut conn).await;
+
+        let mut validation = Box::pin(manager.is_valid(&mut conn));
+        assert!(
+            poll!(validation.as_mut()).is_pending(),
+            "reset validation must reach pending I/O before cancellation"
+        );
+        drop(validation);
+        assert!(conn.is_connection_dead());
+        assert!(manager.has_broken(&mut conn));
+        drop(conn);
+
+        assert_eq!(pool.state().statistics.connections_closed_broken, 1);
+        assert_replacement(&pool).await;
+    }
+
+    #[tokio::test]
+    async fn cancelled_checkout_discards_a_reset_in_progress() {
+        let Some(config) = test_config() else {
+            return;
+        };
+        let pool = build_pool(TdsManager::new(config)).await;
+        let mut conn = pool.get().await.expect("bb8 checkout failed");
+        start_waiting_batch(&mut conn).await;
+        drop(conn);
+
+        let mut checkout = Box::pin(pool.get());
+        assert!(
+            poll!(checkout.as_mut()).is_pending(),
+            "checkout must reach pending reset I/O before cancellation"
+        );
+        drop(checkout);
+
+        assert_eq!(pool.state().statistics.connections_closed_broken, 1);
+        assert_replacement(&pool).await;
+    }
+}
+
 #[tokio::test]
 async fn repeated_pool_reuse_does_not_leak_validation_result_sets() {
     let Some(config) = test_config() else {

@@ -20,6 +20,7 @@
 //!     .query("SELECT id, name, email FROM users", &[])
 //!     .await?
 //!     .into_first_result()
+//!     .await?
 //!     .into_iter()
 //!     .map(Row::deserialize)
 //!     .collect::<mssql_tiberius_bridge::Result<Vec<_>>>()?;

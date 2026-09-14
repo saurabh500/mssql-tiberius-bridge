@@ -403,7 +403,7 @@ async fn example() -> mssql_tiberius_bridge::Result<()> {
         .authentication(AuthMethod::sql_server("app", "secret"))
         .send_string_parameters_as_unicode(false);
     let mut client = Client::connect(&cfg).await?;
-    let _ = client.query("SELECT @P1", &[&"varchar-shaped"]).await?;
+    let _ = client.query("SELECT @P1", &[&"varchar-shaped"]).await?.into_results().await?;
     Ok(())
 }
 ```
@@ -505,7 +505,7 @@ async fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .authentication(AuthMethod::sql_server("app", "secret"));
     let pool = TdsManager::create_pool(cfg, 16)?;
     let mut conn = pool.get().await?;
-    let _ = conn.simple_query("SELECT 1").await?;
+    let _ = conn.simple_query("SELECT 1").await?.into_results().await?;
     Ok(())
 }
 ```

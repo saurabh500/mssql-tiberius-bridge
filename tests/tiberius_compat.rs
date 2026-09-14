@@ -44,7 +44,9 @@ async fn bool_type() {
         .query("SELECT @P1", &[&true])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -56,7 +58,9 @@ async fn bool_type() {
         .query("SELECT @P1", &[&false])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -72,7 +76,9 @@ async fn u8_token() {
         .query("SELECT @P1", &[&255u8])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -88,7 +94,9 @@ async fn i16_token() {
         .query("SELECT @P1", &[&i16::MIN])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -100,7 +108,9 @@ async fn i16_token() {
         .query("SELECT @P1", &[&i16::MAX])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -116,7 +126,9 @@ async fn i32_token() {
         .query("SELECT @P1", &[&i32::MIN])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -128,7 +140,9 @@ async fn i32_token() {
         .query("SELECT @P1", &[&i32::MAX])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -144,7 +158,9 @@ async fn i64_token() {
         .query("SELECT @P1", &[&i64::MIN])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -156,7 +172,9 @@ async fn i64_token() {
         .query("SELECT @P1", &[&i64::MAX])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -172,7 +190,9 @@ async fn f32_token() {
         .query("SELECT @P1", &[&1.23f32])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -188,7 +208,9 @@ async fn f64_token() {
         .query("SELECT @P1", &[&1.23456789f64])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -205,7 +227,9 @@ async fn string_roundtrip() {
         .query("SELECT @P1", &[&input])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -223,7 +247,9 @@ async fn uuid_roundtrip() {
         .query("SELECT @P1", &[&id])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -239,7 +265,9 @@ async fn decimal_roundtrip() {
         .query("SELECT CAST(123.456 AS decimal(10,3))", &[])
         .await
         .expect("query succeeds: SELECT CAST(123.456 AS decimal(10,3))")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -260,7 +288,9 @@ async fn nullable_i32_some() {
         .query("SELECT @P1", &[&42i32])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -276,7 +306,9 @@ async fn nullable_i32_none() {
         .query("SELECT CAST(NULL AS int)", &[])
         .await
         .expect("query succeeds: SELECT CAST(NULL AS int)")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -292,7 +324,9 @@ async fn nullable_string_some() {
         .query("SELECT @P1", &[&"hello"])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -308,7 +342,9 @@ async fn nullable_string_none() {
         .query("SELECT CAST(NULL AS nvarchar(50))", &[])
         .await
         .expect("query succeeds: SELECT CAST(NULL AS nvarchar(50))")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -328,7 +364,10 @@ async fn kanji_nvarchar() {
     client
         .simple_query("CREATE TABLE #kanji_test (val nvarchar(100))")
         .await
-        .expect("query succeeds: CREATE TABLE #kanji_test (val nvarchar(100))");
+        .expect("query succeeds: CREATE TABLE #kanji_test (val nvarchar(100))")
+        .into_results()
+        .await
+        .expect("drain create table");
     client
         .execute("INSERT INTO #kanji_test (val) VALUES (@P1)", &[&text])
         .await
@@ -337,7 +376,9 @@ async fn kanji_nvarchar() {
         .query("SELECT val FROM #kanji_test", &[])
         .await
         .expect("query succeeds: SELECT val FROM #kanji_test")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -353,7 +394,10 @@ async fn finnish_varchar() {
     client
         .simple_query("CREATE TABLE #finnish_test (val nvarchar(100))")
         .await
-        .expect("query succeeds: CREATE TABLE #finnish_test (val nvarchar(100))");
+        .expect("query succeeds: CREATE TABLE #finnish_test (val nvarchar(100))")
+        .into_results()
+        .await
+        .expect("drain create table");
     client
         .execute("INSERT INTO #finnish_test (val) VALUES (@P1)", &[&text])
         .await
@@ -362,7 +406,9 @@ async fn finnish_varchar() {
         .query("SELECT val FROM #finnish_test", &[])
         .await
         .expect("query succeeds: SELECT val FROM #finnish_test")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -378,7 +424,9 @@ async fn empty_string() {
         .query("SELECT CAST('' AS varchar(10))", &[])
         .await
         .expect("query succeeds: SELECT CAST('' AS varchar(10))")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -398,7 +446,9 @@ async fn naive_date_time() {
         .query("SELECT CAST('2020-04-20 16:20:00' AS datetime2)", &[])
         .await
         .expect("query succeeds: SELECT CAST('2020-04-20 16:20:00' AS datetime2)")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -418,7 +468,9 @@ async fn naive_date() {
         .query("SELECT CAST('2020-04-20' AS date)", &[])
         .await
         .expect("query succeeds: SELECT CAST('2020-04-20' AS date)")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -437,7 +489,9 @@ async fn naive_time() {
         .query("SELECT CAST('16:20:00' AS time)", &[])
         .await
         .expect("query succeeds: SELECT CAST('16:20:00' AS time)")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -459,7 +513,9 @@ async fn datetime_offset() {
         )
         .await
         .expect("query succeeds: SELECT CAST('2020-04-20 16:20:00 +02:00' AS datetimeoffset)")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -489,7 +545,9 @@ async fn varbinary_roundtrip() {
         .query("SELECT CAST(0xDEADBEEF AS varbinary(4))", &[])
         .await
         .expect("query succeeds: SELECT CAST(0xDEADBEEF AS varbinary(4))")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -505,7 +563,9 @@ async fn varbinary_empty() {
         .query("SELECT CAST(0x AS varbinary(1))", &[])
         .await
         .expect("query succeeds: SELECT CAST(0x AS varbinary(1))")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -521,7 +581,9 @@ async fn binary_type() {
         .query("SELECT CAST(0x0102030405 AS binary(5))", &[])
         .await
         .expect("query succeeds: SELECT CAST(0x0102030405 AS binary(5))")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -542,7 +604,9 @@ async fn vec_u8_param_roundtrip() {
         .query("SELECT @P1", &[&payload])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -559,7 +623,9 @@ async fn empty_vec_u8_param_roundtrip() {
         .query("SELECT @P1", &[&payload])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -576,7 +642,9 @@ async fn naive_date_param_roundtrip() {
         .query("SELECT @P1", &[&d])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -593,7 +661,9 @@ async fn naive_time_param_roundtrip() {
         .query("SELECT @P1", &[&t])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -613,7 +683,9 @@ async fn naive_date_time_param_roundtrip() {
         .query("SELECT @P1", &[&dt])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -635,7 +707,9 @@ async fn datetime_fixed_offset_param_roundtrip() {
         .query("SELECT @P1", &[&dt])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let got = row
         .first()
         .expect("expected row at index 0")
@@ -656,7 +730,9 @@ async fn datetime_utc_param_sends_offset_zero() {
         .query("SELECT @P1", &[&dt_utc])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let got = row
         .first()
         .expect("expected row at index 0")
@@ -675,7 +751,9 @@ async fn serde_json_value_param_variant_dispatch() {
         .query("SELECT @P1", &[&null_value])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -688,7 +766,9 @@ async fn serde_json_value_param_variant_dispatch() {
         .query("SELECT @P1", &[&bool_value])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -701,7 +781,9 @@ async fn serde_json_value_param_variant_dispatch() {
         .query("SELECT @P1", &[&int_value])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -714,7 +796,9 @@ async fn serde_json_value_param_variant_dispatch() {
         .query("SELECT @P1", &[&float_value])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let got_float = rows
         .first()
         .expect("expected row at index 0")
@@ -727,7 +811,9 @@ async fn serde_json_value_param_variant_dispatch() {
         .query("SELECT @P1", &[&string_value])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -740,7 +826,9 @@ async fn serde_json_value_param_variant_dispatch() {
         .query("SELECT @P1", &[&array_value])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -753,7 +841,9 @@ async fn serde_json_value_param_variant_dispatch() {
         .query("SELECT @P1", &[&object_value])
         .await
         .expect("query succeeds: SELECT @P1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -785,7 +875,9 @@ async fn readonly_login_smoke() {
         .query("SELECT 1", &[])
         .await
         .expect("query succeeds: SELECT 1")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")
@@ -805,7 +897,9 @@ async fn multiple_rows() {
         .query("SELECT value FROM (VALUES (1),(2),(3)) AS t(value)", &[])
         .await
         .expect("query succeeds: SELECT value FROM (VALUES (1),(2),(3)) AS t(value)")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(rows.len(), 3);
     assert_eq!(
         rows.first()
@@ -834,7 +928,9 @@ async fn multiple_result_sets() {
         .query("SELECT 1; SELECT 'hello'", &[])
         .await
         .expect("query succeeds: SELECT 1; SELECT 'hello'")
-        .into_results();
+        .into_results()
+        .await
+        .expect("collect query results");
     assert_eq!(results.len(), 2);
     assert_eq!(
         results
@@ -863,7 +959,9 @@ async fn empty_result_set() {
         .query("SELECT 1 WHERE 1=0", &[])
         .await
         .expect("query succeeds: SELECT 1 WHERE 1=0")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert!(rows.is_empty());
 }
 
@@ -877,7 +975,10 @@ async fn execute_insert_update_delete() {
     client
         .simple_query("CREATE TABLE #dml_test (id int, name nvarchar(50))")
         .await
-        .expect("query succeeds: CREATE TABLE #dml_test (id int, name nvarchar(50))");
+        .expect("query succeeds: CREATE TABLE #dml_test (id int, name nvarchar(50))")
+        .into_results()
+        .await
+        .expect("drain create table");
 
     let result = client
         .execute(
@@ -910,7 +1011,10 @@ async fn mixed_statement_results_and_counts() {
     client
         .simple_query("CREATE TABLE #mixed_results (id int)")
         .await
-        .expect("query succeeds: CREATE TABLE #mixed_results (id int)");
+        .expect("query succeeds: CREATE TABLE #mixed_results (id int)")
+        .into_results()
+        .await
+        .expect("drain create table");
     let results = client
         .simple_query(
             "INSERT INTO #mixed_results VALUES (1); \
@@ -921,7 +1025,9 @@ async fn mixed_statement_results_and_counts() {
         )
         .await
         .expect("query succeeds: INSERT INTO #mixed_results VALUES (1); SELECT id FROM #mixed_results WHERE 1 = 0; PRINT 'between ...")
-        .into_results();
+        .into_results()
+        .await
+        .expect("collect query results");
     assert_eq!(results.len(), 2);
     assert!(results
         .first()
@@ -958,11 +1064,17 @@ async fn simple_query_ddl() {
     client
         .simple_query("CREATE TABLE #ddl_test (id int)")
         .await
-        .expect("query succeeds: CREATE TABLE #ddl_test (id int)");
+        .expect("query succeeds: CREATE TABLE #ddl_test (id int)")
+        .into_results()
+        .await
+        .expect("drain create table");
     client
         .simple_query("DROP TABLE #ddl_test")
         .await
-        .expect("query succeeds: DROP TABLE #ddl_test");
+        .expect("query succeeds: DROP TABLE #ddl_test")
+        .into_results()
+        .await
+        .expect("drain drop table");
 }
 
 // =============================================================================
@@ -975,25 +1087,39 @@ async fn transaction_commit() {
     client
         .simple_query("CREATE TABLE #tx_commit (id int)")
         .await
-        .expect("query succeeds: CREATE TABLE #tx_commit (id int)");
+        .expect("query succeeds: CREATE TABLE #tx_commit (id int)")
+        .into_results()
+        .await
+        .expect("drain create table");
     client
         .simple_query("BEGIN TRAN")
         .await
-        .expect("query succeeds: BEGIN TRAN");
+        .expect("query succeeds: BEGIN TRAN")
+        .into_results()
+        .await
+        .expect("drain begin transaction");
     client
         .simple_query("INSERT INTO #tx_commit VALUES (1)")
         .await
-        .expect("query succeeds: INSERT INTO #tx_commit VALUES (1)");
+        .expect("query succeeds: INSERT INTO #tx_commit VALUES (1)")
+        .into_results()
+        .await
+        .expect("drain insert");
     client
         .simple_query("COMMIT")
         .await
-        .expect("query succeeds: COMMIT");
+        .expect("query succeeds: COMMIT")
+        .into_results()
+        .await
+        .expect("drain commit");
 
     let rows = client
         .query("SELECT id FROM #tx_commit", &[])
         .await
         .expect("query succeeds: SELECT id FROM #tx_commit")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows.first()
@@ -1009,25 +1135,39 @@ async fn transaction_rollback() {
     client
         .simple_query("CREATE TABLE #tx_rollback (id int)")
         .await
-        .expect("query succeeds: CREATE TABLE #tx_rollback (id int)");
+        .expect("query succeeds: CREATE TABLE #tx_rollback (id int)")
+        .into_results()
+        .await
+        .expect("drain create table");
     client
         .simple_query("BEGIN TRAN")
         .await
-        .expect("query succeeds: BEGIN TRAN");
+        .expect("query succeeds: BEGIN TRAN")
+        .into_results()
+        .await
+        .expect("drain begin transaction");
     client
         .simple_query("INSERT INTO #tx_rollback VALUES (1)")
         .await
-        .expect("query succeeds: INSERT INTO #tx_rollback VALUES (1)");
+        .expect("query succeeds: INSERT INTO #tx_rollback VALUES (1)")
+        .into_results()
+        .await
+        .expect("drain insert");
     client
         .simple_query("ROLLBACK")
         .await
-        .expect("query succeeds: ROLLBACK");
+        .expect("query succeeds: ROLLBACK")
+        .into_results()
+        .await
+        .expect("drain rollback");
 
     let rows = client
         .query("SELECT id FROM #tx_rollback", &[])
         .await
         .expect("query succeeds: SELECT id FROM #tx_rollback")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert!(rows.is_empty());
 }
 
@@ -1045,7 +1185,9 @@ async fn numeric_large() {
         )
         .await
         .expect("query succeeds: SELECT CAST(99999999999999999999.999999 AS numeric(38,6))")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -1064,7 +1206,9 @@ async fn money_type() {
         .query("SELECT CAST(1234.5678 AS money)", &[])
         .await
         .expect("query succeeds: SELECT CAST(1234.5678 AS money)")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -1085,7 +1229,9 @@ async fn xml_type() {
         .query("SELECT CAST('<root><item>test</item></root>' AS xml)", &[])
         .await
         .expect("query succeeds: SELECT CAST('<root><item>test</item></root>' AS xml)")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val = row
         .first()
         .expect("expected row at index 0")
@@ -1105,7 +1251,9 @@ async fn get_by_name() {
         .query("SELECT 42 AS answer, 'hello' AS greeting", &[])
         .await
         .expect("query succeeds: SELECT 42 AS answer, 'hello' AS greeting")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -1127,7 +1275,9 @@ async fn get_by_index() {
         .query("SELECT 42 AS answer, 'hello' AS greeting", &[])
         .await
         .expect("query succeeds: SELECT 42 AS answer, 'hello' AS greeting")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -1149,7 +1299,9 @@ async fn column_metadata() {
         .query("SELECT 42 AS answer, 'hello' AS greeting", &[])
         .await
         .expect("query succeeds: SELECT 42 AS answer, 'hello' AS greeting")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let cols = rows.first().expect("expected row at index 0").columns();
     assert_eq!(
         cols.first().expect("expected column at index 0").name(),
@@ -1170,7 +1322,9 @@ async fn str_borrow_from_row() {
         .query("SELECT @P1 AS name", &[&"hello world"])
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let name: &str = rows
         .first()
         .expect("expected row at index 0")
@@ -1186,7 +1340,9 @@ async fn str_borrow_null() {
         .simple_query("SELECT CAST(NULL AS nvarchar(50)) AS val")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let val: Option<&str> = rows
         .first()
         .expect("expected row at index 0")

@@ -60,7 +60,9 @@ async fn connect_with_trusted_ca() {
         .query("SELECT @P1", &[&-4i32])
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         row.first()
             .expect("expected row at index 0")

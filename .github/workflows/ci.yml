@@ -145,6 +145,11 @@ jobs:
       - name: Doc tests
         run: cargo test --doc
 
+      - name: Tiberius query API consumer
+        run: cargo check --manifest-path tests/query-consumer/Cargo.toml
+        env:
+          CARGO_TARGET_DIR: target
+
       - name: Doc tests (serde feature)
         run: cargo test --doc --features serde
 

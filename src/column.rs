@@ -69,14 +69,15 @@ impl From<TdsDataType> for ColumnType {
             TdsDataType::Decimal | TdsDataType::DecimalN => ColumnType::Decimaln,
             TdsDataType::Numeric | TdsDataType::NumericN => ColumnType::Numericn,
             TdsDataType::Money | TdsDataType::MoneyN => ColumnType::Money,
+            TdsDataType::Money4 => ColumnType::Money4,
             TdsDataType::Guid => ColumnType::Guid,
             TdsDataType::NVarChar => ColumnType::NVarchar,
             TdsDataType::VarChar | TdsDataType::BigVarChar => ColumnType::Varchar,
             TdsDataType::NChar => ColumnType::NChar,
-            TdsDataType::Char => ColumnType::Char,
+            TdsDataType::Char | TdsDataType::BigChar => ColumnType::Char,
             TdsDataType::NText => ColumnType::NText,
             TdsDataType::Text => ColumnType::Text,
-            TdsDataType::Binary => ColumnType::Binary,
+            TdsDataType::Binary | TdsDataType::BigBinary => ColumnType::Binary,
             TdsDataType::VarBinary | TdsDataType::BigVarBinary => ColumnType::VarBinary,
             TdsDataType::Image => ColumnType::Image,
             TdsDataType::Xml => ColumnType::Xml,
@@ -341,6 +342,25 @@ impl Column {
 mod tests {
     use super::*;
     use mssql_tds::test_client_support::{int_columns, udt_column, udt_column_with_metadata};
+
+    #[test]
+    fn fixed_char_binary_and_smallmoney_types_are_preserved() {
+        for (native, expected, length) in [
+            (TdsDataType::BigChar, ColumnType::Char, 12),
+            (TdsDataType::BigBinary, ColumnType::Binary, 12),
+            (TdsDataType::Money4, ColumnType::Money4, 4),
+            (TdsDataType::Char, ColumnType::Char, 12),
+            (TdsDataType::Binary, ColumnType::Binary, 12),
+            (TdsDataType::MoneyN, ColumnType::Money4, 4),
+            (TdsDataType::MoneyN, ColumnType::Money, 8),
+            (TdsDataType::Void, ColumnType::Null, 0),
+        ] {
+            if native != TdsDataType::MoneyN {
+                assert_eq!(ColumnType::from(native), expected);
+            }
+            assert_eq!(ColumnType::from_tds_with_length(native, length), expected);
+        }
+    }
 
     #[test]
     fn spatial_column_types_use_udt_identity() {

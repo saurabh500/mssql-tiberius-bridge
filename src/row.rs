@@ -1,6 +1,6 @@
 //! Row type with named and indexed column access, mirroring tiberius' `Row` API.
 //!
-//! A [`Row`] is returned from [`QueryResult::into_first_result()`](crate::QueryResult::into_first_result)
+//! A [`Row`] is returned from [`QueryStream::into_first_result()`](crate::QueryStream::into_first_result)
 //! and provides typed access to column values via [`get()`](Row::get).
 
 use std::borrow::Cow;
@@ -54,6 +54,7 @@ impl RowSchema {
 #[derive(Debug, Clone)]
 pub struct Row {
     schema: Arc<RowSchema>,
+    pub(crate) result_index: usize,
     values: Vec<ColumnValues>,
     /// Pre-decoded UTF-8 strings for &str borrowing support.
     decoded_strings: Vec<Option<String>>,
@@ -75,6 +76,7 @@ impl Row {
             .collect();
         Row {
             schema,
+            result_index: 0,
             values,
             decoded_strings,
         }
@@ -92,6 +94,12 @@ impl Row {
     /// Column metadata for this row.
     pub fn columns(&self) -> &[Column] {
         &self.schema.columns
+    }
+
+    /// Zero-based index of this row's result set within its query.
+    /// Rows constructed directly with `from_schema` / `from_tds` use zero.
+    pub fn result_index(&self) -> usize {
+        self.result_index
     }
 
     /// Number of columns.
@@ -188,6 +196,7 @@ impl Row {
     /// let users: Vec<User> = client.query("SELECT id, name FROM users", &[])
     ///     .await?
     ///     .into_first_result()
+    ///     .await?
     ///     .into_iter()
     ///     .map(Row::deserialize)
     ///     .collect::<mssql_tiberius_bridge::Result<Vec<_>>>()?;
@@ -719,6 +728,7 @@ impl BridgeRowWriter {
         );
         Row {
             schema: self.schema.clone(),
+            result_index: 0,
             values,
             decoded_strings,
         }

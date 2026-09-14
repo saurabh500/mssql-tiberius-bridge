@@ -27,7 +27,7 @@
 //!     let rows = client
 //!         .simple_query("SELECT name FROM sys.databases")
 //!         .await?
-//!         .into_first_result();
+//!         .into_first_result().await?;
 //!
 //!     for row in &rows {
 //!         let name: &str = row.get("name").unwrap();
@@ -38,7 +38,7 @@
 //!     let rows = client
 //!         .query("SELECT @P1 AS greeting, @P2 AS number", &[&"hello", &42i32])
 //!         .await?
-//!         .into_first_result();
+//!         .into_first_result().await?;
 //!
 //!     let greeting: &str = rows[0].get("greeting").unwrap();
 //!     let number: i32 = rows[0].get("number").unwrap();
@@ -101,7 +101,9 @@ pub use config::{AuthMethod, Config, EncryptionLevel, Transport};
 pub use error::{Error, Result};
 pub use pool::{Pool, PooledConnection, RecyclingMethod, TdsManager};
 pub use prepared::PreparedStatement;
-pub use query::{DebugParams, ExecuteResult, QueryResult, ToSql};
+pub use query::{
+    DebugParams, ExecuteResult, QueryItem, QueryResult, QueryStream, ResultMetadata, ToSql,
+};
 pub use row::{ColumnIndex, FromSql, Row};
 
 // Re-export mssql-tds types that consumers might need for advanced use.

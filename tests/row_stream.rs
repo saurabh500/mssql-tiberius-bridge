@@ -1,4 +1,4 @@
-//! Integration tests for [`QueryResult::into_row_stream`].
+//! Integration tests for [`QueryStream::into_row_stream`].
 //!
 //! Mirrors tiberius' `into_row_stream_should_work` test from
 //! `tiberius/tests/query.rs`. Verifies the streaming API contract that
@@ -99,9 +99,8 @@ async fn into_row_stream_supports_map_next() {
 async fn into_row_stream_dropped_early_does_not_panic() {
     // Mirrors tiberius'
     // `drop_stream_before_handling_all_results_should_not_cause_weird_things`.
-    // Because the bridge buffers rows up-front, dropping the stream simply
-    // drops the in-memory Vec — no wire state to corrupt. The client must
-    // remain usable for subsequent queries.
+    // Dropping the live stream leaves unread wire results for the next query
+    // to drain. The client must remain usable for subsequent queries.
     let mut client = connect().await;
     {
         let mut stream = client
@@ -122,7 +121,7 @@ async fn into_row_stream_dropped_early_does_not_panic() {
         .simple_query("SELECT 42 AS n")
         .await
         .expect("query succeeds: SELECT 42 AS n");
-    let rows = rows.into_first_result();
+    let rows = rows.into_first_result().await.expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -247,7 +246,10 @@ async fn query_streamed_skips_no_row_statements() {
     client
         .simple_query("CREATE TABLE #stream_results (id int)")
         .await
-        .expect("query succeeds: CREATE TABLE #stream_results (id int)");
+        .expect("query succeeds: CREATE TABLE #stream_results (id int)")
+        .into_results()
+        .await
+        .expect("drain create table");
     let rows: Vec<Row> = client
         .query_streamed(
             "INSERT INTO #stream_results VALUES (@P1); \
@@ -301,7 +303,7 @@ async fn query_streamed_pulls_lazily_one_at_a_time() {
         .simple_query("SELECT 99 AS n")
         .await
         .expect("query succeeds: SELECT 99 AS n");
-    let rows = rs.into_first_result();
+    let rows = rs.into_first_result().await.expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")

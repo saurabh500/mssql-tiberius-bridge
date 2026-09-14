@@ -44,7 +44,9 @@ async fn connect_and_select_one() {
         .simple_query("SELECT 1 AS value")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     assert_eq!(rows.len(), 1);
     let val: i32 = rows
@@ -71,7 +73,9 @@ async fn select_multiple_types() {
         )
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -112,7 +116,9 @@ async fn parameterized_query() {
         .query("SELECT @P1 AS a, @P2 AS b", &[&42i32, &"world"])
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -138,7 +144,9 @@ async fn null_handling() {
         .simple_query("SELECT CAST(NULL AS int) AS nullable_col")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -164,7 +172,9 @@ async fn multiple_rows() {
         .simple_query("SELECT name FROM sys.databases WHERE database_id <= 4 ORDER BY database_id")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     // System DBs: master, tempdb, model, msdb
     assert!(rows.len() >= 4);
@@ -185,7 +195,9 @@ async fn get_by_index() {
         .simple_query("SELECT 99 AS val")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     assert_eq!(
         rows.first()
@@ -209,7 +221,9 @@ async fn datetime_types() {
         )
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     assert_eq!(rows.len(), 1);
     let d: chrono::NaiveDate = rows
@@ -252,7 +266,9 @@ async fn decimal_type() {
         .simple_query("SELECT CAST(123.45 AS decimal(10,2)) AS dec_col")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     let d: rust_decimal::Decimal = rows
         .first()
@@ -273,7 +289,9 @@ async fn client_ping() {
         .simple_query("SELECT 1 AS value")
         .await
         .expect("query after ping failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -317,7 +335,9 @@ async fn connection_pool() {
         .simple_query("SELECT 1 AS value")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -335,7 +355,9 @@ async fn binary_data() {
         .simple_query("SELECT CAST(0xDEADBEEF AS varbinary(4)) AS bin_col")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     let bytes: Vec<u8> = rows
         .first()
@@ -357,7 +379,10 @@ async fn decimal_parameter_roundtrip() {
     client
         .simple_query("CREATE TABLE #temp_decimal_test (id INT, amount NUMERIC(10, 4))")
         .await
-        .expect("create table failed");
+        .expect("create table failed")
+        .into_results()
+        .await
+        .expect("drain create table");
 
     // Insert with decimal parameter
     client
@@ -366,14 +391,19 @@ async fn decimal_parameter_roundtrip() {
             &[&1i32, &decimal_val],
         )
         .await
-        .expect("insert failed");
+        .expect("insert failed")
+        .into_results()
+        .await
+        .expect("drain insert");
 
     // Read back the decimal value
     let rows = client
         .simple_query("SELECT amount FROM #temp_decimal_test WHERE id = 1")
         .await
         .expect("select failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     assert_eq!(rows.len(), 1);
     let read_val: Option<Decimal> = rows.first().expect("expected row at index 0").get("amount");
@@ -383,5 +413,8 @@ async fn decimal_parameter_roundtrip() {
     client
         .simple_query("DROP TABLE #temp_decimal_test")
         .await
-        .expect("drop table failed");
+        .expect("drop table failed")
+        .into_results()
+        .await
+        .expect("drain drop table");
 }

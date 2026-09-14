@@ -102,7 +102,9 @@ async fn bulk_insert_send_arrow_mixed_types() {
         .simple_query("SELECT COUNT(*) AS n FROM #BridgeBulkArrow")
         .await
         .expect("select count failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let count: i32 = count_rows
         .first()
         .expect("expected row at index 0")

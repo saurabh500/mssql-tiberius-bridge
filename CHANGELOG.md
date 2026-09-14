@@ -11,8 +11,18 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve CHAR, BINARY, and SMALLMONEY column types for native BigChar,
+  BigBinary, and Money4 metadata, including empty result sets.
+
 ### Changed
 
+- **Breaking:** `Client::query()` / `simple_query()` now return a borrowed
+  Tiberius-style `QueryStream`, not buffered `QueryResult`. Collection methods
+  are asynchronous and fallible; initialization stops at metadata and trailing
+  errors arrive during consumption. Existing callers must await collectors or
+  explicitly drain discarded queries. Prepared-query APIs remain buffered.
 - Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached
   `is_connection_dead()` check, including for `RecyclingMethod::Ping`.
   The async API is unchanged, but success no longer verifies server
@@ -25,6 +35,8 @@ when the Release PR is opened.
 
 ### Added
 
+- `QueryStream::columns()`, metadata/row events, result indexes, and QueryItem
+  accessors expose empty rowsets through the ordinary Tiberius query API.
 - `Client::reset_session()` and the no-I/O `Client::is_connection_dead()` accessor.
 - Tokio timeout support for pools built with `TdsManager::create_pool`.
 

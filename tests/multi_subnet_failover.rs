@@ -50,7 +50,9 @@ async fn multi_subnet_failover_connects_to_single_endpoint() {
         .simple_query("SELECT 1 AS value")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")

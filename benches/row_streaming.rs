@@ -45,17 +45,23 @@ fn bench_streaming_rows(c: &mut Criterion) {
             .simple_query(DROP_SQL)
             .await
             .expect("drop failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain drop");
         client
             .simple_query(CREATE_SQL)
             .await
             .expect("create failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain create");
         client
             .simple_query(INSERT_SQL)
             .await
             .expect("insert failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain insert");
     });
 
     c.bench_function("stream_100k_rows", |b| {
@@ -95,17 +101,23 @@ fn bench_buffered_rows(c: &mut Criterion) {
             .simple_query(DROP_SQL)
             .await
             .expect("drop failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain drop");
         client
             .simple_query(CREATE_SQL)
             .await
             .expect("create failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain create");
         client
             .simple_query(INSERT_SQL)
             .await
             .expect("insert failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain insert");
     });
 
     c.bench_function("buffered_100k_rows", |b| {
@@ -122,7 +134,10 @@ fn bench_buffered_rows(c: &mut Criterion) {
                         .simple_query("SELECT id, name, value, created_at FROM dbo.bench_rows")
                         .await
                         .expect("buffered benchmark query failed");
-                    let rows = result.into_first_result();
+                    let rows = result
+                        .into_first_result()
+                        .await
+                        .expect("collect benchmark rows");
                     total += start.elapsed();
                     assert_eq!(rows.len(), 100000);
                 }
@@ -142,17 +157,23 @@ fn bench_into_row_stream(c: &mut Criterion) {
             .simple_query(DROP_SQL)
             .await
             .expect("drop failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain drop");
         client
             .simple_query(CREATE_SQL)
             .await
             .expect("create failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain create");
         client
             .simple_query(INSERT_SQL)
             .await
             .expect("insert failed")
-            .into_first_result();
+            .into_results()
+            .await
+            .expect("drain insert");
     });
 
     c.bench_function("into_row_stream_100k_rows", |b| {
@@ -172,7 +193,7 @@ fn bench_into_row_stream(c: &mut Criterion) {
                     let mut stream = result.into_row_stream();
                     let mut count = 0u64;
                     while let Some(row) = stream.next().await {
-                        row.expect("buffered benchmark row failed");
+                        row.expect("streamed benchmark row failed");
                         count += 1;
                     }
                     total += start.elapsed();

@@ -25,6 +25,11 @@ when the Release PR is opened.
 
 ### Added
 
+- Checked incremental `Client::start_query`, `query_metadata`, `next_row_into`,
+  `next_result`, `close_query`, and `has_pending_results` for caller-owned row
+  writers, plus `query_first` for first-row reads with checked draining.
+- Narrow native callback/metadata re-exports in `writer` and optional `sspi`,
+  `gssapi`, and `tls-schannel-direct-on-windows` feature forwarding.
 - `Client::reset_session()` and the no-I/O `Client::is_connection_dead()` accessor.
 - Tokio timeout support for pools built with `TdsManager::create_pool`.
 

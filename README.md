@@ -109,6 +109,72 @@ Direct calls through `inner_mut()` bypass the bridge guards: after abandoning
 native I/O, mark the native client dead and discard it instead of returning it
 to a pool as healthy. See the `Client` rustdoc for the full contract.
 
+## Incremental custom row writers
+
+Use the checked incremental API when the consumer owns its client and reusable
+value buffers, without retaining a borrowed stream or creating bridge `Row`s:
+
+```rust,ignore
+let mut on_result = client.start_query(sql, &[]).await?;
+while on_result {
+    // Copy/validate metadata before reading; empty rowsets also expose columns.
+    configure_writer(client.query_metadata()?)?;
+    loop {
+        let mut writer = make_writer_for_next_row();
+        let decoded = client.next_row_into(&mut writer).await?;
+        // Check your writer's conversion-error latch, column count, and end_row.
+        writer.check_completed_row(decoded)?;
+        if !decoded { break; } // Current rowset boundary only.
+        publish_completed_row(writer)?;
+    }
+    on_result = client.next_result().await?; // false means query EOF.
+}
+client.close_query().await?;
+```
+
+This sketch omits application-specific writers and error cleanup; see the complete
+[integer-writer example](examples/incremental.rs), including drain-on-error.
+`start_query` drains previous results and skips non-row statements. `next_result`
+drains the current result if necessary and skips subsequent non-row statements;
+it must be called even after a row boundary to observe trailing results/errors.
+Repeated row reads at a boundary return `false` without advancing, and repeated
+`next_result` calls at query EOF return `false`. `query_metadata` returns an error
+outside a current unread rowset, including after its boundary is read.
+
+`close_query` drains rather than cancels; early close of a large query can still
+take time. Completed SQL errors preserve native connection health; failed
+transport drains and dropped pending I/O retire it. Unpolled futures do not.
+For a pool that does not drain on return, reject a client when
+`is_connection_dead() || has_pending_results()`. Neither being set proves that
+the remote server is still responsive. Existing bridge operations continue to
+drain outstanding results before issuing a new request.
+
+`query_first(sql, params)` materializes at most one bridge `Row`, then drains
+everything. It reads the **first rowset**, returning `None` for an empty first
+rowset even if later rowsets have rows. Trailing errors are not hidden by an
+already-read row. Use this for scalar/count/range queries, not data refills.
+
+Import `RowWriter`, its callback argument types, `ColumnMetadata`, `TdsDataType`,
+and `TdsError` through `mssql_tiberius_bridge::writer`. These native re-exports
+couple this part of the bridge's public API to `mssql-tds` versions. Callback
+bytes may be borrowed only for the callback; copy/transcode into owned storage.
+Discard partial rows and uncommitted `value_destination` storage on failed or
+cancelled reads. Callback conversion errors must be latched and checked by the
+writer before publishing even an `Ok(true)` row; then drain or discard the client.
+
+Consumers control refill size (for example 32 rows per `block_on`). This is not
+a MAX-value byte cap, and no bridge-backed performance claim follows from
+direct-driver measurements. The optional features `sspi`, `gssapi`, and
+`tls-schannel-direct-on-windows` forward the native features of those names,
+without changing defaults, TLS semantics, or requiring a direct native dependency.
+
+The standalone consumer fixture has **only the bridge as a SQL-driver
+dependency** and compiles the same example without the bridge's dev dependencies:
+
+```powershell
+cargo check --manifest-path tests\consumer\Cargo.toml
+```
+
 ## Spatial values
 
 `geography` and `geometry` columns can be read directly in buffered or streamed

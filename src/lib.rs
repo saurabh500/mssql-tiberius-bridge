@@ -57,6 +57,9 @@
 //! | `jiff` | off | Enables `jiff` crate support for [`FromSql`] and [`ToSql`] |
 //! | `serde` | off | Enables `serde::Deserialize` for [`Row`] (see [`serde_de`]) |
 //! | `arrow` | off | Enables [`BulkInsert::send_arrow`](crate::bulk::BulkInsert::send_arrow) for Apache Arrow `RecordBatch` input (see [`bulk_arrow`]) |
+//! | `sspi` | off | Forwards native Windows integrated authentication support |
+//! | `gssapi` | off | Forwards native Unix integrated authentication support |
+//! | `tls-schannel-direct-on-windows` | off | Forwards native Windows Schannel TLS support |
 //!
 //! # Modules
 //!
@@ -92,6 +95,7 @@ pub mod query;
 pub mod row;
 #[cfg(feature = "serde")]
 pub mod serde_de;
+pub mod writer;
 
 // Re-exports for ergonomic top-level access.
 pub use bulk::{BulkInsert, BulkLoadRow, ColumnMapping, ColumnMappingSource};

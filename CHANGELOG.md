@@ -18,6 +18,11 @@ when the Release PR is opened.
 
 ### Changed
 
+- **Breaking:** `Client::query()` / `simple_query()` now return a borrowed
+  Tiberius-style `QueryStream`, not buffered `QueryResult`. Collection methods
+  are asynchronous and fallible; initialization stops at metadata and trailing
+  errors arrive during consumption. Existing callers must await collectors or
+  explicitly drain discarded queries. Prepared-query APIs remain buffered.
 - Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached
   `is_connection_dead()` check, including for `RecyclingMethod::Ping`.
   The async API is unchanged, but success no longer verifies server
@@ -30,8 +35,8 @@ when the Release PR is opened.
 
 ### Added
 
-- `Client::query_items()` / `simple_query_items()` stream shared result-set
-  metadata before ordinary rows, preserving empty rowsets and their indexes.
+- `QueryStream::columns()`, metadata/row events, result indexes, and QueryItem
+  accessors expose empty rowsets through the ordinary Tiberius query API.
 - `Client::reset_session()` and the no-I/O `Client::is_connection_dead()` accessor.
 - Tokio timeout support for pools built with `TdsManager::create_pool`.
 

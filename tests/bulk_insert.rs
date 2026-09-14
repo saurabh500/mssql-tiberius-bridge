@@ -110,7 +110,9 @@ async fn bulk_insert_thousand_rows() {
         .simple_query("SELECT COUNT(*) AS n FROM #BridgeBulkPeople")
         .await
         .expect("select count failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let n: i32 = count_rows
         .first()
         .expect("expected row at index 0")

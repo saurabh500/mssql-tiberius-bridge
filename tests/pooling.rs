@@ -35,6 +35,8 @@ async fn scalar(client: &mut Client, sql: &str) -> i32 {
         .await
         .expect("scalar query failed")
         .into_first_result()
+        .await
+        .expect("collect scalar query rows")
         .first()
         .expect("expected scalar query row")
         .get(0)
@@ -65,7 +67,9 @@ async fn native_pool_reset_isolates_borrowers_on_the_same_connection() {
         .simple_query("SELECT @@SPID AS spid, DB_NAME() AS db, @@LOCK_TIMEOUT AS lock_timeout")
         .await
         .expect("query succeeds: SELECT @@SPID AS spid, DB_NAME() AS db, @@LOCK_TIMEOUT AS lock_timeout")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let spid = original
         .first()
         .expect("expected row at index 0")
@@ -96,7 +100,10 @@ async fn native_pool_reset_isolates_borrowers_on_the_same_connection() {
          INSERT INTO #bridge_pool_reset VALUES (42)",
     )
     .await
-    .expect("query succeeds: USE tempdb; CREATE TABLE #bridge_pool_reset (value int); SET LOCK_TIMEOUT 1234; SET TRANSACTION I...");
+    .expect("query succeeds: USE tempdb; CREATE TABLE #bridge_pool_reset (value int); SET LOCK_TIMEOUT 1234; SET TRANSACTION I...")
+    .into_results()
+    .await
+    .expect("drain pool reset setup");
     assert_eq!(scalar(&mut conn, "SELECT @@TRANCOUNT").await, 1);
     drop(conn);
 
@@ -112,7 +119,9 @@ async fn native_pool_reset_isolates_borrowers_on_the_same_connection() {
         )
         .await
         .expect("query succeeds: SELECT @@SPID AS spid, DB_NAME() AS db, @@LOCK_TIMEOUT AS lock_timeout, @@TRANCOUNT AS tran_count...")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -175,7 +184,9 @@ async fn repeated_pool_reuse_does_not_leak_validation_result_sets() {
                 )
                 .await
                 .expect("query succeeds: SELECT @P1 AS expected_value, CAST('application' AS nvarchar(16)) AS result_source")
-                .into_results();
+                .into_results()
+                .await
+                .expect("collect query results");
             assert_eq!(
                 results.len(),
                 1,
@@ -203,7 +214,9 @@ async fn repeated_pool_reuse_does_not_leak_validation_result_sets() {
             .query("SELECT @P1; SELECT @P1 + 1 AS next_value", &[&value])
             .await
             .expect("query succeeds: SELECT @P1; SELECT @P1 + 1 AS next_value")
-            .into_results();
+            .into_results()
+            .await
+            .expect("collect query results");
         assert_eq!(results.len(), 2);
         assert_eq!(
             results
@@ -331,7 +344,10 @@ async fn explicit_ping_recycling_preserves_legacy_session_state() {
          INSERT INTO #bridge_pool_legacy VALUES (7)",
     )
     .await
-    .expect("query succeeds: CREATE TABLE #bridge_pool_legacy (value int); SET LOCK_TIMEOUT 1234; BEGIN TRANSACTION; INSERT IN...");
+    .expect("query succeeds: CREATE TABLE #bridge_pool_legacy (value int); SET LOCK_TIMEOUT 1234; BEGIN TRANSACTION; INSERT IN...")
+    .into_results()
+    .await
+    .expect("drain legacy session setup");
     drop(conn);
 
     let mut conn = Box::pin(pool.get()).await.expect("pool checkout failed");
@@ -355,7 +371,10 @@ async fn explicit_ping_recycling_preserves_legacy_session_state() {
     );
     conn.simple_query("ROLLBACK TRANSACTION")
         .await
-        .expect("query succeeds: ROLLBACK TRANSACTION");
+        .expect("query succeeds: ROLLBACK TRANSACTION")
+        .into_results()
+        .await
+        .expect("drain rollback");
     statement
         .close(&mut conn)
         .await

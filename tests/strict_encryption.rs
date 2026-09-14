@@ -66,7 +66,9 @@ async fn strict_select_one() {
         .simple_query("SELECT 1 AS value")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -94,7 +96,9 @@ async fn strict_reports_encrypted_session() {
         )
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     let encrypted: String = rows
         .first()
@@ -125,7 +129,9 @@ async fn strict_ignores_trust_cert_flag() {
         .simple_query("SELECT 1 AS value")
         .await
         .expect("query failed")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")

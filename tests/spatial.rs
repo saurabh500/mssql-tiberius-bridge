@@ -103,7 +103,9 @@ async fn spatial_buffered_and_streamed_reads_preserve_native_serialization() {
         .simple_query(SHAPES)
         .await
         .expect("simple query succeeds for spatial buffered and streamed reads preserve native serialization")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let streamed: Vec<Row> = client
         .simple_query_streamed(SHAPES)
         .try_collect()
@@ -177,7 +179,9 @@ async fn spatial_buffered_and_streamed_reads_preserve_native_serialization() {
         .simple_query("SELECT 42 AS n")
         .await
         .expect("query succeeds: SELECT 42 AS n")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         next.first()
             .expect("expected row at index 0")
@@ -208,7 +212,9 @@ async fn spatial_parameterized_reads_span_multiple_packets() {
         .query(sql, &[&2000i32])
         .await
         .expect("query succeeds for spatial parameterized reads span multiple packets")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let streamed: Vec<Row> = client
         .query_streamed(sql, &[&2000i32])
         .try_collect()
@@ -245,7 +251,9 @@ async fn non_spatial_udt_remains_opaque_bytes() {
         )
         .await
         .expect("query succeeds: DECLARE @h hierarchyid = hierarchyid::Parse('/1/2/'); SELECT @h AS h, CAST(@h AS varbinary(max)) ...")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(rows.len(), 1);
     let row = rows.first().expect("expected row at index 0");
     assert_eq!(

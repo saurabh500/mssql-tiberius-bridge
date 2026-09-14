@@ -14,6 +14,313 @@ const DONE_IN_PROC_MORE: &[u8] = &[0xff, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const DONE_PROC: &[u8] = &[0xfe, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 #[tokio::test]
+async fn collectors_start_at_first_remaining_result_after_partial_consumption() {
+    let (mut client, mut peer) = connect().await;
+    let mut body = metadata("n", &[0x38]);
+    body.extend([0xd1, 10, 0, 0, 0, 0xd1, 11, 0, 0, 0]);
+    body.extend(DONE_MORE);
+    body.extend(metadata("empty", &[0x7f]));
+    body.extend(DONE_MORE);
+    body.extend(int_result(20));
+    for (skip, count, first) in [
+        (0, 3, Some(10)),
+        (1, 3, Some(10)),
+        (2, 3, Some(11)),
+        (3, 2, None),
+        (4, 1, Some(20)),
+        (5, 1, Some(20)),
+        (6, 0, None),
+    ] {
+        for collector in 0..3 {
+            let mut stream = response(&mut client, &mut peer, &body).await;
+            for _ in 0..skip {
+                next(&mut stream).await.expect("item to skip").expect("ok");
+            }
+            match collector {
+                0 => {
+                    let results = stream.into_results().await.expect("remaining results");
+                    assert_eq!(results.len(), count);
+                    assert_eq!(
+                        results
+                            .first()
+                            .and_then(|rows| rows.first())
+                            .and_then(|row| row.get::<i32, _>(0)),
+                        first
+                    );
+                }
+                1 => {
+                    let rows = stream
+                        .into_first_result()
+                        .await
+                        .expect("remaining first result");
+                    assert_eq!(rows.first().and_then(|row| row.get::<i32, _>(0)), first);
+                }
+                _ => {
+                    let row = stream.into_row().await.expect("remaining first row");
+                    assert_eq!(row.and_then(|row| row.get::<i32, _>(0)), first);
+                }
+            }
+            healthy_reuse(&mut client, &mut peer).await;
+        }
+    }
+}
+
+async fn response<'a>(
+    client: &'a mut Client,
+    peer: &mut TcpStream,
+    body: &[u8],
+) -> mssql_tiberius_bridge::QueryStream<'a> {
+    let server = async {
+        request(peer, 3).await;
+        reply(peer, body, true).await;
+    };
+    // Query and parameter lifetimes must not be tied to the returned client borrow.
+    let sql = String::from("SELECT @P1 AS n");
+    let value = 42;
+    let params: &[&dyn mssql_tiberius_bridge::ToSql] = &[&value];
+    let (stream, ()) = timeout(DEADLINE, async {
+        tokio::join!(client.query(sql.as_str(), params), server)
+    })
+    .await
+    .expect("response deadline");
+    stream.expect("query initialized")
+}
+
+#[tokio::test]
+async fn columns_peek_across_empty_sets_without_losing_events_or_rows() {
+    let (mut client, mut peer) = connect().await;
+    for _ in 0..2 {
+        let mut body = metadata("empty", &[0x7f]);
+        body.extend(DONE_MORE);
+        body.extend(int_result(42));
+        let mut stream = response(&mut client, &mut peer, &body).await;
+        for _ in 0..2 {
+            let cols = stream
+                .columns()
+                .await
+                .expect("columns")
+                .expect("empty schema");
+            assert_eq!(
+                cols.first().expect("column").column_type(),
+                ColumnType::Int8
+            );
+        }
+        let item = next(&mut stream).await.expect("item").expect("metadata");
+        assert!(item.as_row().is_none());
+        assert_eq!(item.as_metadata().expect("metadata").result_index(), 0);
+        assert_eq!(
+            item.into_metadata()
+                .expect("owned metadata")
+                .columns()
+                .first()
+                .expect("column")
+                .name(),
+            "empty"
+        );
+        assert_eq!(
+            stream
+                .columns()
+                .await
+                .expect("columns")
+                .expect("second schema")
+                .first()
+                .expect("column")
+                .name(),
+            "n"
+        );
+        let item = next(&mut stream).await.expect("item").expect("metadata");
+        assert_eq!(item.as_metadata().expect("metadata").result_index(), 1);
+        assert!(item.into_row().is_none());
+        for _ in 0..2 {
+            assert_eq!(
+                stream
+                    .columns()
+                    .await
+                    .expect("columns")
+                    .expect("cached schema")
+                    .first()
+                    .expect("column")
+                    .name(),
+                "n"
+            );
+        }
+        let item = next(&mut stream).await.expect("item").expect("row");
+        assert!(item.as_metadata().is_none());
+        assert_eq!(item.as_row().expect("row").result_index(), 1);
+        assert!(item.clone().into_metadata().is_none());
+        assert_eq!(item.into_row().expect("row").get::<i32, _>(0), Some(42));
+        assert!(next(&mut stream).await.is_none());
+        assert!(next(&mut stream).await.is_none());
+        assert_eq!(
+            stream
+                .columns()
+                .await
+                .expect("EOF columns")
+                .expect("last schema")
+                .first()
+                .expect("column")
+                .name(),
+            "n"
+        );
+        drop(stream);
+        healthy_reuse(&mut client, &mut peer).await;
+    }
+    let mut stream = response(&mut client, &mut peer, DONE).await;
+    assert!(stream.columns().await.expect("no rowsets").is_none());
+    assert!(next(&mut stream).await.is_none());
+}
+
+#[tokio::test]
+async fn collectors_preserve_empty_first_intermediate_and_final_sets() {
+    let (mut client, mut peer) = connect().await;
+    let mut body = metadata("first", &[0x7f]);
+    body.extend(DONE_MORE);
+    body.extend(metadata("n", &[0x38]));
+    body.extend([0xd1, 42, 0, 0, 0]);
+    body.extend(DONE_MORE);
+    body.extend(metadata("last", &[0x38]));
+    body.extend(DONE);
+    for _ in 0..2 {
+        let results = response(&mut client, &mut peer, &body)
+            .await
+            .into_results()
+            .await
+            .expect("results");
+        assert_eq!(results.len(), 3);
+        assert!(results.first().expect("empty first").is_empty());
+        assert_eq!(
+            results
+                .get(1)
+                .expect("second")
+                .first()
+                .expect("row")
+                .result_index(),
+            1
+        );
+        assert!(results.last().expect("empty last").is_empty());
+        assert!(response(&mut client, &mut peer, &body)
+            .await
+            .into_first_result()
+            .await
+            .expect("first")
+            .is_empty());
+        assert!(response(&mut client, &mut peer, &body)
+            .await
+            .into_row()
+            .await
+            .expect("first row")
+            .is_none());
+        let rows = response(&mut client, &mut peer, &body)
+            .await
+            .into_row_stream()
+            .try_collect::<Vec<_>>()
+            .await
+            .expect("rows");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows.first().expect("row").get::<i32, _>(0), Some(42));
+        assert_eq!(
+            response(&mut client, &mut peer, &int_result(7))
+                .await
+                .into_row()
+                .await
+                .expect("scalar")
+                .expect("row")
+                .get::<i32, _>(0),
+            Some(7)
+        );
+        assert!(response(&mut client, &mut peer, DONE)
+            .await
+            .into_results()
+            .await
+            .expect("no rowsets")
+            .is_empty());
+        healthy_reuse(&mut client, &mut peer).await;
+    }
+}
+
+#[tokio::test]
+async fn collectors_and_columns_surface_trailing_errors() {
+    let (mut client, mut peer) = connect().await;
+    for rows in [false, true] {
+        let mut body = metadata("n", &[0x38]);
+        if rows {
+            body.extend([0xd1, 42, 0, 0, 0]);
+        }
+        body.extend(DONE_MORE);
+        body.extend(sql_error());
+        body.extend(DONE);
+        for collector in 0..4 {
+            let mut stream = response(&mut client, &mut peer, &body).await;
+            let error = match collector {
+                0 => stream.into_results().await.expect_err("trailing SQL error"),
+                1 => stream
+                    .into_first_result()
+                    .await
+                    .expect_err("trailing SQL error"),
+                2 => stream.into_row().await.expect_err("trailing SQL error"),
+                _ => {
+                    next(&mut stream).await.expect("metadata").expect("ok");
+                    if rows {
+                        next(&mut stream).await.expect("row").expect("ok");
+                    }
+                    let error = stream.columns().await.expect_err("peek must surface error");
+                    assert!(next(&mut stream).await.is_none());
+                    drop(stream);
+                    error
+                }
+            };
+            assert!(error.to_string().contains("fixture conversion error"));
+            healthy_reuse(&mut client, &mut peer).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn cancelling_a_pending_columns_peek_can_resume_or_retire_on_drop() {
+    for resume in [true, false] {
+        let (mut client, mut peer) = connect().await;
+        let server = async {
+            request(&mut peer, 1).await;
+            reply(&mut peer, &metadata("n", &[0x38]), false).await;
+        };
+        let (stream, ()) = timeout(DEADLINE, async {
+            tokio::join!(client.simple_query("SELECT n"), server)
+        })
+        .await
+        .expect("initialization deadline");
+        let mut stream = stream.expect("metadata available");
+        next(&mut stream).await.expect("metadata").expect("ok");
+        assert!(poll!(Box::pin(stream.columns())).is_pending());
+        timeout(Duration::from_millis(20), stream.columns())
+            .await
+            .expect_err("silent peer");
+        if resume {
+            reply(&mut peer, &[0xd1, 42, 0, 0, 0], false).await;
+            stream
+                .columns()
+                .await
+                .expect("resume peek")
+                .expect("columns");
+            let row = next(&mut stream)
+                .await
+                .expect("row")
+                .expect("ok")
+                .into_row()
+                .expect("row");
+            assert_eq!(row.get::<i32, _>(0), Some(42));
+            reply(&mut peer, DONE, true).await;
+            assert!(next(&mut stream).await.is_none());
+        }
+        drop(stream);
+        assert_eq!(client.is_connection_dead(), !resume);
+        if resume {
+            healthy_reuse(&mut client, &mut peer).await;
+        }
+        drop(peer);
+    }
+}
+
+#[tokio::test]
 async fn fixed_char_binary_and_smallmoney_keep_empty_and_row_metadata() {
     let (mut client, mut peer) = connect().await;
     for (type_info, value, expected, length) in [
@@ -47,10 +354,13 @@ async fn fixed_char_binary_and_smallmoney_keep_empty_and_row_metadata() {
                 request(&mut peer, 1).await;
                 reply(&mut peer, &body, true).await;
             };
-            let mut stream = client.simple_query_items("SELECT fixture");
-            let (item, ()) = timeout(DEADLINE, async { tokio::join!(stream.next(), server) })
-                .await
-                .expect("metadata deadline");
+            let (stream, ()) = timeout(DEADLINE, async {
+                tokio::join!(client.simple_query("SELECT fixture"), server)
+            })
+            .await
+            .expect("metadata deadline");
+            let mut stream = stream.expect("query");
+            let item = next(&mut stream).await;
             let meta = match item.expect("item").expect("metadata") {
                 QueryItem::Metadata(meta) => Some(meta),
                 QueryItem::Row(_) => None,
@@ -219,6 +529,8 @@ async fn healthy_reuse(client: &mut Client, peer: &mut TcpStream) {
         result
             .expect("reuse")
             .into_first_result()
+            .await
+            .expect("collect reuse")
             .first()
             .expect("row")
             .get::<i32, _>("n"),
@@ -257,19 +569,23 @@ async fn empty_selects_keep_distinct_names_types_and_indexes() {
             request(&mut peer, if parameterized { 3 } else { 1 }).await;
             reply(&mut peer, &body, true).await;
         };
-        let mut stream = if parameterized {
-            client.query_items(
+        let query = async {
+            if parameterized {
+                client.query(
                 "SELECT @P1 WHERE 1=0; SELECT 7; SELECT CAST(1 AS bigint) WHERE 1=0; SELECT 8",
                 &[&1i32],
-            )
-        } else {
-            client.simple_query_items(
+            ).await
+            } else {
+                client.simple_query(
                 "SELECT 1 WHERE 1=0; SELECT 7; SELECT CAST(1 AS bigint) WHERE 1=0; SELECT 8",
-            )
+            ).await
+            }
         };
-        let (first, ()) = timeout(DEADLINE, async { tokio::join!(stream.next(), server) })
+        let (stream, ()) = timeout(DEADLINE, async { tokio::join!(query, server) })
             .await
             .expect("first metadata deadline");
+        let mut stream = stream.expect("query");
+        let first = next(&mut stream).await;
         assert_metadata(
             first.expect("item").expect("metadata"),
             0,
@@ -290,6 +606,7 @@ async fn empty_selects_keep_distinct_names_types_and_indexes() {
             }
             .expect("expected row");
             assert_eq!(row.try_get::<i32, _>(name).expect("value"), Some(value));
+            assert_eq!(row.result_index(), index);
             assert_eq!(row.columns().first().expect("column").name(), name);
             retained.push(row);
             if index == 1 {
@@ -325,13 +642,15 @@ async fn independent_empty_queries_and_no_row_batches_are_distinguishable() {
             request(&mut peer, 1).await;
             reply(&mut peer, &body, true).await;
         };
-        let mut items = client.simple_query_items(format!(
+        let query = client.simple_query(format!(
             "SELECT CAST(1 AS {}) AS {name} WHERE 1=0",
             if ty == 0x38 { "int" } else { "bigint" }
         ));
-        let (item, ()) = timeout(DEADLINE, async { tokio::join!(items.next(), server) })
+        let (items, ()) = timeout(DEADLINE, async { tokio::join!(query, server) })
             .await
             .expect("empty deadline");
+        let mut items = items.expect("query");
+        let item = next(&mut items).await;
         assert_metadata(item.expect("item").expect("metadata"), 0, name, expected);
         assert!(next(&mut items).await.is_none());
     }
@@ -348,12 +667,16 @@ async fn independent_empty_queries_and_no_row_batches_are_distinguishable() {
             request(&mut peer, 1).await;
             reply(&mut peer, &response, true).await;
         };
-        let query = client.simple_query_items("SET NOCOUNT OFF; UPDATE fixture SET n=1");
-        let (items, ()) = timeout(DEADLINE, async {
-            tokio::join!(query.try_collect::<Vec<_>>(), server)
-        })
-        .await
-        .expect("batch deadline");
+        let query = async {
+            client
+                .simple_query("SET NOCOUNT OFF; UPDATE fixture SET n=1")
+                .await?
+                .try_collect::<Vec<_>>()
+                .await
+        };
+        let (items, ()) = timeout(DEADLINE, async { tokio::join!(query, server) })
+            .await
+            .expect("batch deadline");
         let items = items.expect("batch");
         assert_eq!(items.len(), usize::from(has_columns));
         if let Some(QueryItem::Metadata(meta)) = items.first() {
@@ -372,15 +695,25 @@ async fn independent_empty_queries_and_no_row_batches_are_distinguishable() {
 async fn metadata_and_rows_arrive_before_peer_releases_the_rest() {
     let (mut client, mut peer) = connect().await;
     for _ in 0..2 {
-        let mut stream = client.simple_query_items("SELECT 42 AS n");
+        let query = client.simple_query("SELECT 42 AS n");
         let server = async {
             request(&mut peer, 1).await;
             // Deliberately no row token, row body, DONE, or final packet.
             reply(&mut peer, &metadata("n", &[0x38]), false).await;
         };
-        let (item, ()) = timeout(DEADLINE, async { tokio::join!(stream.next(), server) })
+        let (stream, ()) = timeout(DEADLINE, async { tokio::join!(query, server) })
             .await
             .expect("metadata must arrive while rows are withheld");
+        let mut stream = stream.expect("query must return before row bytes");
+        for _ in 0..2 {
+            let cols = timeout(DEADLINE, stream.columns())
+                .await
+                .expect("columns before rows")
+                .expect("columns")
+                .expect("rowset");
+            assert_eq!(cols.first().expect("column").name(), "n");
+        }
+        let item = next(&mut stream).await;
         assert_metadata(
             item.expect("item").expect("metadata"),
             0,
@@ -412,16 +745,18 @@ async fn metadata_and_rows_arrive_before_peer_releases_the_rest() {
 #[tokio::test]
 async fn dropping_at_metadata_or_row_drains_on_next_query() {
     let (mut client, mut peer) = connect().await;
-    drop(client.simple_query_items("never sent"));
+    drop(client.simple_query("never sent"));
     for read_row in [false, true] {
-        let mut stream = client.simple_query_items("SELECT 42 AS n");
+        let query = client.simple_query("SELECT 42 AS n");
         let server = async {
             request(&mut peer, 1).await;
             reply(&mut peer, &metadata("n", &[0x38]), false).await;
         };
-        let (item, ()) = timeout(DEADLINE, async { tokio::join!(stream.next(), server) })
+        let (stream, ()) = timeout(DEADLINE, async { tokio::join!(query, server) })
             .await
             .expect("metadata deadline");
+        let mut stream = stream.expect("query");
+        let item = next(&mut stream).await;
         let retained = match item.expect("item").expect("metadata") {
             QueryItem::Metadata(meta) => Some(meta),
             QueryItem::Row(_) => None,
@@ -447,30 +782,40 @@ async fn dropping_at_metadata_or_row_drains_on_next_query() {
 async fn dropping_stream_during_pending_start_row_or_advance_retires() {
     for phase in 0..3 {
         let (mut client, mut peer) = connect().await;
-        let mut stream = client.simple_query_items("SELECT 42 AS n");
-        if phase > 0 {
+        if phase == 0 {
+            let mut query = Box::pin(client.simple_query("SELECT 42 AS n"));
+            assert!(poll!(query.as_mut()).is_pending());
+            timeout(Duration::from_millis(20), query.as_mut())
+                .await
+                .expect_err("initialization must remain pending");
+            drop(query);
+        } else {
             let server = async {
                 request(&mut peer, 1).await;
                 reply(&mut peer, &metadata("n", &[0x38]), false).await;
             };
-            let (item, ()) = timeout(DEADLINE, async { tokio::join!(stream.next(), server) })
-                .await
-                .expect("metadata deadline");
-            assert!(matches!(item, Some(Ok(QueryItem::Metadata(_)))));
-        }
-        if phase == 2 {
-            reply(&mut peer, DONE_MORE, false).await;
-        }
-        assert!(poll!(stream.next()).is_pending());
-        timeout(Duration::from_millis(20), stream.next())
+            let (stream, ()) = timeout(DEADLINE, async {
+                tokio::join!(client.simple_query("SELECT 42 AS n"), server)
+            })
             .await
-            .expect_err("connected peer must remain pending");
-        drop(stream);
+            .expect("metadata deadline");
+            let mut stream = stream.expect("query");
+            let item = next(&mut stream).await;
+            assert!(matches!(item, Some(Ok(QueryItem::Metadata(_)))));
+            if phase == 2 {
+                reply(&mut peer, DONE_MORE, false).await;
+            }
+            assert!(poll!(stream.next()).is_pending());
+            timeout(Duration::from_millis(20), stream.next())
+                .await
+                .expect_err("connected peer must remain pending");
+            drop(stream);
+        }
         assert!(client.is_connection_dead());
         assert!(client.ping().await.is_err());
-        next(&mut client.simple_query_items("must not send"))
+        client
+            .simple_query("must not send")
             .await
-            .expect("error")
             .expect_err("dead client must reject query");
         // Keep the peer connected throughout: EOF cannot stand in for pending I/O.
         drop(peer);
@@ -513,14 +858,16 @@ async fn initial_and_trailing_sql_errors_are_not_successful_eof() {
             request(&mut peer, 1).await;
             reply(&mut peer, &body, true).await;
         };
-        let mut stream =
-            client.simple_query_items("SELECT fixture; THROW 50000, 'fixture conversion error', 1");
-        let (first, ()) = timeout(DEADLINE, async { tokio::join!(stream.next(), server) })
+        let query =
+            client.simple_query("SELECT fixture; THROW 50000, 'fixture conversion error', 1");
+        let (result, ()) = timeout(DEADLINE, async { tokio::join!(query, server) })
             .await
             .expect("error deadline");
         let error = if phase == 0 {
-            first.expect("initial error")
+            result.expect_err("initial error")
         } else {
+            let mut stream = result.expect("initial metadata before error");
+            let first = next(&mut stream).await;
             assert_metadata(
                 first.expect("item").expect("metadata"),
                 0,
@@ -533,15 +880,15 @@ async fn initial_and_trailing_sql_errors_are_not_successful_eof() {
                     Some(Ok(QueryItem::Row(_)))
                 ));
             }
-            next(&mut stream).await.expect("trailing error")
+            let error = next(&mut stream)
+                .await
+                .expect("trailing error")
+                .expect_err("SQL error");
+            assert!(next(&mut stream).await.is_none());
+            assert!(next(&mut stream).await.is_none());
+            error
         };
-        assert!(error
-            .expect_err("SQL error")
-            .to_string()
-            .contains("fixture conversion error"));
-        assert!(next(&mut stream).await.is_none());
-        assert!(next(&mut stream).await.is_none());
-        drop(stream);
+        assert!(error.to_string().contains("fixture conversion error"));
         healthy_reuse(&mut client, &mut peer).await;
     }
 }
@@ -577,16 +924,18 @@ async fn existing_row_streams_still_flatten_empty_results() {
 #[tokio::test]
 async fn partial_row_eof_is_an_error_not_a_row() {
     let (mut client, mut peer) = connect().await;
-    let mut stream = client.simple_query_items("SELECT 42 AS n");
+    let query = client.simple_query("SELECT 42 AS n");
     let server = async {
         request(&mut peer, 1).await;
         let mut body = metadata("n", &[0x38]);
         body.extend([0xd1, 42, 0]); // Only half the four-byte integer.
         reply(&mut peer, &body, false).await;
     };
-    let (item, ()) = timeout(DEADLINE, async { tokio::join!(stream.next(), server) })
+    let (stream, ()) = timeout(DEADLINE, async { tokio::join!(query, server) })
         .await
         .expect("metadata deadline");
+    let mut stream = stream.expect("query");
+    let item = next(&mut stream).await;
     assert_metadata(
         item.expect("item").expect("metadata"),
         0,

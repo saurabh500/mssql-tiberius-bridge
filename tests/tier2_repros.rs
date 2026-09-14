@@ -115,7 +115,10 @@ async fn test_160_trigger_rows_affected_has_single_update_count() {
             "#,
         )
         .await
-        .expect("create trigger repro objects");
+        .expect("create trigger repro objects")
+        .into_results()
+        .await
+        .expect("drain trigger setup");
 
     let result = client
         .execute("UPDATE dbo.t_bridge_tier2_160 SET id += 1", &[])
@@ -128,7 +131,10 @@ async fn test_160_trigger_rows_affected_has_single_update_count() {
             "DROP TRIGGER IF EXISTS dbo.tr_bridge_tier2_160; DROP TABLE IF EXISTS dbo.t_bridge_tier2_160;",
         )
         .await
-        .expect("cleanup trigger repro objects");
+        .expect("cleanup trigger repro objects")
+        .into_results()
+        .await
+        .expect("drain trigger cleanup");
 
     assert_eq!(
         counts,
@@ -149,7 +155,9 @@ async fn test_380_into_results_preserves_empty_middle_result_set() {
         .simple_query("SELECT 1 AS a; SELECT * FROM (VALUES (1)) v(a) WHERE 1=0; SELECT 3 AS a;")
         .await
         .expect("multi-result query")
-        .into_results();
+        .into_results()
+        .await
+        .expect("collect query results");
 
     assert_eq!(results.len(), 3);
     assert_eq!(
@@ -235,18 +243,26 @@ async fn test_282_stored_procedure_string_parameter_has_no_added_quotes() {
             "#,
         )
         .await
-        .expect("create procedure");
+        .expect("create procedure")
+        .into_results()
+        .await
+        .expect("drain create procedure");
 
     let rows = client
         .query("EXEC dbo.p_bridge_tier2_282 @P1", &[&"hello"])
         .await
         .expect("exec procedure")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     client
         .simple_query("DROP PROCEDURE IF EXISTS dbo.p_bridge_tier2_282")
         .await
-        .expect("drop procedure");
+        .expect("drop procedure")
+        .into_results()
+        .await
+        .expect("drain drop procedure");
 
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -269,7 +285,10 @@ async fn test_221_nan_parameter_errors_without_poisoning_connection(
     client
         .simple_query("DROP TABLE IF EXISTS dbo.t_bridge_tier2_221; CREATE TABLE dbo.t_bridge_tier2_221(v decimal(19, 4) NULL);")
         .await
-        .expect("create NaN repro table");
+        .expect("create NaN repro table")
+        .into_results()
+        .await
+        .expect("drain NaN repro setup");
 
     let err = client
         .execute(
@@ -279,15 +298,17 @@ async fn test_221_nan_parameter_errors_without_poisoning_connection(
         .await
         .expect_err("NaN insert into decimal should fail gracefully");
 
-    let rows = client
-        .simple_query("SELECT 1 AS ok; DROP TABLE IF EXISTS dbo.t_bridge_tier2_221;")
-        .await
-        .map_err(|follow_up| {
-            format!(
-                "connection was poisoned after NaN error {err:?}; follow-up failed: {follow_up:?}"
-            )
-        })?
-        .into_first_result();
+    let rows = async {
+        client
+            .simple_query("SELECT 1 AS ok; DROP TABLE IF EXISTS dbo.t_bridge_tier2_221;")
+            .await?
+            .into_first_result()
+            .await
+    }
+    .await
+    .map_err(|follow_up| {
+        format!("connection was poisoned after NaN error {err:?}; follow-up failed: {follow_up:?}")
+    })?;
     let value = rows
         .first()
         .ok_or("follow-up query after NaN error returned no rows")?
@@ -313,7 +334,9 @@ async fn test_316_live_datetime_before_1900_chrono_does_not_panic() {
         .simple_query("SELECT CAST('1899-12-30T00:00:00.000' AS datetime) AS dt")
         .await
         .expect("select pre-1900 datetime")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
 
     let got = std::panic::catch_unwind(|| {
         rows.first()
@@ -360,7 +383,9 @@ async fn test_333_special_character_password_connect_fails_cleanly_or_succeeds()
                 .simple_query("SELECT 1 AS ok")
                 .await
                 .expect("query with special-character password login")
-                .into_first_result();
+                .into_first_result()
+                .await
+                .expect("collect query rows");
             assert_eq!(
                 rows.first()
                     .expect("expected row at index 0")

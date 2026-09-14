@@ -9,10 +9,10 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 **mssql-tiberius-bridge** gives you the tiberius API you know on top of the mssql-tds engine:
 
 - `row.get::<T, _>("column_name")` — named and indexed column access
-- `stream.into_first_result()` — collect results into `Vec<Row>`
-- `stream.into_row_stream()` — `Stream<Item = Result<Row>>` over a buffered `QueryResult` (rows pre-buffered)
+- `stream.into_first_result().await?` — collect the first result into `Vec<Row>` and drain the rest
+- `stream.into_row_stream()` — wire-level `Stream<Item = Result<Row>>`
 - `client.query_streamed(sql, params)` / `simple_query_streamed(sql)` — true wire-level row streaming for memory-bounded large result sets
-- `client.query_items(sql, params)` / `simple_query_items(sql)` — wire-level metadata and ordinary rows, including empty result sets (unreleased)
+- `stream.columns().await?` — inspect metadata even for empty result sets
 - `client.ping()` — cached connection-health check without SQL or network I/O
 - `client.reset_session()` — native TDS session reset with `READ COMMITTED` isolation
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
@@ -23,8 +23,10 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 
 ## Quick Start
 
-Add `mssql-tiberius-bridge = "0.1.0"` to your Cargo dependencies. The bridge
-uses `mssql-tds` 0.1.0 from crates.io, replacing `mssql-tds-preview`.
+The query API shown below is **unreleased** and intentionally breaks the
+published bridge 0.1.0 buffered-query contract to match Tiberius 0.7.3's query
+patterns. Use a reviewed immutable Git revision until it is released.
+The bridge still uses published `mssql-tds` 0.1.0; no native fork is required.
 
 ```rust
 use mssql_tiberius_bridge::{Config, AuthMethod, Client};
@@ -43,7 +45,7 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
     let rows = client
         .simple_query("SELECT name FROM sys.databases")
         .await?
-        .into_first_result();
+        .into_first_result().await?;
 
     for row in rows {
         let name: String = row.get("name").unwrap();
@@ -55,22 +57,25 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
 
 ## Streaming metadata, including empty results
 
-The additive `query_items` and `simple_query_items` APIs are **unreleased**;
-they are not in the published 0.1.0 package. They yield `Result<QueryItem>`:
-one `Metadata(ResultMetadata)` before reading any rows of each rowset, then
-ordinary `Row` items. Metadata shares the same schema and `Column` conversion
-as `Row::columns()`; this API does not expand the driver's metadata fields.
-It does not collect the query or run a separate metadata SQL query.
+`client.query(...).await?` and `simple_query(...).await?` return
+`QueryStream<'_>`, borrowing the client and positioned before the first metadata
+event (or at EOF). Initial errors are returned by that await. Rows and trailing
+errors are read during consumption, without collecting the query or issuing
+separate metadata SQL. The stream yields `QueryItem::Metadata(ResultMetadata)`
+before the ordinary rows of every rowset. Metadata shares the same schema as
+`Row::columns()`.
 
 ```rust,no_run
 use futures_util::StreamExt;
 use mssql_tiberius_bridge::{Client, QueryItem};
 
 async fn read(client: &mut Client) -> mssql_tiberius_bridge::Result<()> {
-    let mut items = client.query_items(
+    let mut items = client.query(
         "SELECT @P1 AS empty_int WHERE 1 = 0; SELECT 42 AS answer",
         &[&1i32],
-    );
+    ).await?;
+    let columns = items.columns().await?.expect("SELECT has columns even when empty");
+    assert_eq!(columns[0].name(), "empty_int");
     while let Some(item) = items.next().await {
         match item? {
             QueryItem::Metadata(meta) => {
@@ -101,8 +106,39 @@ connection; retaining the stream allows a cancelled `next()` to resume. No
 async cleanup or SQL cancellation happens in `Drop`. Owned metadata and rows
 can outlive the stream, but the stream itself borrows the client.
 
-Existing buffered queries and row-only streams retain their behavior:
-`query_streamed` / `simple_query_streamed` flatten rowsets and omit metadata.
+`columns().await?` peeks without consuming an event: it returns the next
+metadata if one is immediately next, otherwise the current schema. At EOF the
+last schema remains cached; a batch with no rowsets returns `None`. Repeated
+peeks do not rebuild the schema. Metadata and rows expose `result_index()`.
+`QueryItem` provides `as_metadata`, `as_row`, `into_metadata`, and `into_row`.
+An error observed by `columns()` terminates the stream and is not repeated;
+the bridge retains its existing single-error policy rather than cloning native
+errors as Tiberius does.
+
+### Breaking migration from bridge 0.1.0
+
+Add `.await?` to `into_first_result()` and `into_results()`. `into_row().await?`
+returns the first row of the first remaining rowset, or `None` for an empty
+first remaining rowset. Collectors also work after partial stream consumption.
+All three collectors consume through EOF and report trailing errors. Only
+`into_results()` retains all rowsets; the other collectors discard later rows.
+The `into_row_stream()` conversion is still synchronous, but now reads the wire.
+
+The stream holds the mutable client borrow until consumed or dropped. Code that
+discarded `query().await?` expecting complete execution must explicitly drain
+with `into_results().await?`, or use `execute(sql, params).await?` for non-row
+operations. `result_set_count()` is not available before streaming completion;
+use the length of the collected results when needed.
+
+Bridge-specific prepared-query APIs retain their buffered `QueryResult` and
+synchronous collectors: Tiberius 0.7.3 has no corresponding public prepared
+API. Existing `query_streamed` / `simple_query_streamed` convenience methods
+retain their signatures and lazy initialization. The proposed `query_items` /
+`simple_query_items` entry points were removed before release.
+
+This aligns the query/metadata call patterns, not every type in the crate:
+connection setup, `ColumnType` variants, and bridge-specific extensions still
+differ from Tiberius.
 
 ## Migration from tiberius
 
@@ -115,7 +151,11 @@ Existing buffered queries and row-only streams retain their behavior:
 | `conn.query(sql, &[&p1])` | `client.query(sql, &[&p1])` |
 | cached connection-health check (no round trip) | `client.ping()` |
 | connection-pool session cleanup | `client.reset_session()` (the default `TdsManager` recycling policy) |
-| `stream.into_first_result()` | `.into_first_result()` |
+| `stream.columns().await?` | `stream.columns().await?` |
+| `stream.into_first_result().await?` | `stream.into_first_result().await?` |
+| `stream.into_results().await?` | `stream.into_results().await?` |
+| `stream.into_row().await?` | `stream.into_row().await?` |
+| `stream.into_row_stream()` | `stream.into_row_stream()` |
 | `row.get::<&str, _>("col")` | `row.get::<&str, _>("col")` |
 | `tiberius::AuthMethod::sql_server` | `AuthMethod::sql_server` |
 
@@ -174,7 +214,7 @@ use mssql_tiberius_bridge::ColumnType;
 let rows = client
     .simple_query("SELECT geography::Point(47.6, -122.3, 4326) AS location")
     .await?
-    .into_first_result();
+    .into_first_result().await?;
 assert_eq!(rows[0].columns()[0].column_type(), ColumnType::Geography);
 let bytes: &[u8] = rows[0].get("location").unwrap();
 ```

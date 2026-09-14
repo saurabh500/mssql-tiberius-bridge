@@ -97,11 +97,16 @@ async fn cancel_after_poll<T>(future: impl Future<Output = T>) {
 }
 
 async fn assert_select_one(client: &mut Client) {
-    let rows = timeout(IO_BOUND, client.simple_query("SELECT 1 AS n"))
-        .await
-        .expect("follow-up SELECT timed out")
-        .expect("follow-up SELECT failed")
-        .into_first_result();
+    let rows = timeout(IO_BOUND, async {
+        client
+            .simple_query("SELECT 1 AS n")
+            .await?
+            .into_first_result()
+            .await
+    })
+    .await
+    .expect("follow-up SELECT timed out")
+    .expect("follow-up SELECT failed");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -141,7 +146,7 @@ async fn simple_query_timeout_retires_connection() {
     let Some(mut client) = live_client().await else {
         return;
     };
-    cancel_after_poll(client.simple_query(WAIT_QUERY)).await;
+    cancel_after_poll(async { client.simple_query(WAIT_QUERY).await?.into_results().await }).await;
     assert_retired(&mut client);
 }
 
@@ -150,7 +155,14 @@ async fn parameterized_query_timeout_retires_connection() {
     let Some(mut client) = live_client().await else {
         return;
     };
-    cancel_after_poll(client.query("WAITFOR DELAY '00:00:05'; SELECT @P1 AS n", &[&1i32])).await;
+    cancel_after_poll(async {
+        client
+            .query("WAITFOR DELAY '00:00:05'; SELECT @P1 AS n", &[&1i32])
+            .await?
+            .into_results()
+            .await
+    })
+    .await;
     assert_retired(&mut client);
 }
 
@@ -159,8 +171,35 @@ async fn empty_parameter_query_timeout_retires_connection() {
     let Some(mut client) = live_client().await else {
         return;
     };
-    cancel_after_poll(client.query(WAIT_QUERY, &[])).await;
+    cancel_after_poll(async { client.query(WAIT_QUERY, &[]).await?.into_results().await }).await;
     assert_retired(&mut client);
+}
+
+#[tokio::test]
+async fn query_collection_timeout_after_metadata_retires_connection() {
+    let Some(config) = live_config() else {
+        return;
+    };
+    for parameterized in [false, true] {
+        let mut client = connect(&config).await;
+        // NOWAIT delivers the first result before the delayed tail, so this
+        // cancels collection rather than query initialization.
+        let sql = "SELECT REPLICATE(CAST('x' AS varchar(max)), 16000) AS payload; \
+                   RAISERROR ('flush first result', 0, 1) WITH NOWAIT; \
+                   WAITFOR DELAY '00:00:05'; SELECT 'tail' AS payload";
+        let stream = timeout(Duration::from_secs(3), async {
+            if parameterized {
+                client.query(sql, &[&1i32]).await
+            } else {
+                client.simple_query(sql).await
+            }
+        })
+        .await
+        .expect("metadata must arrive before WAITFOR completes")
+        .expect("query initialization failed");
+        cancel_after_poll(stream.into_results()).await;
+        assert_retired(&mut client);
+    }
 }
 
 #[tokio::test]
@@ -362,17 +401,21 @@ async fn ordinary_sql_error_preserves_reuse() {
     let Some(mut client) = live_client().await else {
         return;
     };
-    let result = timeout(
-        IO_BOUND,
-        client.simple_query("RAISERROR ('expected cancellation regression error', 16, 1)"),
-    )
-    .await
-    .expect("SQL error response timed out");
-    assert!(matches!(
-        result,
-        Err(Error::Tds(mssql_tds::error::Error::SqlServerError { .. }))
-    ));
-    assert_select_one(&mut client).await;
+    for sql in [
+        "RAISERROR ('expected cancellation regression error', 16, 1)",
+        "SELECT 1 AS n; RAISERROR ('expected cancellation regression error', 16, 1)",
+    ] {
+        let result = timeout(IO_BOUND, async {
+            client.simple_query(sql).await?.into_results().await
+        })
+        .await
+        .expect("SQL error response timed out");
+        assert!(matches!(
+            result,
+            Err(Error::Tds(mssql_tds::error::Error::SqlServerError { .. }))
+        ));
+        assert_select_one(&mut client).await;
+    }
 }
 
 struct PausedRow<'a> {
@@ -402,10 +445,13 @@ async fn cancelling_bulk_write_marks_native_connection_dead() {
     };
     for raw_constructor in [false, true] {
         let mut client = connect(&config).await;
-        timeout(
-            IO_BOUND,
-            client.simple_query("CREATE TABLE #CancelBulk (n int NOT NULL)"),
-        )
+        timeout(IO_BOUND, async {
+            client
+                .simple_query("CREATE TABLE #CancelBulk (n int NOT NULL)")
+                .await?
+                .into_results()
+                .await
+        })
         .await
         .expect("bulk setup timed out")
         .expect("bulk setup failed");
@@ -513,14 +559,24 @@ async fn pool_rejects_cancelled_client_and_replaces_its_session() {
             .await
             .expect("pool checkout timed out")
             .expect("pool checkout failed");
-        timeout(
-            IO_BOUND,
-            connection.simple_query("CREATE TABLE #CancelledSessionMarker (n int)"),
-        )
+        timeout(IO_BOUND, async {
+            connection
+                .simple_query("CREATE TABLE #CancelledSessionMarker (n int)")
+                .await?
+                .into_results()
+                .await
+        })
         .await
         .expect("session marker setup timed out")
         .expect("session marker setup failed");
-        cancel_after_poll(connection.simple_query(WAIT_QUERY)).await;
+        cancel_after_poll(async {
+            connection
+                .simple_query(WAIT_QUERY)
+                .await?
+                .into_results()
+                .await
+        })
+        .await;
         assert!(connection.is_connection_dead());
         assert!(matches!(
             poll_once(manager.recycle(&mut connection, &Metrics::default())),
@@ -539,17 +595,19 @@ async fn pool_rejects_cancelled_client_and_replaces_its_session() {
             0,
             "cancelled client must be replaced, not merely reset"
         );
-        let rows = timeout(
-            IO_BOUND,
-            replacement.simple_query(
-                "SELECT CASE WHEN OBJECT_ID('tempdb..#CancelledSessionMarker') \
-                 IS NULL THEN 1 ELSE 0 END AS fresh",
-            ),
-        )
+        let rows = timeout(IO_BOUND, async {
+            replacement
+                .simple_query(
+                    "SELECT CASE WHEN OBJECT_ID('tempdb..#CancelledSessionMarker') \
+                     IS NULL THEN 1 ELSE 0 END AS fresh",
+                )
+                .await?
+                .into_first_result()
+                .await
+        })
         .await
         .expect("replacement query timed out")
-        .expect("replacement query failed")
-        .into_first_result();
+        .expect("replacement query failed");
         assert_eq!(
             rows.first()
                 .expect("expected row at index 0")

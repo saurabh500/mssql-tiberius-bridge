@@ -149,7 +149,7 @@ These are bugs in tiberius's TDS implementation. The bridge uses `mssql-tds`, an
 
 | # | Title | Status | Bridge | Notes |
 |---|-------|--------|--------|-------|
-| 380 | `QueryStream::into_results` doesn't return correct number | ✅ | regression test in PR [#51](../../pull/51) | **Repro**: bridge `QueryResult::into_results` — empty SELECTs preserved? |
+| 380 | `QueryStream::into_results` doesn't return correct number | ✅ | regression test in PR [#51](../../pull/51), expanded in [#126](../../pull/126) | `QueryStream::into_results().await` preserves empty first, intermediate, and final SELECTs. |
 | 371 | QueryStream returns 1 row, ends with more remaining | ✅ | regression test in PR [#51](../../pull/51) | **Repro**: bridge has streaming via `into_row_stream` (PR #29). |
 | 365 | Cannot return `RowStream` from a function (lifetime tied to connection) | 🔵 | — | Bridge has same architecture; design issue. Could be addressed via owned stream. |
 | 79 | Cancel safety on futures | ✅ | [#88](../../issues/88) — native dead-state guard | Dropped in-flight bridge I/O marks the client dead; reuse fails fast and the pool replaces it. Raw `inner_mut()` calls remain unguarded. |

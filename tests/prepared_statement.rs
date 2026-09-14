@@ -72,7 +72,9 @@ async fn prepare_select_arithmetic_runs_many_times_with_single_plan() {
         .simple_query("SELECT 1 AS one")
         .await
         .expect("simple_query after unprepare")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(rows.len(), 1);
     assert_eq!(
         rows.first()
@@ -154,7 +156,10 @@ async fn prepared_execute_against_dml() {
             "CREATE TABLE #t_prep_exec (id INT NOT NULL PRIMARY KEY, name NVARCHAR(64) NOT NULL)",
         )
         .await
-        .expect("create temp table");
+        .expect("create temp table")
+        .into_results()
+        .await
+        .expect("drain create temp table");
 
     let stmt = client
         .prepare(
@@ -168,7 +173,9 @@ async fn prepared_execute_against_dml() {
         .simple_query("SELECT COUNT(*) AS c FROM #t_prep_exec")
         .await
         .expect("count before execution")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")
@@ -189,7 +196,9 @@ async fn prepared_execute_against_dml() {
         .simple_query("SELECT COUNT(*) AS c FROM #t_prep_exec")
         .await
         .expect("count")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     assert_eq!(
         rows.first()
             .expect("expected row at index 0")

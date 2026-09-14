@@ -7,13 +7,15 @@
 
 use mssql_tds::connection::tds_client::{ResultSet, StatementResult, TdsClient};
 use mssql_tds::connection_provider::tds_connection_provider::TdsConnectionProvider;
+use std::borrow::Cow;
 use std::sync::Arc;
 
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::operation::{ensure_usable, Operation};
 use crate::query::{
-    build_params_with_string_encoding, ExecuteResult, QueryItem, QueryResult, ResultMetadata, ToSql,
+    build_params_with_string_encoding, ExecuteResult, QueryItem, QueryResult, QueryStream,
+    ResultMetadata, ToSql,
 };
 
 /// An async SQL Server client with tiberius-style query methods.
@@ -63,7 +65,7 @@ use crate::query::{
 /// cfg.host("localhost").authentication(AuthMethod::sql_server("sa", "pass")).trust_cert();
 ///
 /// let mut client = Client::connect(&cfg).await?;
-/// let rows = client.simple_query("SELECT 1 AS n").await?.into_first_result();
+/// let rows = client.simple_query("SELECT 1 AS n").await?.into_first_result().await?;
 /// assert_eq!(rows[0].get::<i32, _>("n"), Some(1));
 /// # Ok(())
 /// # }
@@ -186,9 +188,9 @@ impl Client {
     /// Mirrors tiberius' `simple_query`. The SQL is sent as a TDS SQL Batch
     /// (not parameterized). Use [`query`](Self::query) for parameterized queries.
     ///
-    /// Returns a [`QueryResult`] that can be consumed with
-    /// [`into_first_result()`](QueryResult::into_first_result) or
-    /// [`into_results()`](QueryResult::into_results).
+    /// Returns a borrowed [`QueryStream`], positioned before its first metadata
+    /// item (or at EOF). Rows are read only as the stream is consumed.
+    /// Collect with `into_first_result().await?` or `into_results().await?`.
     ///
     /// # Example
     ///
@@ -197,7 +199,7 @@ impl Client {
     /// let rows = client
     ///     .simple_query("SELECT name FROM sys.databases")
     ///     .await?
-    ///     .into_first_result();
+    ///     .into_first_result().await?;
     /// for row in &rows {
     ///     println!("{}", row.get::<&str, _>("name").unwrap());
     /// }
@@ -208,16 +210,16 @@ impl Client {
     /// # Errors
     ///
     /// Returns [`Error::Tds`] on SQL errors or connection issues.
-    pub async fn simple_query(&mut self, sql: impl Into<String>) -> Result<QueryResult> {
-        let sql = sql.into();
-        let mut operation = Operation::new(&mut self.inner)?;
-        let result = async {
-            operation.close_query().await.map_err(Error::Tds)?;
-            operation.execute(sql, ()).await.map_err(Error::Tds)?;
-            Self::collect_results(&mut operation).await
-        }
-        .await;
-        operation.complete(result)
+    pub async fn simple_query<'a, 'b>(
+        &'a mut self,
+        sql: impl Into<Cow<'b, str>>,
+    ) -> Result<QueryStream<'a>>
+    where
+        'a: 'b,
+    {
+        let mut stream = self.query_stream(sql.into().into_owned(), &[], false);
+        stream.columns().await?;
+        Ok(stream)
     }
 
     /// Execute a parameterized query with positional `@P1, @P2, ...` parameters.
@@ -232,7 +234,7 @@ impl Client {
     /// let rows = client
     ///     .query("SELECT @P1 AS a, @P2 AS b", &[&42i32, &"hello"])
     ///     .await?
-    ///     .into_first_result();
+    ///     .into_first_result().await?;
     /// assert_eq!(rows[0].get::<i32, _>("a"), Some(42));
     /// assert_eq!(rows[0].get::<&str, _>("b"), Some("hello"));
     /// # Ok(())
@@ -241,32 +243,19 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Tds`] on SQL errors, parameter binding failures,
-    /// or connection issues.
-    pub async fn query(
-        &mut self,
-        sql: impl Into<String>,
-        params: &[&dyn ToSql],
-    ) -> Result<QueryResult> {
-        let sql = sql.into();
-
-        if params.is_empty() {
-            return self.simple_query(sql).await;
-        }
-
-        let rpc_params =
-            build_params_with_string_encoding(params, self.send_string_parameters_as_unicode);
-        let mut operation = Operation::new(&mut self.inner)?;
-        let result = async {
-            operation.close_query().await.map_err(Error::Tds)?;
-            operation
-                .execute_sp_executesql(sql, rpc_params, ())
-                .await
-                .map_err(Error::Tds)?;
-            Self::collect_results(&mut operation).await
-        }
-        .await;
-        operation.complete(result)
+    /// Returns [`Error::Tds`] on initialization or parameter binding failures.
+    /// Later SQL or connection errors are returned while consuming the stream.
+    pub async fn query<'a, 'b>(
+        &'a mut self,
+        sql: impl Into<Cow<'b, str>>,
+        params: &'b [&'b dyn ToSql],
+    ) -> Result<QueryStream<'a>>
+    where
+        'a: 'b,
+    {
+        let mut stream = self.query_stream(sql.into().into_owned(), params, true);
+        stream.columns().await?;
+        Ok(stream)
     }
 
     /// Execute a DML statement and return row counts.
@@ -276,7 +265,8 @@ impl Client {
     ///
     /// # Errors
     ///
-    /// Returns [`Error::Tds`] on SQL errors or connection issues.
+    /// Returns [`Error::Tds`] on SQL errors or connection issues, including
+    /// errors encountered while draining the response.
     pub async fn execute(
         &mut self,
         sql: impl Into<String>,
@@ -346,14 +336,8 @@ impl Client {
         params: &[&dyn ToSql],
     ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<crate::row::Row>> + Send + 'a>>
     {
-        let mut items = self.query_items(sql, params);
-        Box::pin(async_stream::try_stream! {
-            while let Some(item) = std::future::poll_fn(|cx| items.as_mut().poll_next(cx)).await {
-                if let QueryItem::Row(row) = item? {
-                    yield row;
-                }
-            }
-        })
+        self.query_stream(sql.into(), params, !params.is_empty())
+            .into_row_stream()
     }
 
     /// Stream metadata and ordinary rows without collecting the query.
@@ -376,32 +360,13 @@ impl Client {
     /// the stream ends. Consume through EOF to observe trailing SQL errors;
     /// receiving metadata or the last row does not establish query success.
     ///
-    /// # Example
-    ///
-    /// ```rust,no_run
-    /// use futures_util::StreamExt;
-    /// use mssql_tiberius_bridge::{Client, QueryItem};
-    ///
-    /// # async fn example(client: &mut Client) -> mssql_tiberius_bridge::Result<()> {
-    /// let mut items = client.query_items("SELECT @P1 AS n WHERE 1 = 0; SELECT 2 AS n", &[&1i32]);
-    /// while let Some(item) = items.next().await {
-    ///     match item? {
-    ///         QueryItem::Metadata(meta) => {
-    ///             println!("rowset {}: {:?}", meta.result_index(), meta.columns());
-    ///         }
-    ///         QueryItem::Row(row) => println!("{:?}", row.try_get::<i32, _>("n")?),
-    ///     }
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    pub fn query_items<'a>(
+    fn query_stream<'a>(
         &'a mut self,
-        sql: impl Into<String>,
+        sql: String,
         params: &[&dyn ToSql],
-    ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<QueryItem>> + Send + 'a>> {
-        let sql = sql.into();
-        let rpc_params = if params.is_empty() {
+        parameterized: bool,
+    ) -> QueryStream<'a> {
+        let rpc_params = if !parameterized {
             None
         } else {
             Some(build_params_with_string_encoding(
@@ -409,7 +374,7 @@ impl Client {
                 self.send_string_parameters_as_unicode,
             ))
         };
-        Box::pin(async_stream::try_stream! {
+        QueryStream::new(Box::pin(async_stream::try_stream! {
             let mut operation = Operation::new(&mut self.inner)?;
             let result: Result<()> = async {
                 operation.close_query().await.map_err(Error::Tds)?;
@@ -436,23 +401,16 @@ impl Client {
                     let result = operation.next_row_into(&mut writer).await.map_err(Error::Tds);
                     operation.complete(result)?
                 } {
-                    yield QueryItem::Row(writer.take_row());
+                    let mut row = writer.take_row();
+                    row.result_index = result_index;
+                    yield QueryItem::Row(row);
                 }
                 if !Self::advance_stream(&mut self.inner).await? {
                     break;
                 }
                 result_index += 1;
             }
-        })
-    }
-
-    /// Unparameterized counterpart of [`query_items`](Self::query_items),
-    /// with the same metadata, boundary, error, and cancellation behavior.
-    pub fn simple_query_items<'a>(
-        &'a mut self,
-        sql: impl Into<String>,
-    ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<QueryItem>> + Send + 'a>> {
-        self.query_items(sql, &[])
+        }))
     }
 
     /// Streaming counterpart of [`simple_query`](Self::simple_query) — see
@@ -695,7 +653,9 @@ impl Client {
             let mut rows: Vec<crate::row::Row> = Vec::new();
 
             while inner.next_row_into(&mut writer).await.map_err(Error::Tds)? {
-                rows.push(writer.take_row());
+                let mut row = writer.take_row();
+                row.result_index = result_sets.len();
+                rows.push(row);
             }
 
             result_sets.push(rows);

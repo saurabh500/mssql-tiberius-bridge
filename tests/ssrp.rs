@@ -40,7 +40,9 @@ async fn ssrp_named_instance_connect() {
         .query("SELECT @@SERVERNAME", &[])
         .await
         .expect("query succeeds: SELECT @@SERVERNAME")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let server_name = row
         .first()
         .expect("expected row at index 0")

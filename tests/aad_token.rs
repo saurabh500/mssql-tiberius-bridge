@@ -31,7 +31,9 @@ async fn aad_token_login() {
         .query("SELECT SUSER_SNAME()", &[])
         .await
         .expect("query succeeds: SELECT SUSER_SNAME()")
-        .into_first_result();
+        .into_first_result()
+        .await
+        .expect("collect query rows");
     let sname = row
         .first()
         .expect("expected row at index 0")

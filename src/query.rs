@@ -1,16 +1,21 @@
 //! Query result types and the [`ToSql`] trait for parameter binding.
 //!
-//! [`QueryResult`] wraps streamed result sets from SQL Server and provides
-//! [`into_first_result()`](QueryResult::into_first_result) (single result set)
-//! and [`into_results()`](QueryResult::into_results) (multiple result sets).
+//! [`QueryStream`] exposes ordinary queries as metadata and row events, with
+//! asynchronous collectors. [`QueryResult`] retains the buffered contract of
+//! bridge-specific prepared queries.
 
 use mssql_tds::datatypes::sql_string::SqlString;
 use mssql_tds::datatypes::sqltypes::SqlType;
 use mssql_tds::message::parameters::rpc_parameters::{RpcParameter, StatusFlags};
 
 use crate::row::Row;
+use crate::{row::RowSchema, Result};
+use futures_core::Stream;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
 
-/// An item from [`Client::query_items`](crate::Client::query_items).
+/// An item from [`QueryStream`].
 ///
 /// Every row-returning result set starts with `Metadata`, even if it has no
 /// rows. Subsequent `Row` items belong to that metadata until the next
@@ -19,6 +24,40 @@ use crate::row::Row;
 pub enum QueryItem {
     Metadata(ResultMetadata),
     Row(Row),
+}
+
+impl QueryItem {
+    /// Borrow metadata if this is a metadata item.
+    pub fn as_metadata(&self) -> Option<&ResultMetadata> {
+        match self {
+            Self::Metadata(meta) => Some(meta),
+            Self::Row(_) => None,
+        }
+    }
+
+    /// Borrow a row if this is a row item.
+    pub fn as_row(&self) -> Option<&Row> {
+        match self {
+            Self::Row(row) => Some(row),
+            Self::Metadata(_) => None,
+        }
+    }
+
+    /// Take metadata if this is a metadata item.
+    pub fn into_metadata(self) -> Option<ResultMetadata> {
+        match self {
+            Self::Metadata(meta) => Some(meta),
+            Self::Row(_) => None,
+        }
+    }
+
+    /// Take a row if this is a row item.
+    pub fn into_row(self) -> Option<Row> {
+        match self {
+            Self::Row(row) => Some(row),
+            Self::Metadata(_) => None,
+        }
+    }
 }
 
 /// Owned metadata for one row-returning result set, shared with its rows.
@@ -38,6 +77,146 @@ impl ResultMetadata {
     /// rowcount-only and other statements without columns do not.
     pub fn result_index(&self) -> usize {
         self.result_index
+    }
+}
+
+/// A borrowed wire stream of metadata and rows, returned by
+/// [`Client::query`](crate::Client::query) and
+/// [`Client::simple_query`](crate::Client::simple_query).
+///
+/// Each metadata item starts a result set, including empty result sets.
+/// Consume through EOF to observe trailing errors. Dropping at a yielded item
+/// preserves reuse; the next query drains remaining results. Dropping during
+/// pending I/O retires the client. See [`Client`](crate::Client).
+pub struct QueryStream<'a> {
+    inner: Pin<Box<dyn Stream<Item = Result<QueryItem>> + Send + 'a>>,
+    peeked: Option<QueryItem>,
+    columns: Option<Arc<RowSchema>>,
+    done: bool,
+}
+
+impl std::fmt::Debug for QueryStream<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("QueryStream").finish_non_exhaustive()
+    }
+}
+
+impl<'a> QueryStream<'a> {
+    pub(crate) fn new(inner: Pin<Box<dyn Stream<Item = Result<QueryItem>> + Send + 'a>>) -> Self {
+        Self {
+            inner,
+            peeked: None,
+            columns: None,
+            done: false,
+        }
+    }
+
+    /// Columns for the current result set, or the next set if its metadata is
+    /// the next item. Peeking does not consume that item. Empty results have
+    /// columns; a batch with no rowsets returns `None`. At EOF the last schema
+    /// stays available, matching Tiberius.
+    ///
+    /// This may wait for the next item. Errors are returned here and terminate
+    /// the stream; they are not repeated by a later read.
+    pub async fn columns(&mut self) -> Result<Option<&[crate::Column]>> {
+        if self.peeked.is_none() && !self.done {
+            self.peeked = std::future::poll_fn(|cx| Pin::new(&mut *self).poll_next(cx))
+                .await
+                .transpose()?;
+        }
+        Ok(self
+            .columns
+            .as_ref()
+            .map(|schema| schema.columns.as_slice()))
+    }
+
+    /// Collect all rowsets, including empty rowsets, consuming through EOF.
+    pub async fn into_results(mut self) -> Result<Vec<Vec<Row>>> {
+        let mut results = Vec::<Vec<Row>>::new();
+        while let Some(item) = std::future::poll_fn(|cx| Pin::new(&mut self).poll_next(cx)).await {
+            match item? {
+                QueryItem::Metadata(_) => results.push(Vec::new()),
+                QueryItem::Row(row) => {
+                    if let Some(result) = results.last_mut() {
+                        result.push(row);
+                    } else {
+                        results.push(vec![row]);
+                    }
+                }
+            }
+        }
+        Ok(results)
+    }
+
+    /// Collect the first remaining rowset, consuming and discarding all later
+    /// rowsets so that trailing errors are still returned.
+    pub async fn into_first_result(mut self) -> Result<Vec<Row>> {
+        let mut first = Vec::new();
+        let mut first_index = None;
+        while let Some(item) = std::future::poll_fn(|cx| Pin::new(&mut self).poll_next(cx)).await {
+            match item? {
+                QueryItem::Metadata(meta) => {
+                    first_index.get_or_insert(meta.result_index());
+                }
+                QueryItem::Row(row) => {
+                    if *first_index.get_or_insert(row.result_index()) == row.result_index() {
+                        first.push(row);
+                    }
+                }
+            }
+        }
+        Ok(first)
+    }
+
+    /// Return the first row of the first remaining rowset, consuming through EOF.
+    pub async fn into_row(mut self) -> Result<Option<Row>> {
+        let mut first = None;
+        let mut first_index = None;
+        while let Some(item) = std::future::poll_fn(|cx| Pin::new(&mut self).poll_next(cx)).await {
+            match item? {
+                QueryItem::Metadata(meta) => {
+                    first_index.get_or_insert(meta.result_index());
+                }
+                QueryItem::Row(row) => {
+                    if *first_index.get_or_insert(row.result_index()) == row.result_index()
+                        && first.is_none()
+                    {
+                        first = Some(row);
+                    }
+                }
+            }
+        }
+        Ok(first)
+    }
+
+    /// Convert to a wire stream of rows, skipping metadata.
+    pub fn into_row_stream(mut self) -> Pin<Box<dyn Stream<Item = Result<Row>> + Send + 'a>> {
+        Box::pin(async_stream::try_stream! {
+            while let Some(item) = std::future::poll_fn(|cx| Pin::new(&mut self).poll_next(cx)).await {
+                if let QueryItem::Row(row) = item? { yield row; }
+            }
+        })
+    }
+}
+
+impl Stream for QueryStream<'_> {
+    type Item = Result<QueryItem>;
+
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
+        let this = self.get_mut();
+        if let Some(item) = this.peeked.take() {
+            return Poll::Ready(Some(Ok(item)));
+        }
+        if this.done {
+            return Poll::Ready(None);
+        }
+        let item = std::task::ready!(this.inner.as_mut().poll_next(cx));
+        match &item {
+            Some(Ok(QueryItem::Metadata(meta))) => this.columns = Some(Arc::clone(&meta.schema)),
+            Some(Err(_)) | None => this.done = true,
+            Some(Ok(QueryItem::Row(_))) => {}
+        }
+        Poll::Ready(item)
     }
 }
 
@@ -63,7 +242,11 @@ impl ExecuteResult {
     }
 }
 
-/// Collected query results from one or more SQL statements.
+/// Buffered results from bridge-specific prepared-query APIs.
+///
+/// Ordinary [`Client::query`](crate::Client::query) returns [`QueryStream`].
+/// Prepared queries keep this pre-existing buffered contract because Tiberius
+/// 0.7 has no matching public prepared-statement API.
 ///
 /// Use [`into_first_result()`](Self::into_first_result) for single-statement
 /// queries (most common), or [`into_results()`](Self::into_results) for
@@ -111,10 +294,8 @@ impl QueryResult {
     ///
     /// **Rows are pre-collected.** Unlike tiberius (which streams from the
     /// wire), this yields rows that have already been buffered into memory
-    /// during the originating `query()` / `simple_query()` call. The
-    /// streaming API is preserved for migration ergonomics, but wire-level
-    /// streaming will require the `Client::query_streamed` follow-up
-    /// tracked in <https://github.com/saurabh500/mssql-tiberius-bridge/issues/20>.
+    /// during a prepared-query call. Ordinary queries return [`QueryStream`]
+    /// instead, whose `into_row_stream()` reads incrementally from the wire.
     ///
     /// # Example
     ///
@@ -123,14 +304,13 @@ impl QueryResult {
     /// use futures_util::StreamExt;
     ///
     /// # async fn example(client: &mut Client) -> mssql_tiberius_bridge::Result<()> {
-    /// let mut stream = client
-    ///     .simple_query("SELECT 1 AS n UNION ALL SELECT 2")
-    ///     .await?
-    ///     .into_row_stream();
+    /// let statement = client.prepare("SELECT @P1 AS n", &[&1i32]).await?;
+    /// let mut stream = statement.query(client, &[&1i32]).await?.into_row_stream();
     /// while let Some(row) = stream.next().await {
     ///     let row = row?;
     ///     println!("{:?}", row.get::<i32, _>("n"));
     /// }
+    /// statement.close(client).await?;
     /// # Ok(())
     /// # }
     /// ```
@@ -163,7 +343,7 @@ impl QueryResult {
 /// callers used with tiberius' `into_row_stream()`.
 ///
 /// **Note:** rows are pre-buffered (see
-/// [`QueryResult::into_row_stream`] for the limitation and roadmap).
+/// [`QueryResult::into_row_stream`] for the prepared-query contract).
 pub struct RowStream {
     sets: std::vec::IntoIter<Vec<Row>>,
     current: std::vec::IntoIter<Row>,
@@ -718,7 +898,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    type TestResult = Result<(), Box<dyn std::error::Error>>;
+    type TestResult = std::result::Result<(), Box<dyn std::error::Error>>;
 
     fn ensure_equal<T: PartialEq + std::fmt::Debug>(actual: T, expected: T) -> TestResult {
         if actual != expected {

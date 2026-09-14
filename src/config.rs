@@ -174,6 +174,7 @@ pub struct Config {
     client_name: Option<String>,
     send_string_parameters_as_unicode: bool,
     multi_subnet_failover: bool,
+    connect_retry_count: Option<u32>,
     transport: Transport,
 }
 
@@ -198,6 +199,7 @@ impl Config {
             client_name: None,
             send_string_parameters_as_unicode: true,
             multi_subnet_failover: false,
+            connect_retry_count: None,
             transport: Transport::Tcp,
         }
     }
@@ -211,6 +213,18 @@ impl Config {
     /// Set the server port (default: 1433).
     pub fn port(&mut self, port: u16) -> &mut Self {
         self.port = port;
+        self
+    }
+
+    /// Override the native connection retry count.
+    ///
+    /// `0` disables retries after transient initial connection failures and
+    /// disables negotiated idle-connection recovery. This does not replay
+    /// failed SQL, change pool checkout policy, or control address resolution.
+    /// The native retry interval is unchanged. If unset, the native default
+    /// is preserved (`1` in `mssql-tds` 0.1.0).
+    pub fn connect_retry_count(&mut self, count: u32) -> &mut Self {
+        self.connect_retry_count = Some(count);
         self
     }
 
@@ -465,6 +479,9 @@ impl Config {
     pub fn to_client_context(&self) -> ClientContext {
         let mut ctx = ClientContext::default();
         ctx.database = self.database.clone();
+        if let Some(count) = self.connect_retry_count {
+            ctx.connect_retry_count = count;
+        }
 
         match &self.auth {
             AuthMethod::SqlServer { user, password } => {
@@ -535,6 +552,25 @@ impl Default for Config {
 mod tests {
     use crate::config::*;
     use mssql_tds::connection::client_context::TdsAuthenticationMethod;
+
+    #[test]
+    fn connection_retry_count_preserves_default_and_forwards_overrides() {
+        let mut config = Config::new();
+        let native = ClientContext::default();
+        assert_eq!(
+            config.to_client_context().connect_retry_count,
+            native.connect_retry_count
+        );
+        for count in [0, 2, 0] {
+            config.connect_retry_count(count);
+            let context = config.clone().to_client_context();
+            assert_eq!(context.connect_retry_count, count);
+            assert_eq!(
+                context.connect_retry_interval,
+                native.connect_retry_interval
+            );
+        }
+    }
 
     #[test]
     fn default_config() {

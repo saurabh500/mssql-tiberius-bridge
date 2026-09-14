@@ -115,6 +115,7 @@ async fn consume(client: &mut Client) -> Result<()> {
 async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let mut config = Config::new();
     config
+        .connect_retry_count(0)
         .host(std::env::var("TEST_DB_HOST").unwrap_or_else(|_| "localhost".into()))
         .port(
             std::env::var("TEST_DB_PORT")

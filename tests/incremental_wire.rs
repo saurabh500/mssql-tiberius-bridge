@@ -4,9 +4,7 @@ use std::time::Duration;
 
 use futures_util::{poll, TryStreamExt};
 use mssql_tds::datatypes::row_writer::DefaultRowWriter;
-use mssql_tiberius_bridge::{
-    AuthMethod, Client, ColumnValues, Config, EncryptionLevel, Error, Result,
-};
+use mssql_tiberius_bridge::{Client, ColumnValues, Config, EncryptionLevel, Error, Result};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::time::timeout;
@@ -15,6 +13,43 @@ const DEADLINE: Duration = Duration::from_secs(5);
 const DONE: &[u8] = &[0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const DONE_MORE: &[u8] = &[0xfd, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const METADATA: &[u8] = &[0x81, 1, 0, 0, 0, 0, 0, 0, 0, 0x38, 1, b'n', 0];
+
+#[tokio::test]
+async fn connection_retry_count_controls_observed_attempts() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.expect("listener");
+    let mut config = Config::new();
+    config
+        .host("127.0.0.1")
+        .port(listener.local_addr().expect("address").port())
+        .encryption(EncryptionLevel::Off);
+    for retry_count in [0, 1, 0] {
+        config.connect_retry_count(retry_count);
+        let mut attempts = 0;
+        let server = async {
+            loop {
+                let (mut peer, _) = listener.accept().await.expect("connection attempt");
+                attempts += 1;
+                request(&mut peer, 0x12).await;
+                // EOF during prelogin is a transient native connection failure.
+                drop(peer);
+            }
+        };
+        let result = timeout(Duration::from_secs(20), async {
+            tokio::select! {
+                result = Client::connect(&config) => result,
+                () = server => Err(Error::Conversion("fixture unexpectedly stopped".into())),
+            }
+        })
+        .await
+        .expect("bounded connection attempts");
+        assert!(matches!(result, Err(Error::Tds(_))));
+        assert_eq!(
+            attempts,
+            retry_count + 1,
+            "count accepted sockets, not elapsed time"
+        );
+    }
+}
 
 async fn request(peer: &mut TcpStream, kind: u8) {
     loop {
@@ -65,7 +100,6 @@ async fn connect() -> (Client, TcpStream) {
     config
         .host("127.0.0.1")
         .port(listener.local_addr().expect("address").port())
-        .authentication(AuthMethod::sql_server("fixture", ""))
         .encryption(EncryptionLevel::Off);
     let server = async {
         let (mut peer, _) = listener.accept().await.expect("accept");

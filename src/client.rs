@@ -40,11 +40,14 @@ use crate::query::{build_params_with_string_encoding, ExecuteResult, QueryResult
 /// do not perform I/O and are unaffected.
 ///
 /// Cancellation does **not** guarantee that SQL Server stopped the request or
-/// rolled back its effects. No SQL is retried, and no async cleanup is run from
+/// rolled back its effects. The bridge does not replay failed SQL, and no async cleanup is run from
 /// `Drop`. Completed errors keep the native driver's liveness classification;
 /// ordinary drained SQL errors do not by themselves kill a connection.
 /// [`reset_session`](Self::reset_session) is stricter: any failed or cancelled
 /// reset retires the connection rather than leaving a partially cleaned session.
+/// Initial connection retries and native idle-connection recovery are separate:
+/// use [`Config::connect_retry_count(0)`](Config::connect_retry_count) to disable
+/// them. Otherwise the native connection retry default is preserved.
 ///
 /// Native cooperative cancellation through `ExecuteOptions` is different: the
 /// native operation must keep being polled to finish its ATTENTION cleanup.
@@ -188,7 +191,9 @@ impl Client {
     /// [`next_row_into`](Self::next_row_into) and [`next_result`](Self::next_result).
     ///
     /// All incremental I/O follows [`Client`]'s cancellation contract. Completed
-    /// errors retain the native health classification; no request is retried.
+    /// errors retain the native health classification; the bridge does not
+    /// replay failed SQL. Native connection retries/recovery are controlled
+    /// separately by [`Config::connect_retry_count`].
     pub async fn start_query(
         &mut self,
         sql: impl Into<String>,

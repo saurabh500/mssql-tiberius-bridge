@@ -102,6 +102,11 @@ Unpolled futures, unused bulk builders, and buffered result streams do not poiso
 the connection. Completed SQL errors retain the native driver's liveness outcome.
 A failed or cancelled session reset always retires the connection.
 
+The bridge does not replay failed SQL. Initial connection retries and native
+idle-connection recovery are separate: `config.connect_retry_count(0)` disables
+both. If unset, the native default is preserved (one retry in `mssql-tds` 0.1.0).
+The retry interval, address resolution, and pool checkout policy are unchanged.
+
 Cancellation does not guarantee that SQL stopped executing or rolled back, so
 do not automatically retry writes. Native cooperative cancellation requires
 polling through cleanup; an external timeout that drops the operation is different.

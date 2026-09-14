@@ -25,6 +25,8 @@ when the Release PR is opened.
 
 ### Added
 
+- `Config::connect_retry_count` to opt out of initial connection retries and
+  native idle recovery without changing the existing default.
 - Checked incremental `Client::start_query`, `query_metadata`, `next_row_into`,
   `next_result`, `close_query`, and `has_pending_results` for caller-owned row
   writers, plus `query_first` for first-row reads with checked draining.

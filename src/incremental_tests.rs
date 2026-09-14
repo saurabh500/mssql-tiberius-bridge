@@ -17,6 +17,66 @@ fn writer(client: &Client) -> BridgeRowWriter {
 }
 
 #[tokio::test]
+async fn ping_recycling_rejects_pending_rows_and_trailing_results_without_io() {
+    use deadpool::managed::{Manager, Metrics, RecycleError};
+    let manager =
+        crate::TdsManager::new(Config::new()).with_recycling_method(crate::RecyclingMethod::Ping);
+    let mut client = client(tds_client_from_tokens(vec![
+        col_metadata(int_columns(1)),
+        done_more(),
+        col_metadata(int_columns(2)),
+        done_no_more(),
+    ]));
+    client.start_query("first", &[]).await.expect("start");
+    for boundary in [false, true] {
+        if boundary {
+            let mut writer = writer(&client);
+            assert!(!client.next_row_into(&mut writer).await.expect("boundary"));
+        }
+        for _ in 0..2 {
+            assert!(
+                client.has_pending_results(),
+                "fixture must retain an open batch"
+            );
+            assert!(matches!(
+                manager.recycle(&mut client, &Metrics::default()).await,
+                Err(RecycleError::Message(_))
+            ));
+            assert!(client.has_pending_results(), "rejection must not drain");
+            assert!(!client.is_connection_dead(), "pending does not mean dead");
+        }
+    }
+    assert!(client.next_result().await.expect("unconsumed next result"));
+    assert_eq!(client.query_metadata().expect("metadata").len(), 2);
+    client.close_query().await.expect("close");
+    for _ in 0..2 {
+        manager
+            .recycle(&mut client, &Metrics::default())
+            .await
+            .expect("healthy idle recycle");
+    }
+}
+
+#[tokio::test]
+async fn incremental_idle_and_closed_reads_are_explicitly_idempotent() {
+    let mut client = client(tds_client_from_int_rows(vec![vec![42]]));
+    let mut writer = BridgeRowWriter::new(RowSchema::from_metadata(&int_columns(1)));
+    for _ in 0..2 {
+        assert!(!client.next_row_into(&mut writer).await.expect("idle read"));
+    }
+    client.start_query("rows", &[]).await.expect("start");
+    client.close_query().await.expect("close unread query");
+    for _ in 0..2 {
+        assert!(!client
+            .next_row_into(&mut writer)
+            .await
+            .expect("closed read"));
+        assert!(!client.next_result().await.expect("EOF"));
+    }
+    assert!(!client.is_connection_dead());
+}
+
+#[tokio::test]
 async fn incremental_consecutive_refills_and_stable_eof() {
     for partial in [false, true] {
         let rows = (0..65).map(|n| vec![n, n + 1]).collect();

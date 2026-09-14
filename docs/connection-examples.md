@@ -550,9 +550,12 @@ fn example() -> std::result::Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-`Ping` calls `Client::ping()`, which checks the native
+`Ping` first rejects connections with pending results, without draining them,
+so unread responses cannot cross checkout boundaries. Finish or close the query
+before returning it to retain the connection. It then calls `Client::ping()`, which checks the native
 `Client::is_connection_dead()` status without sending SQL, resetting session
-state, or consuming outstanding results. Both APIs perform no I/O. This retains
+state, or consuming outstanding results. Direct `Client::ping()` does not perform
+the pool's pending-results check. Both APIs perform no I/O. This retains
 open transactions and prepared statements, but unlike the former `SELECT 1`
 probe, does not verify server responsiveness. Success means "not observed dead";
 a connection that silently failed while idle may fail on the next operation.

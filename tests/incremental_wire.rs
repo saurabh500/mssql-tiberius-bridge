@@ -256,6 +256,43 @@ async fn healthy_wire_rows_empty_results_and_repeated_reuse() {
     }
 }
 
+#[tokio::test]
+async fn next_result_drains_unread_rows_before_advancing() {
+    let (mut client, mut peer) = connect().await;
+    for read_first in [false, true] {
+        start(&mut client, &mut peer, METADATA).await;
+        let mut body = vec![0xd1, 10, 0, 0, 0, 0xd1, 11, 0, 0, 0];
+        body.extend(DONE_MORE);
+        body.extend(METADATA);
+        body.extend([0xd1, 20, 0, 0, 0]);
+        body.extend(DONE);
+        reply(&mut peer, &body, true).await;
+        let mut writer = DefaultRowWriter::new(1);
+        if read_first {
+            assert!(client.next_row_into(&mut writer).await.expect("first row"));
+            assert!(matches!(
+                writer.take_row().as_slice(),
+                [ColumnValues::Int(10)]
+            ));
+        }
+        assert!(timeout(DEADLINE, client.next_result())
+            .await
+            .expect("advance deadline")
+            .expect("second rowset"));
+        assert!(client
+            .next_row_into(&mut writer)
+            .await
+            .expect("second rowset row"));
+        assert!(matches!(
+            writer.take_row().as_slice(),
+            [ColumnValues::Int(20)]
+        ));
+        assert!(!client.next_result().await.expect("drain to EOF"));
+        assert!(!client.has_pending_results());
+        assert!(!client.is_connection_dead());
+    }
+}
+
 fn sql_error() -> Vec<u8> {
     let message = "fixture conversion error";
     let mut payload = 50000u32.to_le_bytes().to_vec();

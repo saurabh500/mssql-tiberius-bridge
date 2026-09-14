@@ -13,6 +13,8 @@ when the Release PR is opened.
 
 ### Changed
 
+- `RecyclingMethod::Ping` rejects connections with pending results before
+  checkout; direct `Client::ping()` remains a cached-health-only check.
 - Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached
   `is_connection_dead()` check, including for `RecyclingMethod::Ping`.
   The async API is unchanged, but success no longer verifies server

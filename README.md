@@ -79,8 +79,11 @@ returning a connection: recycling runs at the next checkout, not at check-in.
 For intentional legacy session reuse, build a pool with
 `TdsManager::new(config).with_recycling_method(RecyclingMethod::Ping)`.
 `Ping` now uses the driver's cached `is_connection_dead()` status instead of
-`SELECT 1`: it performs no I/O and leaves outstanding results untouched.
-Success means "not known dead," not verified server responsiveness; an idle
+`SELECT 1`: it performs no I/O and rejects connections with outstanding results
+so unread responses do not carry over to the next borrower. Finish or close the
+query before returning the connection. Direct `Client::ping()` still checks only
+cached health and does not reject or drain outstanding results.
+Successful recycling means "not known dead and no pending results," not verified server responsiveness; an idle
 connection failure may only be detected by the next operation.
 See [connection pooling](docs/connection-examples.md#connection-pooling) for
 examples and timeout configuration. `deadpool` still owns capacity and checkout;
@@ -145,6 +148,9 @@ it must be called even after a row boundary to observe trailing results/errors.
 Repeated row reads at a boundary return `false` without advancing, and repeated
 `next_result` calls at query EOF return `false`. `query_metadata` returns an error
 outside a current unread rowset, including after its boundary is read.
+Row reads on healthy idle or closed clients intentionally also return `false`;
+that result alone never establishes query EOF. Use `next_result` for traversal
+and `has_pending_results` for pending-response status.
 
 `close_query` drains rather than cancels; early close of a large query can still
 take time. Completed SQL errors preserve native connection health; failed

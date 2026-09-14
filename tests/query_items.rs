@@ -13,6 +13,83 @@ const DONE_MORE: &[u8] = &[0xfd, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const DONE_IN_PROC_MORE: &[u8] = &[0xff, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 const DONE_PROC: &[u8] = &[0xfe, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
+#[tokio::test]
+async fn fixed_char_binary_and_smallmoney_keep_empty_and_row_metadata() {
+    let (mut client, mut peer) = connect().await;
+    for (type_info, value, expected, length) in [
+        (
+            vec![0xaf, 2, 0, 9, 4, 0xd0, 0, 52],
+            vec![2, 0, b'a', b'b'],
+            ColumnType::Char,
+            2,
+        ),
+        (
+            vec![0xad, 2, 0],
+            vec![2, 0, 0x12, 0x34],
+            ColumnType::Binary,
+            2,
+        ),
+        (
+            vec![0x7a],
+            12345i32.to_le_bytes().to_vec(),
+            ColumnType::Money4,
+            4,
+        ),
+    ] {
+        for empty in [true, false] {
+            let mut body = metadata("value", &type_info);
+            if !empty {
+                body.push(0xd1);
+                body.extend(&value);
+            }
+            body.extend(DONE);
+            let server = async {
+                request(&mut peer, 1).await;
+                reply(&mut peer, &body, true).await;
+            };
+            let mut stream = client.simple_query_items("SELECT fixture");
+            let (item, ()) = timeout(DEADLINE, async { tokio::join!(stream.next(), server) })
+                .await
+                .expect("metadata deadline");
+            let meta = match item.expect("item").expect("metadata") {
+                QueryItem::Metadata(meta) => Some(meta),
+                QueryItem::Row(_) => None,
+            }
+            .expect("metadata");
+            let column = meta.columns().first().expect("column");
+            assert_eq!(column.column_type(), expected);
+            assert_eq!(column.byte_length(), length);
+            assert!(column.nullable());
+            assert_eq!(column.precision(), None);
+            assert_eq!(meta.result_index(), 0);
+            if !empty {
+                let row = match next(&mut stream).await.expect("item").expect("row") {
+                    QueryItem::Row(row) => Some(row),
+                    QueryItem::Metadata(_) => None,
+                }
+                .expect("row");
+                let row_column = row.columns().first().expect("row column");
+                assert_eq!(row_column.column_type(), expected);
+                assert_eq!(row_column.byte_length(), length);
+                assert_eq!(row_column.scale(), column.scale());
+                match expected {
+                    ColumnType::Char => assert_eq!(row.get::<&str, _>(0), Some("ab")),
+                    ColumnType::Binary => {
+                        assert_eq!(row.get::<&[u8], _>(0), Some([0x12, 0x34].as_slice()))
+                    }
+                    _ => assert!(matches!(
+                        row.raw_value(0),
+                        Some(mssql_tiberius_bridge::ColumnValues::SmallMoney(_))
+                    )),
+                }
+            }
+            assert!(next(&mut stream).await.is_none());
+            drop(stream);
+            healthy_reuse(&mut client, &mut peer).await;
+        }
+    }
+}
+
 // Handshake helpers follow the existing incremental_wire fixture in PR #124.
 async fn request(peer: &mut TcpStream, kind: u8) {
     loop {

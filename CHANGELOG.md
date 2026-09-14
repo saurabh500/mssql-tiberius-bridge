@@ -11,6 +11,11 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve CHAR, BINARY, and SMALLMONEY column types for native BigChar,
+  BigBinary, and Money4 metadata, including empty result sets.
+
 ### Changed
 
 - Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached

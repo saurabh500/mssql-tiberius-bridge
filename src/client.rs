@@ -12,7 +12,9 @@ use std::sync::Arc;
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::operation::{ensure_usable, Operation};
-use crate::query::{build_params_with_string_encoding, ExecuteResult, QueryResult, ToSql};
+use crate::query::{
+    build_params_with_string_encoding, ExecuteResult, QueryItem, QueryResult, ResultMetadata, ToSql,
+};
 
 /// An async SQL Server client with tiberius-style query methods.
 ///
@@ -344,6 +346,60 @@ impl Client {
         params: &[&dyn ToSql],
     ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<crate::row::Row>> + Send + 'a>>
     {
+        let mut items = self.query_items(sql, params);
+        Box::pin(async_stream::try_stream! {
+            while let Some(item) = std::future::poll_fn(|cx| items.as_mut().poll_next(cx)).await {
+                if let QueryItem::Row(row) = item? {
+                    yield row;
+                }
+            }
+        })
+    }
+
+    /// Stream metadata and ordinary rows without collecting the query.
+    ///
+    /// Each rowset yields [`QueryItem::Metadata`] before reading its first row,
+    /// including empty first and intermediate rowsets. The next metadata item
+    /// starts the next rowset; EOF ends the last. Rowset indexes start at zero
+    /// and include empty rowsets. Rowcount-only and other statements without
+    /// columns are skipped: a batch with no rowsets yields no items.
+    ///
+    /// The stream borrows this client. Metadata owns a shared schema and can
+    /// outlive the stream. Dropping at a yielded metadata or row item preserves
+    /// reuse; the next query drains unread results. [`ping`](Self::ping) does
+    /// not drain. Dropping during pending I/O retires the connection, as for
+    /// [`query_streamed`](Self::query_streamed). No cleanup runs from `Drop`.
+    ///
+    /// # Errors
+    ///
+    /// SQL, binding, connection, and drain errors are yielded as `Err`, then
+    /// the stream ends. Consume through EOF to observe trailing SQL errors;
+    /// receiving metadata or the last row does not establish query success.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use futures_util::StreamExt;
+    /// use mssql_tiberius_bridge::{Client, QueryItem};
+    ///
+    /// # async fn example(client: &mut Client) -> mssql_tiberius_bridge::Result<()> {
+    /// let mut items = client.query_items("SELECT @P1 AS n WHERE 1 = 0; SELECT 2 AS n", &[&1i32]);
+    /// while let Some(item) = items.next().await {
+    ///     match item? {
+    ///         QueryItem::Metadata(meta) => {
+    ///             println!("rowset {}: {:?}", meta.result_index(), meta.columns());
+    ///         }
+    ///         QueryItem::Row(row) => println!("{:?}", row.try_get::<i32, _>("n")?),
+    ///     }
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn query_items<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+        params: &[&dyn ToSql],
+    ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<QueryItem>> + Send + 'a>> {
         let sql = sql.into();
         let rpc_params = if params.is_empty() {
             None
@@ -365,23 +421,38 @@ impl Client {
             }.await;
             operation.complete(result)?;
 
+            let mut result_index = 0;
             while self.inner.on_rows()
                 || Self::advance_stream(&mut self.inner).await?
             {
                 let schema = crate::row::RowSchema::from_metadata(self.inner.get_metadata());
+                yield QueryItem::Metadata(ResultMetadata {
+                    schema: Arc::clone(&schema),
+                    result_index,
+                });
                 let mut writer = crate::row::BridgeRowWriter::new(schema);
                 while {
                     let mut operation = Operation::new(&mut self.inner)?;
                     let result = operation.next_row_into(&mut writer).await.map_err(Error::Tds);
                     operation.complete(result)?
                 } {
-                    yield writer.take_row();
+                    yield QueryItem::Row(writer.take_row());
                 }
                 if !Self::advance_stream(&mut self.inner).await? {
                     break;
                 }
+                result_index += 1;
             }
         })
+    }
+
+    /// Unparameterized counterpart of [`query_items`](Self::query_items),
+    /// with the same metadata, boundary, error, and cancellation behavior.
+    pub fn simple_query_items<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+    ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<QueryItem>> + Send + 'a>> {
+        self.query_items(sql, &[])
     }
 
     /// Streaming counterpart of [`simple_query`](Self::simple_query) — see

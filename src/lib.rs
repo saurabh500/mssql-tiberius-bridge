@@ -101,7 +101,7 @@ pub use config::{AuthMethod, Config, EncryptionLevel, Transport};
 pub use error::{Error, Result};
 pub use pool::{Pool, PooledConnection, RecyclingMethod, TdsManager};
 pub use prepared::PreparedStatement;
-pub use query::{DebugParams, ExecuteResult, QueryResult, ToSql};
+pub use query::{DebugParams, ExecuteResult, QueryItem, QueryResult, ResultMetadata, ToSql};
 pub use row::{ColumnIndex, FromSql, Row};
 
 // Re-export mssql-tds types that consumers might need for advanced use.

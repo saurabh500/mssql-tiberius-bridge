@@ -10,6 +10,37 @@ use mssql_tds::message::parameters::rpc_parameters::{RpcParameter, StatusFlags};
 
 use crate::row::Row;
 
+/// An item from [`Client::query_items`](crate::Client::query_items).
+///
+/// Every row-returning result set starts with `Metadata`, even if it has no
+/// rows. Subsequent `Row` items belong to that metadata until the next
+/// `Metadata` or end of stream. Statements without columns produce no items.
+#[derive(Debug, Clone)]
+pub enum QueryItem {
+    Metadata(ResultMetadata),
+    Row(Row),
+}
+
+/// Owned metadata for one row-returning result set, shared with its rows.
+#[derive(Debug, Clone)]
+pub struct ResultMetadata {
+    pub(crate) schema: std::sync::Arc<crate::row::RowSchema>,
+    pub(crate) result_index: usize,
+}
+
+impl ResultMetadata {
+    /// Columns in wire order, available even when the result has no rows.
+    pub fn columns(&self) -> &[crate::Column] {
+        &self.schema.columns
+    }
+
+    /// Zero-based rowset index within this query. Empty rowsets count;
+    /// rowcount-only and other statements without columns do not.
+    pub fn result_index(&self) -> usize {
+        self.result_index
+    }
+}
+
 /// Result of an `execute()` call, containing row counts per statement.
 #[derive(Debug, Clone)]
 pub struct ExecuteResult {

@@ -12,6 +12,7 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 - `stream.into_first_result()` — collect results into `Vec<Row>`
 - `stream.into_row_stream()` — `Stream<Item = Result<Row>>` over a buffered `QueryResult` (rows pre-buffered)
 - `client.query_streamed(sql, params)` / `simple_query_streamed(sql)` — true wire-level row streaming for memory-bounded large result sets
+- `client.query_items(sql, params)` / `simple_query_items(sql)` — wire-level metadata and ordinary rows, including empty result sets (unreleased)
 - `client.ping()` — cached connection-health check without SQL or network I/O
 - `client.reset_session()` — native TDS session reset with `READ COMMITTED` isolation
 - `conn.query(sql, &[&param])` — positional `@P1, @P2` parameters
@@ -51,6 +52,57 @@ async fn main() -> mssql_tiberius_bridge::Result<()> {
     Ok(())
 }
 ```
+
+## Streaming metadata, including empty results
+
+The additive `query_items` and `simple_query_items` APIs are **unreleased**;
+they are not in the published 0.1.0 package. They yield `Result<QueryItem>`:
+one `Metadata(ResultMetadata)` before reading any rows of each rowset, then
+ordinary `Row` items. Metadata shares the same schema and `Column` conversion
+as `Row::columns()`; this API does not expand the driver's metadata fields.
+It does not collect the query or run a separate metadata SQL query.
+
+```rust,no_run
+use futures_util::StreamExt;
+use mssql_tiberius_bridge::{Client, QueryItem};
+
+async fn read(client: &mut Client) -> mssql_tiberius_bridge::Result<()> {
+    let mut items = client.query_items(
+        "SELECT @P1 AS empty_int WHERE 1 = 0; SELECT 42 AS answer",
+        &[&1i32],
+    );
+    while let Some(item) = items.next().await {
+        match item? {
+            QueryItem::Metadata(meta) => {
+                // Even rowset 0 has columns, despite returning no rows.
+                println!("rowset {}: {:?}", meta.result_index(), meta.columns());
+            }
+            QueryItem::Row(row) => println!("{:?}", row.try_get::<i32, _>("answer")?),
+        }
+    }
+    Ok(())
+}
+```
+
+Indexes start at zero and count all rowsets, including empty first,
+intermediate, and final rowsets. Each metadata item starts a new rowset;
+subsequent rows belong to it until the next metadata item or EOF. Statements
+without columns (including DML row counts) are skipped and do not increment
+the index. A batch without rowsets produces no items, unlike an empty SELECT,
+which still produces metadata. Use `execute` for affected-row counts.
+
+Consume through EOF to observe trailing SQL errors. An error is yielded once
+and ends the stream; receiving metadata or the last row alone is not query
+success. A metadata-only probe can consume and discard rows through EOF without
+collecting them. Alternatively, drop the stream at a yielded metadata/row item:
+the next query drains outstanding results using the existing connection
+lifecycle. `ping()` does **not** drain. Dropping during pending I/O retires the
+connection; retaining the stream allows a cancelled `next()` to resume. No
+async cleanup or SQL cancellation happens in `Drop`. Owned metadata and rows
+can outlive the stream, but the stream itself borrows the client.
+
+Existing buffered queries and row-only streams retain their behavior:
+`query_streamed` / `simple_query_streamed` flatten rowsets and omit metadata.
 
 ## Migration from tiberius
 

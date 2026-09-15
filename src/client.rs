@@ -9,6 +9,8 @@ use mssql_tds::connection::tds_client::{ResultSet, StatementResult, TdsClient};
 use mssql_tds::connection_provider::tds_connection_provider::TdsConnectionProvider;
 use std::sync::Arc;
 
+use futures_core::Stream;
+
 use crate::config::Config;
 use crate::error::{Error, Result};
 use crate::operation::{ensure_usable, Operation};
@@ -344,6 +346,24 @@ impl Client {
         params: &[&dyn ToSql],
     ) -> std::pin::Pin<Box<dyn futures_core::Stream<Item = Result<crate::row::Row>> + Send + 'a>>
     {
+        let mut items = self.query_compat(sql, params);
+        Box::pin(async_stream::try_stream! {
+            while let Some(item) = std::future::poll_fn(|cx| {
+                std::pin::Pin::new(&mut items).poll_next(cx)
+            }).await {
+                if let crate::compat::QueryItem::Row(row) = item? {
+                    yield row;
+                }
+            }
+        })
+    }
+
+    /// Execute a parameterized query as Tiberius-compatible metadata and row items.
+    pub fn query_compat<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+        params: &[&dyn ToSql],
+    ) -> crate::compat::QueryStream<'a> {
         let sql = sql.into();
         let rpc_params = if params.is_empty() {
             None
@@ -353,7 +373,7 @@ impl Client {
                 self.send_string_parameters_as_unicode,
             ))
         };
-        Box::pin(async_stream::try_stream! {
+        let stream = Box::pin(async_stream::try_stream! {
             let mut operation = Operation::new(&mut self.inner)?;
             let result: Result<()> = async {
                 operation.close_query().await.map_err(Error::Tds)?;
@@ -365,23 +385,36 @@ impl Client {
             }.await;
             operation.complete(result)?;
 
-            while self.inner.on_rows()
-                || Self::advance_stream(&mut self.inner).await?
-            {
+            let mut result_index = 0;
+            while self.inner.on_rows() || Self::advance_stream(&mut self.inner).await? {
                 let schema = crate::row::RowSchema::from_metadata(self.inner.get_metadata());
-                let mut writer = crate::row::BridgeRowWriter::new(schema);
+                yield crate::compat::QueryItem::Metadata(
+                    crate::compat::ResultMetadata::new(std::sync::Arc::clone(&schema), result_index)
+                );
+                let mut writer =
+                    crate::row::BridgeRowWriter::with_result_index(schema, result_index);
                 while {
                     let mut operation = Operation::new(&mut self.inner)?;
                     let result = operation.next_row_into(&mut writer).await.map_err(Error::Tds);
                     operation.complete(result)?
                 } {
-                    yield writer.take_row();
+                    yield crate::compat::QueryItem::Row(writer.take_row());
                 }
+                result_index += 1;
                 if !Self::advance_stream(&mut self.inner).await? {
                     break;
                 }
             }
-        })
+        });
+        crate::compat::QueryStream::new(stream)
+    }
+
+    /// Raw-batch counterpart of [`query_compat`](Self::query_compat).
+    pub fn simple_query_compat<'a>(
+        &'a mut self,
+        sql: impl Into<String>,
+    ) -> crate::compat::QueryStream<'a> {
+        self.query_compat(sql, &[])
     }
 
     /// Streaming counterpart of [`simple_query`](Self::simple_query) — see
@@ -617,10 +650,11 @@ impl Client {
     /// Collect all result sets from the current execution into a [`QueryResult`].
     async fn collect_results(inner: &mut TdsClient) -> Result<QueryResult> {
         let mut result_sets: Vec<Vec<crate::row::Row>> = Vec::new();
+        let mut result_index = 0;
 
         while inner.on_rows() || inner.advance_to_rows().await.map_err(Error::Tds)? {
             let schema = crate::row::RowSchema::from_metadata(inner.get_metadata());
-            let mut writer = crate::row::BridgeRowWriter::new(schema);
+            let mut writer = crate::row::BridgeRowWriter::with_result_index(schema, result_index);
             let mut rows: Vec<crate::row::Row> = Vec::new();
 
             while inner.next_row_into(&mut writer).await.map_err(Error::Tds)? {
@@ -628,6 +662,7 @@ impl Client {
             }
 
             result_sets.push(rows);
+            result_index += 1;
 
             if !inner.advance_to_rows().await.map_err(Error::Tds)? {
                 break;

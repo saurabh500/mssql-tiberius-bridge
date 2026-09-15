@@ -5,13 +5,15 @@
 //! or `tests/bulk.rs` at that commit.
 
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
+use futures_util::{StreamExt, TryStreamExt};
 use mssql_tds::core::TdsResult;
 use mssql_tds::datatypes::column_values::ColumnValues;
 use mssql_tds::datatypes::sql_string::SqlString;
 use mssql_tds::message::bulk_load::StreamingBulkLoadWriter;
 use mssql_tiberius_bridge::bulk::BulkLoadRow;
-use mssql_tiberius_bridge::{AuthMethod, Client, ColumnType, Config, Error, FromSql, Row, ToSql};
+use mssql_tiberius_bridge::{
+    AuthMethod, Client, ColumnType, Config, Error, FromSql, QueryItem, Row, ToSql,
+};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum Status {
@@ -51,14 +53,14 @@ const TRACEABILITY: &[Trace] = &[
     Trace { behavior: "NULL row retrieval", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::UnchangedPass, evidence: "row_metadata_access_and_errors" },
     Trace { behavior: "wrong-type retrieval reports conversion error", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::BehavioralGap, evidence: "bridge FromSql currently represents mismatch as None" },
     Trace { behavior: "Row cells and consuming iterator", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_row_iteration.rs (#130)" },
-    Trace { behavior: "Row result_index", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_query_stream.rs (#125)" },
-    Trace { behavior: "QueryItem metadata and row variants", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_query_stream.rs (#125)" },
-    Trace { behavior: "QueryStream columns metadata", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_query_stream.rs (#125)" },
+    Trace { behavior: "Row result_index", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_metadata_order_and_result_indexes" },
+    Trace { behavior: "QueryItem metadata and row variants", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_metadata_order_and_result_indexes" },
+    Trace { behavior: "QueryStream columns metadata", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_metadata_order_and_result_indexes" },
     Trace { behavior: "into_row_stream collection", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "row_stream_collects_all_sets" },
     Trace { behavior: "into_results non-empty sets", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "collected_results_preserve_empty_middle_set" },
     Trace { behavior: "empty result-set boundaries", source: "DATA_API_COVERAGE.md:Compatibility observations", status: Status::IntentionalImprovement, evidence: "collected_results_preserve_empty_middle_set" },
     Trace { behavior: "into_first_result", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "tiberius_compat::multiple_result_sets" },
-    Trace { behavior: "async into_row helper", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_query_stream_collectors.rs (#125)" },
+    Trace { behavior: "async into_row helper", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_collectors_match_tiberius_shape" },
     Trace { behavior: "ExecuteResult total", source: "tests/query.rs:execute_multiple_count_total", status: Status::AdaptedPass, evidence: "execute_counts_iterate_and_total" },
     Trace { behavior: "ExecuteResult inherent into_iter", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "execute_counts_iterate_and_total" },
     Trace { behavior: "ExecuteResult rows_affected", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_execute_rows_affected.rs (#131)" },
@@ -116,14 +118,14 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::AdaptedPass)
             .count(),
-        15
+        19
     );
     assert_eq!(
         TRACEABILITY
             .iter()
             .filter(|trace| trace.status == Status::CompileGap)
             .count(),
-        15
+        11
     );
     assert_eq!(
         TRACEABILITY
@@ -238,6 +240,143 @@ async fn row_stream_collects_all_sets() {
             .expect("second streamed row")
             .get::<i32, _>("value"),
         Some(2)
+    );
+}
+
+#[tokio::test]
+async fn query_stream_metadata_order_and_result_indexes() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    let mut stream = client.simple_query_compat(
+        "SELECT CAST(7 AS int) AS first_value; \
+         SELECT CAST('unused' AS nvarchar(12)) AS empty_value WHERE 1 = 0; \
+         SELECT CAST(9 AS bigint) AS final_value",
+    );
+
+    let first_columns = stream
+        .columns()
+        .await
+        .expect("read first result metadata")
+        .expect("first result metadata exists");
+    let first_column = first_columns.first().expect("first result column exists");
+    assert_eq!(first_column.name(), "first_value");
+    assert_eq!(first_column.column_type(), ColumnType::Int4);
+
+    let mut observed = Vec::new();
+    while let Some(item) = stream.next().await {
+        match item.expect("read compatibility stream item") {
+            QueryItem::Metadata(metadata) => {
+                observed.push(("metadata", metadata.result_index()));
+                let expected = match metadata.result_index() {
+                    0 => ("first_value", ColumnType::Int4),
+                    1 => ("empty_value", ColumnType::NVarchar),
+                    2 => ("final_value", ColumnType::Int8),
+                    _ => ("unexpected", ColumnType::Null),
+                };
+                let column = metadata
+                    .columns()
+                    .first()
+                    .expect("result metadata column exists");
+                assert_eq!(column.name(), expected.0);
+                assert_eq!(column.column_type(), expected.1);
+            }
+            QueryItem::Row(row) => {
+                observed.push(("row", row.result_index()));
+            }
+        }
+    }
+    assert_eq!(
+        observed,
+        [
+            ("metadata", 0),
+            ("row", 0),
+            ("metadata", 1),
+            ("metadata", 2),
+            ("row", 2),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn query_stream_collectors_match_tiberius_shape() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    let sql = "SELECT CAST(7 AS int) AS value; \
+               SELECT CAST(0 AS int) AS value WHERE 1 = 0; \
+               SELECT CAST(9 AS int) AS value";
+
+    let results = client
+        .simple_query_compat(sql)
+        .into_results()
+        .await
+        .expect("collect all compatibility results");
+    assert_eq!(results.iter().map(Vec::len).collect::<Vec<_>>(), [1, 0, 1]);
+    assert_eq!(
+        results
+            .first()
+            .and_then(|rows| rows.first())
+            .expect("first result row exists")
+            .result_index(),
+        0
+    );
+    assert_eq!(
+        results
+            .get(2)
+            .and_then(|rows| rows.first())
+            .expect("third result row exists")
+            .result_index(),
+        2
+    );
+
+    let empty_results = client
+        .simple_query_compat(
+            "SELECT CAST(0 AS int) AS first_empty WHERE 1 = 0; \
+             SELECT CAST(8 AS int) AS value; \
+             SELECT CAST(0 AS int) AS trailing_empty WHERE 1 = 0",
+        )
+        .into_results()
+        .await
+        .expect("collect empty compatibility results");
+    assert_eq!(
+        empty_results.iter().map(Vec::len).collect::<Vec<_>>(),
+        [0, 1, 0]
+    );
+
+    let first = client
+        .simple_query_compat(sql)
+        .into_first_result()
+        .await
+        .expect("collect first compatibility result");
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        first
+            .first()
+            .expect("first compatibility row exists")
+            .get::<i32, _>("value"),
+        Some(7)
+    );
+
+    let row = client
+        .simple_query_compat(sql)
+        .into_row()
+        .await
+        .expect("collect one compatibility row")
+        .expect("first row exists");
+    assert_eq!(row.get::<i32, _>("value"), Some(7));
+
+    let rows: Vec<Row> = client
+        .simple_query_compat(sql)
+        .into_row_stream()
+        .try_collect()
+        .await
+        .expect("flatten compatibility rows");
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row.result_index(), row.get::<i32, _>("value")))
+            .collect::<Vec<_>>(),
+        [(0, Some(7)), (2, Some(9))]
     );
 }
 

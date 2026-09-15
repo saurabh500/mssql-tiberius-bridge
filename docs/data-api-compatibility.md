@@ -13,8 +13,8 @@ The machine-readable traceability matrix is `TRACEABILITY` in
 | Status | Scenarios |
 |---|---:|
 | Passes with the unchanged Tiberius-facing call | 7 |
-| Passes through the current bridge API | 15 |
-| Compile/API gap | 15 |
+| Passes through the current bridge API | 19 |
+| Compile/API gap | 11 |
 | Behavioral gap | 1 |
 | Intentional bridge improvement | 2 |
 
@@ -24,6 +24,14 @@ intentional improvements are recoverable out-of-range numeric access and
 preservation of an empty middle result set in collected results. Tiberius
 panics for the former and drops the empty set when consecutive metadata items
 are collected for the latter.
+
+Issue #125 is available through the separate `compat` module and the
+bridge-native `Client::query_compat` / `Client::simple_query_compat` entry
+points. They expose `QueryStream`, `QueryItem`, `ResultMetadata`, columns, and
+zero-based result indexes while reusing the native wire stream. Its collectors
+intentionally preserve every metadata boundary, including empty middle and
+trailing result sets; the pinned Tiberius implementation can drop those empty
+sets. Existing buffered and row-only streaming methods keep their contracts.
 
 ## Phase 3 order
 

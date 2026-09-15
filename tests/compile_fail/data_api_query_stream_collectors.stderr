@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `mssql_tiberius_bridge::QueryStream`
+ --> tests/compile_fail/data_api_query_stream_collectors.rs:2:29
+  |
+2 | use mssql_tiberius_bridge::{QueryStream, Result, Row};
+  |                             ^^^^^^^^^^^ no `QueryStream` in the root

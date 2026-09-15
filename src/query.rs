@@ -352,18 +352,51 @@ impl ToSql for rust_decimal::Decimal {
     }
 }
 
-// Option<T>: None becomes the SQL NULL of the same type
+fn into_typed_null(value: SqlType) -> SqlType {
+    match value {
+        SqlType::Bit(_) => SqlType::Bit(None),
+        SqlType::TinyInt(_) => SqlType::TinyInt(None),
+        SqlType::SmallInt(_) => SqlType::SmallInt(None),
+        SqlType::Int(_) => SqlType::Int(None),
+        SqlType::BigInt(_) => SqlType::BigInt(None),
+        SqlType::Real(_) => SqlType::Real(None),
+        SqlType::Float(_) => SqlType::Float(None),
+        SqlType::Decimal(_) => SqlType::Decimal(None),
+        SqlType::Numeric(_) => SqlType::Numeric(None),
+        SqlType::Money(_) => SqlType::Money(None),
+        SqlType::SmallMoney(_) => SqlType::SmallMoney(None),
+        SqlType::Time(_) => SqlType::Time(None),
+        SqlType::DateTime2(_) => SqlType::DateTime2(None),
+        SqlType::DateTimeOffset(_) => SqlType::DateTimeOffset(None),
+        SqlType::SmallDateTime(_) => SqlType::SmallDateTime(None),
+        SqlType::DateTime(_) => SqlType::DateTime(None),
+        SqlType::Date(_) => SqlType::Date(None),
+        SqlType::NVarchar(_, length) => SqlType::NVarchar(None, length),
+        SqlType::NVarcharMax(_) => SqlType::NVarcharMax(None),
+        SqlType::Varchar(_, length) => SqlType::Varchar(None, length),
+        SqlType::VarcharMax(_) => SqlType::VarcharMax(None),
+        SqlType::VarBinary(_, length) => SqlType::VarBinary(None, length),
+        SqlType::VarBinaryMax(_) => SqlType::VarBinaryMax(None),
+        SqlType::Binary(_, length) => SqlType::Binary(None, length),
+        SqlType::Char(_, length) => SqlType::Char(None, length),
+        SqlType::NChar(_, length) => SqlType::NChar(None, length),
+        SqlType::Text(_) => SqlType::Text(None),
+        SqlType::NText(_) => SqlType::NText(None),
+        SqlType::Json(_) => SqlType::Json(None),
+        SqlType::Xml(_) => SqlType::Xml(None),
+        SqlType::Uuid(_) => SqlType::Uuid(None),
+        SqlType::Vector(_, dimensions, base_type) => SqlType::Vector(None, dimensions, base_type),
+        SqlType::Variant(inner) => SqlType::Variant(Box::new(into_typed_null(*inner))),
+        SqlType::Table(name, _) => SqlType::Table(name, None),
+    }
+}
+
+// Option<T>: None becomes the SQL NULL of the same type.
 impl<T: ToSql + Default> ToSql for Option<T> {
     fn to_sql(&self) -> SqlType {
         match self {
             Some(v) => v.to_sql(),
-            None => {
-                // Use a default-constructed value to get the right SqlType variant,
-                // then we'd need to set it to None. Since SqlType variants all
-                // have Option, we use a type-specific approach.
-                // For simplicity, default to NVarchar NULL.
-                SqlType::NVarchar(None, 4000)
-            }
+            None => into_typed_null(T::default().to_sql()),
         }
     }
 
@@ -738,8 +771,8 @@ mod tests {
             "expected optional int",
         )?;
         ensure(
-            matches!(None::<i32>.to_sql(), SqlType::NVarchar(None, 4000)),
-            "expected SQL NULL",
+            matches!(None::<i32>.to_sql(), SqlType::Int(None)),
+            "expected typed SQL NULL",
         )?;
         for value in ["hello".to_sql(), "hello".to_owned().to_sql()] {
             let SqlType::NVarchar(Some(value), 4000) = value else {
@@ -936,6 +969,46 @@ mod tests {
         let none = None::<i32>;
         let params: &[&dyn ToSql] = &[&1i32, &"test", &none];
         assert_eq!(format!("{:?}", DebugParams(params)), r#"[1, "test", None]"#);
+    }
+
+    #[test]
+    fn option_none_preserves_the_inner_parameter_type() {
+        assert!(matches!(None::<bool>.to_sql(), SqlType::Bit(None)));
+        assert!(matches!(None::<u8>.to_sql(), SqlType::TinyInt(None)));
+        assert!(matches!(None::<i16>.to_sql(), SqlType::SmallInt(None)));
+        assert!(matches!(None::<i32>.to_sql(), SqlType::Int(None)));
+        assert!(matches!(None::<i64>.to_sql(), SqlType::BigInt(None)));
+        assert!(matches!(None::<f32>.to_sql(), SqlType::Real(None)));
+        assert!(matches!(None::<f64>.to_sql(), SqlType::Float(None)));
+        assert!(matches!(
+            None::<String>.to_sql(),
+            SqlType::NVarchar(None, 4000)
+        ));
+        assert!(matches!(
+            None::<Vec<u8>>.to_sql(),
+            SqlType::VarBinaryMax(None)
+        ));
+        assert!(matches!(None::<uuid::Uuid>.to_sql(), SqlType::Uuid(None)));
+        assert!(matches!(
+            None::<rust_decimal::Decimal>.to_sql(),
+            SqlType::Numeric(None)
+        ));
+        assert!(matches!(
+            None::<chrono::NaiveDate>.to_sql(),
+            SqlType::Date(None)
+        ));
+        assert!(matches!(
+            None::<chrono::NaiveTime>.to_sql(),
+            SqlType::Time(None)
+        ));
+        assert!(matches!(
+            None::<chrono::NaiveDateTime>.to_sql(),
+            SqlType::DateTime2(None)
+        ));
+        assert!(matches!(
+            into_typed_null(SqlType::Variant(Box::new(SqlType::Int(Some(1))))),
+            SqlType::Variant(inner) if matches!(*inner, SqlType::Int(None))
+        ));
     }
 
     #[test]

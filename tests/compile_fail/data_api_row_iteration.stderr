@@ -1,0 +1,24 @@
+error[E0599]: no method named `cells` found for struct `Row` in the current scope
+ --> tests/compile_fail/data_api_row_iteration.rs:5:17
+  |
+5 |     let _ = row.cells().count();
+  |                 ^^^^^ method not found in `Row`
+
+error[E0599]: `Row` is not an iterator
+ --> tests/compile_fail/data_api_row_iteration.rs:6:17
+  |
+6 |     let _ = row.into_iter().count();
+  |                 ^^^^^^^^^ `Row` is not an iterator
+  |
+ ::: src/row.rs
+  |
+  | pub struct Row {
+  | -------------- doesn't satisfy `Row: IntoIterator` or `Row: Iterator`
+  |
+  = note: the following trait bounds were not satisfied:
+          `Row: Iterator`
+          which is required by `Row: IntoIterator`
+          `&Row: Iterator`
+          which is required by `&Row: IntoIterator`
+          `&mut Row: Iterator`
+          which is required by `&mut Row: IntoIterator`

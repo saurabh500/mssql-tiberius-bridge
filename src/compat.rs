@@ -5,6 +5,7 @@
 //! migrating code that consumes Tiberius `QueryStream` items. The bridge's
 //! native buffered and row-only streaming APIs remain unchanged.
 
+use std::fmt;
 use std::future::poll_fn;
 use std::pin::Pin;
 use std::sync::Arc;
@@ -91,6 +92,14 @@ pub struct QueryStream<'a> {
     columns: Option<Arc<RowSchema>>,
 }
 
+impl fmt::Debug for QueryStream<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("QueryStream")
+            .finish_non_exhaustive()
+    }
+}
+
 impl<'a> QueryStream<'a> {
     pub(crate) fn new(inner: Pin<Box<dyn Stream<Item = Result<QueryItem>> + Send + 'a>>) -> Self {
         Self {
@@ -101,8 +110,13 @@ impl<'a> QueryStream<'a> {
     }
 
     /// Return columns for the current or next result set.
+    ///
+    /// A stream error encountered while looking ahead is returned once and
+    /// consumed. Unlike Tiberius, the bridge error is not `Clone`, so a later
+    /// [`Stream::poll_next`] observes the item after that error rather than
+    /// receiving the same error again.
     pub async fn columns(&mut self) -> Result<Option<&[Column]>> {
-        if self.columns.is_none() && self.peeked.is_none() {
+        if self.peeked.is_none() {
             match poll_fn(|cx| self.inner.as_mut().poll_next(cx)).await {
                 Some(Ok(item)) => {
                     if let QueryItem::Metadata(metadata) = &item {
@@ -234,6 +248,12 @@ mod tests {
         assert!(QueryItem::Row(row()).into_metadata().is_none());
     }
 
+    #[test]
+    fn query_stream_debug_omits_inner_stream() {
+        let stream = QueryStream::new(Box::pin(futures_util::stream::empty()));
+        assert_eq!(format!("{stream:?}"), "QueryStream { .. }");
+    }
+
     #[tokio::test]
     async fn columns_handles_empty_row_and_error_streams() {
         let mut empty = QueryStream::new(Box::pin(futures_util::stream::empty()));
@@ -267,6 +287,31 @@ mod tests {
         assert!(matches!(
             error.columns().await,
             Err(Error::Conversion(message)) if message == "expected"
+        ));
+        assert!(error.next().await.is_none());
+    }
+
+    #[tokio::test]
+    async fn columns_peeks_each_result_boundary() {
+        let first = ResultMetadata::new(schema(), 0);
+        let second = ResultMetadata::new(schema(), 1);
+        let mut stream = QueryStream::new(Box::pin(futures_util::stream::iter([
+            Ok(QueryItem::Metadata(first)),
+            Ok(QueryItem::Row(row())),
+            Ok(QueryItem::Metadata(second)),
+        ])));
+
+        assert!(stream.columns().await.expect("first columns").is_some());
+        assert!(matches!(
+            stream.next().await,
+            Some(Ok(QueryItem::Metadata(metadata))) if metadata.result_index() == 0
+        ));
+        assert!(stream.columns().await.expect("row columns").is_some());
+        assert!(matches!(stream.next().await, Some(Ok(QueryItem::Row(_)))));
+        assert!(stream.columns().await.expect("second columns").is_some());
+        assert!(matches!(
+            stream.next().await,
+            Some(Ok(QueryItem::Metadata(metadata))) if metadata.result_index() == 1
         ));
     }
 

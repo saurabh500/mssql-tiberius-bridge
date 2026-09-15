@@ -2,6 +2,7 @@
 use mssql_tiberius_bridge::{Column, QueryItem, QueryStream, Result};
 
 async fn inspect(mut stream: QueryStream<'_>, item: QueryItem) -> Result<()> {
+    let _ = format!("{stream:?}");
     let _: Option<&[Column]> = stream.columns().await?;
     if let Some(metadata) = item.as_metadata() {
         let _: usize = metadata.result_index();

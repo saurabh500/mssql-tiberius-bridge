@@ -31,7 +31,10 @@ points. They expose `QueryStream`, `QueryItem`, `ResultMetadata`, columns, and
 zero-based result indexes while reusing the native wire stream. Its collectors
 intentionally preserve every metadata boundary, including empty middle and
 trailing result sets; the pinned Tiberius implementation can drop those empty
-sets. Existing buffered and row-only streaming methods keep their contracts.
+sets. Errors returned while `QueryStream::columns()` looks ahead are delivered
+once because the bridge's native error is not cloneable; a later stream poll
+continues after that error. Existing buffered and row-only streaming methods
+keep their contracts.
 
 ## Phase 3 order
 
@@ -44,6 +47,6 @@ sets. Existing buffered and row-only streaming methods keep their contracts.
 | 5 | Row cell/consuming iteration | [#130](https://github.com/saurabh500/mssql-tiberius-bridge/issues/130) | `data_api_row_iteration.rs` |
 | 6 | `TokenRow`, `IntoRow`, and incremental bulk lifecycle | [#129](https://github.com/saurabh500/mssql-tiberius-bridge/issues/129) | `data_api_bulk_row.rs`, `data_api_bulk_lifecycle.rs` |
 
-Each fixture is an expected compile failure in `tests/compile_fail`. Implementing
-its issue means moving the same source to a trybuild pass suite; changing the
+Unimplemented fixtures are expected compile failures in `tests/compile_fail`.
+Implementing an issue means moving the same source to `tests/pass`; changing a
 probe to fit an incompatible API does not satisfy the issue.

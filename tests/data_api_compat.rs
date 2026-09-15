@@ -344,6 +344,45 @@ async fn query_stream_collectors_match_tiberius_shape() {
         [0, 1, 0]
     );
 
+    let mut empty_stream = client.simple_query_compat(
+        "SELECT CAST(0 AS int) AS first_empty WHERE 1 = 0; \
+         SELECT CAST('' AS nvarchar(8)) AS second_empty WHERE 1 = 0",
+    );
+    let first_empty = empty_stream
+        .columns()
+        .await
+        .expect("read first empty metadata")
+        .and_then(|columns| columns.first())
+        .expect("first empty column");
+    assert_eq!(first_empty.name(), "first_empty");
+    assert_eq!(first_empty.column_type(), ColumnType::Int4);
+    assert!(matches!(
+        empty_stream.next().await,
+        Some(Ok(QueryItem::Metadata(metadata)))
+            if metadata.result_index() == 0
+                && metadata.columns().first().is_some_and(|column| {
+                    column.name() == "first_empty" && column.column_type() == ColumnType::Int4
+                })
+    ));
+    let second_empty = empty_stream
+        .columns()
+        .await
+        .expect("read second empty metadata")
+        .and_then(|columns| columns.first())
+        .expect("second empty column");
+    assert_eq!(second_empty.name(), "second_empty");
+    assert_eq!(second_empty.column_type(), ColumnType::NVarchar);
+    assert!(matches!(
+        empty_stream.next().await,
+        Some(Ok(QueryItem::Metadata(metadata)))
+            if metadata.result_index() == 1
+                && metadata.columns().first().is_some_and(|column| {
+                    column.name() == "second_empty"
+                        && column.column_type() == ColumnType::NVarchar
+                })
+    ));
+    drop(empty_stream);
+
     let first = client
         .simple_query_compat(sql)
         .into_first_result()

@@ -924,9 +924,12 @@ mod tests {
     #[test]
     fn schema_name_lookup_keeps_first_duplicate_and_unique_columns() {
         let mut metadata = mssql_tds::test_client_support::int_columns(3);
-        metadata[0].column_name = "duplicate".to_string();
-        metadata[1].column_name = "unique".to_string();
-        metadata[2].column_name = "duplicate".to_string();
+        for (column, name) in metadata
+            .iter_mut()
+            .zip(["duplicate", "unique", "duplicate"])
+        {
+            column.column_name = name.to_string();
+        }
         let row = Row::from_tds(
             &metadata,
             vec![

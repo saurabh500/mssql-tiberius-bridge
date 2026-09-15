@@ -38,6 +38,9 @@ pub enum Error {
     /// A type conversion failed when extracting a column value.
     Conversion(String),
 
+    /// A row cannot be encoded for a compatibility bulk upload.
+    BulkInput(String),
+
     /// A connection pool error occurred.
     Pool(String),
 
@@ -56,6 +59,7 @@ impl fmt::Display for Error {
                 write!(f, "Column index {index} out of bounds (count: {count})")
             }
             Error::Conversion(msg) => write!(f, "Conversion error: {msg}"),
+            Error::BulkInput(msg) => write!(f, "BULK UPLOAD input failure: {msg}"),
             Error::Pool(msg) => write!(f, "Pool error: {msg}"),
             Error::InvalidPreparedStatement => {
                 write!(
@@ -118,6 +122,10 @@ mod tests {
             (
                 Error::Conversion("invalid date".into()),
                 "Conversion error: invalid date",
+            ),
+            (
+                Error::BulkInput("wrong column count".into()),
+                "BULK UPLOAD input failure: wrong column count",
             ),
             (Error::Pool("closed".into()), "Pool error: closed"),
             (

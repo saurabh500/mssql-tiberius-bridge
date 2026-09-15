@@ -95,7 +95,9 @@ pub mod row;
 pub mod serde_de;
 
 // Re-exports for ergonomic top-level access.
-pub use bulk::{BulkInsert, BulkLoadRow, ColumnMapping, ColumnMappingSource};
+pub use bulk::{
+    BulkInsert, BulkLoadRequest, BulkLoadRow, ColumnMapping, ColumnMappingSource, IntoRow, TokenRow,
+};
 pub use client::Client;
 pub use column::{Collation, Column, ColumnType, MultiPartName};
 pub use compat::{

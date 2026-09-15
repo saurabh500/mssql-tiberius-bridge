@@ -12,9 +12,9 @@ The machine-readable traceability matrix is `TRACEABILITY` in
 
 | Status | Scenarios |
 |---|---:|
-| Passes with the unchanged Tiberius-facing call | 11 |
-| Passes through the current bridge API | 23 |
-| Compile/API gap | 4 |
+| Passes with the unchanged Tiberius-facing call | 14 |
+| Passes through the current bridge API | 24 |
+| Compile/API gap | 0 |
 | Behavioral gap | 0 |
 | Intentional bridge improvement | 2 |
 
@@ -71,6 +71,30 @@ Issue #130 additively exposes borrowed `Row::cells()` and consuming
 existing native row storage without changing `get`, `try_get`, `raw_value`,
 result indexes, cloning, or equality.
 
+Issue #129 additively exposes `TokenRow`, `IntoRow` for scalar and tuple
+arities 2 through 10, and the awaited incremental bulk lifecycle. Awaiting the
+existing `BulkInsert` builder selects the compatibility adapter; calling its
+existing builder methods and batch `send` remains unchanged. Compatibility
+`send` retains rows and checks that every row has the same width. `finalize`
+performs one native `mssql-tds` bulk operation and returns `ExecuteResult`
+with the client-side serialized row count, including `[0]` for an empty load.
+Native usage failures from row encoding, including destination-width and
+oversized-value failures, are exposed as `Error::BulkInput`; server and
+connection errors keep their native error shape. Same-request width mismatches
+fail from `send`; schema-dependent width, type, and length checks run in the
+native writer during `finalize`.
+
+Finalization is mandatory: dropping the compatibility request before
+`finalize` writes no rows. Because the adapter has not started native I/O, the
+client remains reusable. This is stronger than pinned Tiberius, which sends
+`INSERT BULK` before returning its request but has no drop cleanup and leaves
+connection reuse unspecified if the request is abandoned. The adapter also
+leaves its retained rows unchanged after a rejected width mismatch, unlike
+pinned Tiberius encoding, which can modify its packet buffer before returning
+`BulkInput`. The native writer already checks every row against destination
+metadata, and its client-side count avoids inflated results from multiple
+server `DONE_COUNT` tokens.
+
 ## Phase 3 order
 
 | Order | Logical API | Issue | Compile fixtures |
@@ -80,7 +104,7 @@ result indexes, cloning, or equality.
 | 3 | Dynamic `Query` builder | [#127](https://github.com/saurabh500/mssql-tiberius-bridge/issues/127) | `data_api_query_builder.rs` |
 | 4 | `ExecuteResult` access and standard iteration (implemented, additive) | [#131](https://github.com/saurabh500/mssql-tiberius-bridge/issues/131) | `data_api_execute_rows_affected.rs`, `data_api_execute_into_iterator.rs` |
 | 5 | Row cell/consuming iteration (implemented, additive) | [#130](https://github.com/saurabh500/mssql-tiberius-bridge/issues/130) | `data_api_row_iteration.rs` |
-| 6 | `TokenRow`, `IntoRow`, and incremental bulk lifecycle | [#129](https://github.com/saurabh500/mssql-tiberius-bridge/issues/129) | `data_api_bulk_row.rs`, `data_api_bulk_lifecycle.rs` |
+| 6 | `TokenRow`, `IntoRow`, and incremental bulk lifecycle (implemented, additive) | [#129](https://github.com/saurabh500/mssql-tiberius-bridge/issues/129) | `data_api_bulk_row.rs`, `data_api_bulk_lifecycle.rs` |
 
 Unimplemented fixtures are expected compile failures in `tests/compile_fail`.
 Implementing an issue means moving the same source to `tests/pass`; changing a

@@ -92,7 +92,7 @@ impl ColumnData<'_> {
         }
     }
 
-    fn into_column_value(self) -> Result<ColumnValues> {
+    pub(crate) fn into_column_value(self) -> Result<ColumnValues> {
         let value = match self {
             ColumnData::Bit(Some(value)) => ColumnValues::Bit(value),
             ColumnData::U8(Some(value)) => ColumnValues::TinyInt(value),

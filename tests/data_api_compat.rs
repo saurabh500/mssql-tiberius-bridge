@@ -14,7 +14,7 @@ use mssql_tiberius_bridge::bulk::BulkLoadRow;
 use mssql_tiberius_bridge::compat::FromSql as CompatFromSql;
 use mssql_tiberius_bridge::{
     AuthMethod, Client, ColumnData, ColumnType, Config, Error, ExecuteResult, FromSql,
-    FromSqlOwned, IntoSql, Query, QueryItem, Row, ToSql,
+    FromSqlOwned, IntoRow, IntoSql, Query, QueryItem, Row, ToSql,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -70,10 +70,10 @@ const TRACEABILITY: &[Trace] = &[
     Trace { behavior: "dynamic Query binding", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "dynamic_query_builder_*; pass/data_api_query_builder.rs (#127)" },
     Trace { behavior: "dynamic NULL binding through Client::query", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "typed_null_parameter_preserves_column_type" },
     Trace { behavior: "bulk nullable-row success and count", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "bulk_nullable_rows_succeed" },
-    Trace { behavior: "TokenRow helpers", source: "data_api.rs:public_numeric_time_xml_and_token_row_helpers", status: Status::CompileGap, evidence: "compile_fail/data_api_bulk_row.rs (#129)" },
-    Trace { behavior: "IntoRow tuple arities 1 through 10", source: "data_api.rs:public_numeric_time_xml_and_token_row_helpers", status: Status::CompileGap, evidence: "compile_fail/data_api_bulk_row.rs (#129)" },
-    Trace { behavior: "bulk send/finalize lifecycle", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_bulk_lifecycle.rs (#129)" },
-    Trace { behavior: "bulk oversized value returns BulkInput", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::CompileGap, evidence: "current batch BulkInsert API has no Tiberius lifecycle/error type" },
+    Trace { behavior: "TokenRow helpers", source: "data_api.rs:public_numeric_time_xml_and_token_row_helpers", status: Status::UnchangedPass, evidence: "bulk::tests::token_row_helpers_and_tuple_arities_preserve_values; pass/data_api_bulk_row.rs (#129)" },
+    Trace { behavior: "IntoRow tuple arities 1 through 10", source: "data_api.rs:public_numeric_time_xml_and_token_row_helpers", status: Status::UnchangedPass, evidence: "compat_bulk_tuple_arities_finalize_and_reset; pass/data_api_bulk_row.rs (#129)" },
+    Trace { behavior: "bulk send/finalize lifecycle", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "compat_bulk_incremental_lifecycle_validates_and_runs_twice; pass/data_api_bulk_lifecycle.rs (#129)" },
+    Trace { behavior: "bulk oversized value returns BulkInput", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "compat_bulk_oversized_value_is_explicit_input_error (#129)" },
 ];
 
 fn config() -> Option<Config> {
@@ -113,21 +113,21 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::UnchangedPass)
             .count(),
-        11
+        14
     );
     assert_eq!(
         TRACEABILITY
             .iter()
             .filter(|trace| trace.status == Status::AdaptedPass)
             .count(),
-        23
+        24
     );
     assert_eq!(
         TRACEABILITY
             .iter()
             .filter(|trace| trace.status == Status::CompileGap)
             .count(),
-        4
+        0
     );
     assert_eq!(
         TRACEABILITY
@@ -759,6 +759,196 @@ async fn bulk_nullable_rows_succeed() {
             .expect("second bulk row")
             .get::<Option<&str>, _>("value"),
         Some(None)
+    );
+}
+
+#[tokio::test]
+async fn compat_bulk_tuple_arities_finalize_and_reset() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+
+    macro_rules! check_arity {
+        ($table:literal, $columns:literal, $row:expr) => {{
+            client
+                .simple_query(concat!("CREATE TABLE ", $table, " (", $columns, ")"))
+                .await
+                .expect("create tuple-arity table");
+            let mut bulk = client
+                .bulk_insert($table)
+                .await
+                .expect("start compatibility bulk");
+            bulk.send($row.into_row())
+                .await
+                .expect("send tuple-arity row");
+            assert_eq!(
+                bulk.finalize()
+                    .await
+                    .expect("finalize tuple-arity bulk")
+                    .rows_affected(),
+                &[1]
+            );
+        }};
+    }
+
+    check_arity!("#compat_bulk_1", "c1 int", 1i32);
+    check_arity!("#compat_bulk_2", "c1 int, c2 int", (1i32, 2i32));
+    check_arity!(
+        "#compat_bulk_3",
+        "c1 int, c2 int, c3 int",
+        (1i32, 2i32, 3i32)
+    );
+    check_arity!(
+        "#compat_bulk_4",
+        "c1 int, c2 int, c3 int, c4 int",
+        (1i32, 2i32, 3i32, 4i32)
+    );
+    check_arity!(
+        "#compat_bulk_5",
+        "c1 int, c2 int, c3 int, c4 int, c5 int",
+        (1i32, 2i32, 3i32, 4i32, 5i32)
+    );
+    check_arity!(
+        "#compat_bulk_6",
+        "c1 int, c2 int, c3 int, c4 int, c5 int, c6 int",
+        (1i32, 2i32, 3i32, 4i32, 5i32, 6i32)
+    );
+    check_arity!(
+        "#compat_bulk_7",
+        "c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int",
+        (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32)
+    );
+    check_arity!(
+        "#compat_bulk_8",
+        "c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int, c8 int",
+        (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32)
+    );
+    check_arity!(
+        "#compat_bulk_9",
+        "c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int, c8 int, c9 int",
+        (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32, 9i32)
+    );
+    check_arity!(
+        "#compat_bulk_10",
+        "c1 int, c2 int, c3 int, c4 int, c5 int, c6 int, c7 int, c8 int, c9 int, c10 int",
+        (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32, 9i32, 10i32)
+    );
+}
+
+#[tokio::test]
+async fn compat_bulk_incremental_lifecycle_validates_and_runs_twice() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    client
+        .simple_query(
+            "CREATE TABLE #compat_bulk_lifecycle (id int NOT NULL, value nvarchar(8) NULL)",
+        )
+        .await
+        .expect("create lifecycle table");
+
+    let mut first = client
+        .bulk_insert("#compat_bulk_lifecycle")
+        .await
+        .expect("start first compatibility bulk");
+    first
+        .send((1i32, Some("one")).into_row())
+        .await
+        .expect("send healthy row");
+    let error = first
+        .send(2i32.into_row())
+        .await
+        .expect_err("wrong-width row must fail");
+    assert!(matches!(error, Error::BulkInput(_)));
+    first
+        .send((2i32, Option::<&str>::None).into_row())
+        .await
+        .expect("width failure must not poison request");
+    assert_eq!(
+        first
+            .finalize()
+            .await
+            .expect("finalize first compatibility bulk")
+            .rows_affected(),
+        &[2]
+    );
+
+    let mut second = client
+        .bulk_insert("#compat_bulk_lifecycle")
+        .await
+        .expect("start second compatibility bulk");
+    second
+        .send((3i32, Some("three")).into_row())
+        .await
+        .expect("send second-operation row");
+    assert_eq!(
+        second
+            .finalize()
+            .await
+            .expect("finalize second compatibility bulk")
+            .rows_affected(),
+        &[1]
+    );
+
+    let empty = client
+        .bulk_insert("#compat_bulk_lifecycle")
+        .await
+        .expect("start empty compatibility bulk")
+        .finalize()
+        .await
+        .expect("finalize empty compatibility bulk");
+    assert_eq!(empty.rows_affected(), &[0]);
+
+    let abandoned = client
+        .bulk_insert("#compat_bulk_lifecycle")
+        .await
+        .expect("start abandoned compatibility bulk");
+    drop(abandoned);
+    assert_eq!(
+        client
+            .simple_query("SELECT COUNT(*) AS n FROM #compat_bulk_lifecycle")
+            .await
+            .expect("client remains usable after unsent request drop")
+            .into_first_result()
+            .first()
+            .and_then(|row| row.get::<i32, _>("n")),
+        Some(3)
+    );
+}
+
+#[tokio::test]
+async fn compat_bulk_oversized_value_is_explicit_input_error() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    client
+        .simple_query("CREATE TABLE #compat_bulk_limit (value nvarchar(8) NOT NULL)")
+        .await
+        .expect("create limited-width table");
+    let mut bulk = client
+        .bulk_insert("#compat_bulk_limit")
+        .await
+        .expect("start limited-width bulk");
+    bulk.send("too long for nvarchar(8)".into_row())
+        .await
+        .expect("compatibility adapter retains rows until finalize");
+    assert!(matches!(bulk.finalize().await, Err(Error::BulkInput(_))));
+
+    let mut healthy = client
+        .bulk_insert("#compat_bulk_limit")
+        .await
+        .expect("start healthy bulk after completed input error");
+    healthy
+        .send("fits".into_row())
+        .await
+        .expect("healthy input stays quiet");
+    assert_eq!(
+        healthy
+            .finalize()
+            .await
+            .expect("healthy bulk succeeds")
+            .rows_affected(),
+        &[1]
     );
 }
 

@@ -174,6 +174,44 @@ impl ColumnData<'_> {
     }
 }
 
+impl NativeToSql for ColumnData<'_> {
+    fn to_sql(&self) -> SqlType {
+        match self.clone() {
+            ColumnData::Bit(value) => SqlType::Bit(value),
+            ColumnData::U8(value) => SqlType::TinyInt(value),
+            ColumnData::I16(value) => SqlType::SmallInt(value),
+            ColumnData::I32(value) => SqlType::Int(value),
+            ColumnData::I64(value) => SqlType::BigInt(value),
+            ColumnData::F32(value) => SqlType::Real(value),
+            ColumnData::F64(value) => SqlType::Float(value),
+            ColumnData::String(value) => SqlType::NVarchar(
+                value.map(|value| SqlString::from_utf8_string(value.into_owned())),
+                4000,
+            ),
+            ColumnData::Guid(value) => SqlType::Uuid(value),
+            ColumnData::Binary(value) => {
+                SqlType::VarBinaryMax(value.map(|value| value.into_owned()))
+            }
+            ColumnData::Numeric(value) => SqlType::Numeric(value),
+            ColumnData::Xml(value) => {
+                SqlType::Xml(value.map(|value| SqlXml::from(value.into_owned())))
+            }
+            ColumnData::DateTime(value) => SqlType::DateTime(value),
+            ColumnData::SmallDateTime(value) => SqlType::SmallDateTime(value),
+            ColumnData::Time(value) => SqlType::Time(value),
+            ColumnData::Date(value) => SqlType::Date(value),
+            ColumnData::DateTime2(value) => SqlType::DateTime2(value),
+            ColumnData::DateTimeOffset(value) => SqlType::DateTimeOffset(value),
+            ColumnData::Money(value) => SqlType::Money(value),
+            ColumnData::SmallMoney(value) => SqlType::SmallMoney(value),
+            ColumnData::Json(value) => {
+                SqlType::Json(value.map(|value| SqlJson::from(value.into_owned())))
+            }
+            ColumnData::Native(value) => value,
+        }
+    }
+}
+
 /// Tiberius-shaped by-reference conversion to [`ColumnData`].
 pub trait ToSql: Send + Sync {
     fn to_sql(&self) -> ColumnData<'static>;

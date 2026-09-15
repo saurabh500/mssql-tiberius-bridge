@@ -14,7 +14,7 @@ use mssql_tiberius_bridge::bulk::BulkLoadRow;
 use mssql_tiberius_bridge::compat::FromSql as CompatFromSql;
 use mssql_tiberius_bridge::{
     AuthMethod, Client, ColumnData, ColumnType, Config, Error, FromSql, FromSqlOwned, IntoSql,
-    QueryItem, Row, ToSql,
+    Query, QueryItem, Row, ToSql,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -67,7 +67,7 @@ const TRACEABILITY: &[Trace] = &[
     Trace { behavior: "ExecuteResult inherent into_iter", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "execute_counts_iterate_and_total" },
     Trace { behavior: "ExecuteResult rows_affected", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_execute_rows_affected.rs (#131)" },
     Trace { behavior: "ExecuteResult IntoIterator trait", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_execute_into_iterator.rs (#131)" },
-    Trace { behavior: "dynamic Query binding", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_query_builder.rs (#127)" },
+    Trace { behavior: "dynamic Query binding", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "dynamic_query_builder_*; pass/data_api_query_builder.rs (#127)" },
     Trace { behavior: "dynamic NULL binding through Client::query", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "typed_null_parameter_preserves_column_type" },
     Trace { behavior: "bulk nullable-row success and count", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "bulk_nullable_rows_succeed" },
     Trace { behavior: "TokenRow helpers", source: "data_api.rs:public_numeric_time_xml_and_token_row_helpers", status: Status::CompileGap, evidence: "compile_fail/data_api_bulk_row.rs (#129)" },
@@ -113,7 +113,7 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::UnchangedPass)
             .count(),
-        7
+        8
     );
     assert_eq!(
         TRACEABILITY
@@ -127,7 +127,7 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::CompileGap)
             .count(),
-        8
+        7
     );
     assert_eq!(
         TRACEABILITY
@@ -489,6 +489,107 @@ async fn typed_null_parameter_preserves_column_type() {
         ColumnType::Int4
     );
     assert_eq!(row.get::<Option<i32>, _>("nullable"), Some(None));
+}
+
+#[tokio::test]
+async fn dynamic_query_builder_queries_in_binding_order() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    let borrowed = String::from("borrowed");
+    let mut query = Query::new("SELECT @P1 AS first_value, @P2 AS second_value");
+    query.bind(borrowed.as_str());
+    query.bind(String::from("owned"));
+
+    let row = query
+        .query(&mut client)
+        .await
+        .expect("start dynamic query")
+        .into_row()
+        .await
+        .expect("read dynamic query")
+        .expect("dynamic query row");
+    assert_eq!(row.get::<&str, _>("first_value"), Some("borrowed"));
+    assert_eq!(row.get::<&str, _>("second_value"), Some("owned"));
+}
+
+#[tokio::test]
+async fn dynamic_query_builder_executes_and_is_recreated_for_repeated_use() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    client
+        .simple_query("CREATE TABLE #compat_query_builder (id int NOT NULL)")
+        .await
+        .expect("create dynamic query table");
+
+    let mut first = Query::new("INSERT INTO #compat_query_builder VALUES (@P1), (@P2)");
+    first.bind(1i32);
+    first.bind(2i32);
+    assert_eq!(
+        first
+            .execute(&mut client)
+            .await
+            .expect("execute first dynamic query")
+            .total(),
+        2
+    );
+
+    let mut second = Query::new(String::from(
+        "UPDATE #compat_query_builder SET id = id + @P1",
+    ));
+    second.bind(10i32);
+    assert_eq!(
+        second
+            .execute(&mut client)
+            .await
+            .expect("execute second dynamic query")
+            .total(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn dynamic_query_builder_preserves_typed_null() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    let mut query = Query::new("SELECT @P1 AS nullable");
+    query.bind(Option::<i32>::None);
+
+    let row = query
+        .query(&mut client)
+        .await
+        .expect("start typed NULL query")
+        .into_row()
+        .await
+        .expect("read typed NULL query")
+        .expect("typed NULL row");
+    assert_eq!(
+        row.columns()
+            .first()
+            .expect("typed NULL column metadata")
+            .column_type(),
+        ColumnType::Int4
+    );
+    assert_eq!(row.get::<Option<i32>, _>("nullable"), Some(None));
+}
+
+#[tokio::test]
+async fn dynamic_query_builder_propagates_server_parameter_errors() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    let missing = Query::new("SELECT @P1");
+    assert!(missing.query(&mut client).await.err().is_some());
+
+    let mut wrong_type = Query::new("SELECT CAST(@P1 AS int)");
+    wrong_type.bind("not an integer");
+    let stream = wrong_type
+        .query(&mut client)
+        .await
+        .expect("server emits metadata before evaluating the cast");
+    assert!(stream.into_results().await.err().is_some());
 }
 
 #[derive(Clone)]

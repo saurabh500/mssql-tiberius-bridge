@@ -12,9 +12,9 @@ The machine-readable traceability matrix is `TRACEABILITY` in
 
 | Status | Scenarios |
 |---|---:|
-| Passes with the unchanged Tiberius-facing call | 7 |
+| Passes with the unchanged Tiberius-facing call | 8 |
 | Passes through the current bridge API | 23 |
-| Compile/API gap | 8 |
+| Compile/API gap | 7 |
 | Behavioral gap | 0 |
 | Intentional bridge improvement | 2 |
 
@@ -47,6 +47,13 @@ representing either NULL or mismatch as `None`.
 and are also available under `compat`. `compat::FromSql` and `compat::ToSql`
 provide Tiberius-shaped return values without changing the bridge-native root
 conversion traits used by connection APIs.
+
+Issue #127 adds the dynamic `compat::Query` builder and its crate-root
+re-export. The builder accepts borrowed or owned SQL, appends dynamic
+parameters in `@P1`, `@P2`, ... order, preserves typed NULLs, and is consumed
+by `query` or `execute`. It reuses the compatibility stream and bridge-native
+parameter/execution paths; all existing `Client` methods and root/native
+result behavior remain unchanged.
 Encoding delegates to the existing native `ToSql` implementations for
 primitives, strings and bytes, UUID, `rust_decimal`, `chrono`, and enabled
 `time`/`jiff` types. Native vector, variant, and table parameters use

@@ -10,6 +10,8 @@ use mssql_tds::message::parameters::rpc_parameters::{RpcParameter, StatusFlags};
 
 use crate::row::Row;
 
+pub use crate::compat::Query;
+
 /// Result of an `execute()` call, containing row counts per statement.
 #[derive(Debug, Clone)]
 pub struct ExecuteResult {

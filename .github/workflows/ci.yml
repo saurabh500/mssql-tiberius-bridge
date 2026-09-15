@@ -162,7 +162,7 @@ jobs:
           # Strict-mode tests. The cert was generated with CA:TRUE above so
           # rustls accepts it as a root.
           TEST_DB_CA: ${{ runner.temp }}/mssql-tls/mssql.pem
-        run: cargo llvm-cov --all-targets --features arrow,serde,time,jiff --fail-under-lines 90 --lcov --output-path lcov.info
+        run: cargo llvm-cov --all-targets --features arrow,serde,time,jiff,bb8 --fail-under-lines 90 --lcov --output-path lcov.info
 
       - name: SQL Server logs (on failure)
         if: failure()

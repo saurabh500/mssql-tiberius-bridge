@@ -37,8 +37,8 @@ error[E0599]: no method named `rows_affected` found for struct `ExecuteResult` i
 8 |     let _: &[u64] = result.rows_affected();
   |                            ^^^^^^^^^^^^^ method not found in `ExecuteResult`
 
-error[E0599]: no variant or associated item named `BulkInput` found for enum `mssql_tiberius_bridge::Error` in the current scope
+error[E0599]: no variant, associated function, or constant named `BulkInput` found for enum `mssql_tiberius_bridge::Error` in the current scope
   --> tests/compile_fail/data_api_bulk_lifecycle.rs:13:36
    |
 13 |     assert!(matches!(error, Error::BulkInput(_)));
-   |                                    ^^^^^^^^^ variant or associated item not found in `mssql_tiberius_bridge::Error`
+   |                                    ^^^^^^^^^ variant, associated function, or constant not found in `mssql_tiberius_bridge::Error`

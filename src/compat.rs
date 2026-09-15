@@ -128,7 +128,7 @@ impl<'a> QueryStream<'a> {
                     self.columns = None;
                     return Err(error);
                 }
-                None => self.columns = None,
+                None => {}
             }
         }
 
@@ -199,7 +199,7 @@ impl Stream for QueryStream<'_> {
             Poll::Ready(Some(Ok(QueryItem::Metadata(metadata)))) => {
                 self.columns = Some(Arc::clone(&metadata.schema));
             }
-            Poll::Ready(Some(Err(_)) | None) => self.columns = None,
+            Poll::Ready(Some(Err(_))) => self.columns = None,
             _ => {}
         }
         item
@@ -321,6 +321,22 @@ mod tests {
             .await
             .expect("columns after error")
             .is_none());
+    }
+
+    #[tokio::test]
+    async fn clean_eof_keeps_current_columns() {
+        let mut stream = QueryStream::new(Box::pin(futures_util::stream::iter([Ok(
+            QueryItem::Metadata(ResultMetadata::new(schema(), 0)),
+        )])));
+
+        assert!(stream.columns().await.expect("columns").is_some());
+        assert!(stream.next().await.is_some());
+        assert!(stream.next().await.is_none());
+        assert!(stream
+            .columns()
+            .await
+            .expect("columns after clean EOF")
+            .is_some());
     }
 
     #[tokio::test]

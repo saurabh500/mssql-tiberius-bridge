@@ -615,13 +615,11 @@ fn compat_conversion_traits_cover_values_nulls_and_errors() {
     );
 
     assert_eq!(
-        <i32 as CompatFromSql>::from_sql(&ColumnValues::Null).expect("decode NULL"),
+        <i32 as CompatFromSql>::from_sql(&ColumnData::I32(None)).expect("decode NULL"),
         None
     );
     assert!(matches!(
-        <i32 as CompatFromSql>::from_sql(&ColumnValues::String(SqlString::from_utf8_string(
-            "wrong".into()
-        ))),
+        <i32 as CompatFromSql>::from_sql(&ColumnData::String(Some("wrong".into()))),
         Err(Error::Conversion(_))
     ));
     assert!(matches!(

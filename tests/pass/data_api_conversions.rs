@@ -1,5 +1,5 @@
 // Compatibility issue: https://github.com/saurabh500/mssql-tiberius-bridge/issues/128
-use mssql_tiberius_bridge::{ColumnData, FromSql, FromSqlOwned, IntoSql};
+use mssql_tiberius_bridge::{compat::FromSql, ColumnData, FromSqlOwned, IntoSql};
 
 fn conversions<T, O>(value: T, borrowed: &ColumnData<'_>)
 where

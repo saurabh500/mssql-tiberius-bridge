@@ -34,7 +34,7 @@ once because the bridge's native error is not cloneable; a later stream poll
 continues after that error. Existing buffered and row-only streaming methods
 keep their contracts.
 
-Issue #127 adds the conversion/error layer without changing existing
+Issue #128 adds the conversion/error layer without changing existing
 bridge-native APIs. `compat::FromSql` has Tiberius's fallible
 `Result<Option<T>>` shape over the bridge's public `ColumnValues`; SQL NULL is
 `Ok(None)`, while a non-NULL type mismatch is `Error::Conversion`.

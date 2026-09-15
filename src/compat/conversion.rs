@@ -145,6 +145,33 @@ impl ColumnData<'_> {
         };
         Ok(value)
     }
+
+    fn is_null(&self) -> bool {
+        matches!(
+            self,
+            ColumnData::Bit(None)
+                | ColumnData::U8(None)
+                | ColumnData::I16(None)
+                | ColumnData::I32(None)
+                | ColumnData::I64(None)
+                | ColumnData::F32(None)
+                | ColumnData::F64(None)
+                | ColumnData::String(None)
+                | ColumnData::Guid(None)
+                | ColumnData::Binary(None)
+                | ColumnData::Numeric(None)
+                | ColumnData::Xml(None)
+                | ColumnData::DateTime(None)
+                | ColumnData::SmallDateTime(None)
+                | ColumnData::Time(None)
+                | ColumnData::Date(None)
+                | ColumnData::DateTime2(None)
+                | ColumnData::DateTimeOffset(None)
+                | ColumnData::Money(None)
+                | ColumnData::SmallMoney(None)
+                | ColumnData::Json(None)
+        )
+    }
 }
 
 /// Tiberius-shaped by-reference conversion to [`ColumnData`].
@@ -169,19 +196,113 @@ impl<'a, T: NativeToSql> IntoSql<'a> for T {
     }
 }
 
-/// Convert an owned compatibility value through the shared row decoder.
+trait FromColumnData<'a>: Sized {
+    fn from_column_data(value: &'a ColumnData<'_>) -> Result<Option<Self>>;
+}
+
+fn decode_owned<T>(value: &ColumnData<'_>) -> Result<Option<T>>
+where
+    T: for<'a> NativeFromSql<'a>,
+{
+    let value = value.clone().into_column_value()?;
+    match (&value, T::from_sql(&value)) {
+        (ColumnValues::Null, _) => Ok(None),
+        (_, Some(value)) => Ok(Some(value)),
+        _ => Err(Error::Conversion(format!(
+            "cannot interpret {value:?} as {}",
+            std::any::type_name::<T>()
+        ))),
+    }
+}
+
+macro_rules! from_column_data_owned {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl<'a> FromColumnData<'a> for $ty {
+                fn from_column_data(value: &'a ColumnData<'_>) -> Result<Option<Self>> {
+                    decode_owned(value)
+                }
+            }
+        )+
+    };
+}
+
+from_column_data_owned!(
+    bool,
+    u8,
+    i16,
+    i32,
+    i64,
+    f32,
+    f64,
+    String,
+    Uuid,
+    Vec<u8>,
+    serde_json::Value,
+    chrono::NaiveDate,
+    chrono::NaiveTime,
+    chrono::NaiveDateTime,
+    chrono::DateTime<chrono::FixedOffset>,
+    rust_decimal::Decimal,
+);
+
+#[cfg(feature = "time")]
+from_column_data_owned!(
+    time::Date,
+    time::Time,
+    time::PrimitiveDateTime,
+    time::OffsetDateTime,
+);
+
+#[cfg(feature = "jiff")]
+from_column_data_owned!(
+    jiff::civil::Date,
+    jiff::civil::Time,
+    jiff::civil::DateTime,
+    jiff::Timestamp,
+    jiff::Zoned,
+);
+
+impl<'a> FromColumnData<'a> for &'a str {
+    fn from_column_data(value: &'a ColumnData<'_>) -> Result<Option<Self>> {
+        match value {
+            ColumnData::String(Some(value)) => Ok(Some(value.as_ref())),
+            _ if value.is_null() => Ok(None),
+            _ => Err(Error::Conversion(format!(
+                "cannot interpret {value:?} as &str"
+            ))),
+        }
+    }
+}
+
+impl<'a> FromColumnData<'a> for &'a [u8] {
+    fn from_column_data(value: &'a ColumnData<'_>) -> Result<Option<Self>> {
+        match value {
+            ColumnData::Binary(Some(value)) => Ok(Some(value.as_ref())),
+            _ if value.is_null() => Ok(None),
+            _ => Err(Error::Conversion(format!(
+                "cannot interpret {value:?} as &[u8]"
+            ))),
+        }
+    }
+}
+
+/// Convert a compatibility value through the shared row decoder.
 pub trait FromSql<'a>: Sized {
     /// SQL NULL is `Ok(None)`; a non-NULL type mismatch is an error.
-    fn from_sql(value: &'a ColumnValues) -> Result<Option<Self>>;
+    fn from_sql(value: &'a ColumnData<'_>) -> Result<Option<Self>>;
 
     #[doc(hidden)]
     fn from_sql_with_str(value: &'a ColumnValues, decoded: Option<&'a str>)
         -> Result<Option<Self>>;
 }
 
-impl<'a, T: NativeFromSql<'a>> FromSql<'a> for T {
-    fn from_sql(value: &'a ColumnValues) -> Result<Option<Self>> {
-        <Self as FromSql>::from_sql_with_str(value, None)
+impl<'a, T> FromSql<'a> for T
+where
+    T: NativeFromSql<'a> + FromColumnData<'a>,
+{
+    fn from_sql(value: &'a ColumnData<'_>) -> Result<Option<Self>> {
+        T::from_column_data(value)
     }
 
     fn from_sql_with_str(
@@ -209,7 +330,6 @@ where
     T: for<'a> FromSql<'a>,
 {
     fn from_sql_owned(value: ColumnData<'static>) -> Result<Option<Self>> {
-        let value = value.into_column_value()?;
         <T as FromSql>::from_sql(&value)
     }
 }
@@ -235,6 +355,20 @@ mod tests {
         assert!(matches!(
             bytes.as_slice().into_sql(),
             ColumnData::Binary(Some(value)) if value.as_ref() == bytes
+        ));
+
+        let borrowed = ColumnData::String(Some(Cow::Borrowed("borrowed")));
+        assert_eq!(
+            <&str as FromSql>::from_sql(&borrowed).expect("decode borrowed string"),
+            Some("borrowed")
+        );
+        assert_eq!(
+            <i32 as FromSql>::from_sql(&ColumnData::I32(None)).expect("decode NULL"),
+            None
+        );
+        assert!(matches!(
+            <i32 as FromSql>::from_sql(&borrowed),
+            Err(Error::Conversion(_))
         ));
     }
 

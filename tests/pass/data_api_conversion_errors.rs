@@ -1,7 +1,7 @@
 // Compatibility issue: https://github.com/saurabh500/mssql-tiberius-bridge/issues/128
-use mssql_tiberius_bridge::{compat::FromSql, ColumnValues, Result};
+use mssql_tiberius_bridge::{compat::FromSql, ColumnData, Result};
 
-fn convert(value: &ColumnValues) -> Result<Option<i32>> {
+fn convert(value: &ColumnData<'static>) -> Result<Option<i32>> {
     i32::from_sql(value)
 }
 

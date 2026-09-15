@@ -335,6 +335,43 @@ async fn dropping_stream_between_rows_preserves_reuse() {
 }
 
 #[tokio::test]
+async fn dropping_compat_stream_after_metadata_preserves_reuse() {
+    let Some(mut client) = live_client().await else {
+        return;
+    };
+    {
+        let mut stream =
+            client.simple_query_compat("SELECT 1 AS n UNION ALL SELECT 2; SELECT 3 AS n");
+        let columns = timeout(IO_BOUND, stream.columns())
+            .await
+            .expect("metadata timed out")
+            .expect("metadata failed")
+            .expect("missing metadata");
+        assert_eq!(columns.first().expect("metadata column").name(), "n");
+    }
+    assert_select_one(&mut client).await;
+}
+
+#[tokio::test]
+async fn compat_columns_sql_error_preserves_reuse() {
+    let Some(mut client) = live_client().await else {
+        return;
+    };
+    {
+        let mut stream =
+            client.simple_query_compat("RAISERROR ('expected compatibility error', 16, 1)");
+        let result = timeout(IO_BOUND, stream.columns())
+            .await
+            .expect("compatibility error timed out");
+        assert!(matches!(
+            result,
+            Err(Error::Tds(mssql_tds::error::Error::SqlServerError { .. }))
+        ));
+    }
+    assert_select_one(&mut client).await;
+}
+
+#[tokio::test]
 async fn unpolled_operations_and_unused_builders_preserve_reuse() {
     let Some(mut client) = live_client().await else {
         return;
@@ -347,6 +384,8 @@ async fn unpolled_operations_and_unused_builders_preserve_reuse() {
     drop(client.reset_session());
     drop(client.simple_query_streamed(WAIT_QUERY));
     drop(client.query_streamed("SELECT @P1", &[&1i32]));
+    drop(client.simple_query_compat(WAIT_QUERY));
+    drop(client.query_compat("SELECT @P1", &[&1i32]));
     drop(client.bulk_insert("#unused"));
     drop(client.bulk_insert_with_columns("#unused", &["n"]));
     drop(

@@ -54,6 +54,7 @@ impl RowSchema {
 pub struct Row {
     schema: Arc<RowSchema>,
     values: Vec<ColumnValues>,
+    result_index: usize,
     /// Pre-decoded UTF-8 strings for &str borrowing support.
     decoded_strings: Vec<Option<String>>,
 }
@@ -75,6 +76,7 @@ impl Row {
         Row {
             schema,
             values,
+            result_index: 0,
             decoded_strings,
         }
     }
@@ -91,6 +93,11 @@ impl Row {
     /// Column metadata for this row.
     pub fn columns(&self) -> &[Column] {
         &self.schema.columns
+    }
+
+    /// Zero-based index of the result set that produced this row.
+    pub fn result_index(&self) -> usize {
+        self.result_index
     }
 
     /// Number of columns.
@@ -693,16 +700,23 @@ impl<'a> FromSql<'a> for rust_decimal::Decimal {
 /// pass over values to decode strings.
 pub(crate) struct BridgeRowWriter {
     schema: Arc<RowSchema>,
+    result_index: usize,
     values: Vec<ColumnValues>,
     decoded_strings: Vec<Option<String>>,
     col_count: usize,
 }
 
 impl BridgeRowWriter {
+    #[cfg(test)]
     pub(crate) fn new(schema: Arc<RowSchema>) -> Self {
+        Self::with_result_index(schema, 0)
+    }
+
+    pub(crate) fn with_result_index(schema: Arc<RowSchema>, result_index: usize) -> Self {
         let col_count = schema.columns.len();
         Self {
             schema,
+            result_index,
             values: Vec::with_capacity(col_count),
             decoded_strings: Vec::with_capacity(col_count),
             col_count,
@@ -719,6 +733,7 @@ impl BridgeRowWriter {
         Row {
             schema: self.schema.clone(),
             values,
+            result_index: self.result_index,
             decoded_strings,
         }
     }

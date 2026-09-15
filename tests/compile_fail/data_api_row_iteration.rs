@@ -1,4 +1,4 @@
-// Compatibility issue: https://github.com/saurabh500/mssql-tiberius-bridge/issues/128
+// Compatibility issue: https://github.com/saurabh500/mssql-tiberius-bridge/issues/130
 use mssql_tiberius_bridge::Row;
 
 fn inspect(row: Row) {

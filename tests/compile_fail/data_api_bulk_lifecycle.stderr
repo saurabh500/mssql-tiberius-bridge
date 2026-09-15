@@ -1,8 +1,8 @@
 error[E0432]: unresolved import `mssql_tiberius_bridge::IntoRow`
- --> tests/compile_fail/data_api_bulk_lifecycle.rs:2:37
+ --> tests/compile_fail/data_api_bulk_lifecycle.rs:2:59
   |
-2 | use mssql_tiberius_bridge::{Client, IntoRow, Result};
-  |                                     ^^^^^^^ no `IntoRow` in the root
+2 | use mssql_tiberius_bridge::{Client, Error, ExecuteResult, IntoRow, Result};
+  |                                                           ^^^^^^^ no `IntoRow` in the root
 
 error[E0277]: `BulkInsert<'_>` is not a future
  --> tests/compile_fail/data_api_bulk_lifecycle.rs:5:49
@@ -30,3 +30,15 @@ help: there is a method `into` with a similar name
 6 -     bulk.send((1i32, Option::<&str>::None).into_row()).await?;
 6 +     bulk.send((1i32, Option::<&str>::None).into()).await?;
   |
+
+error[E0599]: no method named `rows_affected` found for struct `ExecuteResult` in the current scope
+ --> tests/compile_fail/data_api_bulk_lifecycle.rs:8:28
+  |
+8 |     let _: &[u64] = result.rows_affected();
+  |                            ^^^^^^^^^^^^^ method not found in `ExecuteResult`
+
+error[E0599]: no variant, associated function, or constant named `BulkInput` found for enum `mssql_tiberius_bridge::Error` in the current scope
+  --> tests/compile_fail/data_api_bulk_lifecycle.rs:13:36
+   |
+13 |     assert!(matches!(error, Error::BulkInput(_)));
+   |                                    ^^^^^^^^^ variant, associated function, or constant not found in `mssql_tiberius_bridge::Error`

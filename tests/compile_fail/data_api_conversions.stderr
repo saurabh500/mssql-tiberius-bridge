@@ -1,51 +1,8 @@
 error[E0432]: unresolved imports `mssql_tiberius_bridge::ColumnData`, `mssql_tiberius_bridge::FromSqlOwned`, `mssql_tiberius_bridge::IntoSql`
  --> tests/compile_fail/data_api_conversions.rs:2:29
   |
-2 | use mssql_tiberius_bridge::{ColumnData, FromSqlOwned, IntoSql};
-  |                             ^^^^^^^^^^  ^^^^^^^^^^^^  ^^^^^^^ no `IntoSql` in the root
-  |                             |           |
-  |                             |           no `FromSqlOwned` in the root
+2 | use mssql_tiberius_bridge::{ColumnData, FromSql, FromSqlOwned, IntoSql};
+  |                             ^^^^^^^^^^           ^^^^^^^^^^^^  ^^^^^^^ no `IntoSql` in the root
+  |                             |                    |
+  |                             |                    no `FromSqlOwned` in the root
   |                             no `ColumnData` in the root
-
-error[E0599]: no method named `into_sql` found for struct `std::string::String` in the current scope
- --> tests/compile_fail/data_api_conversions.rs:5:38
-  |
-5 |     let data = String::from("owned").into_sql();
-  |                                      ^^^^^^^^
-  |
-help: there is a method `to_sql` with a similar name
-  |
-5 -     let data = String::from("owned").into_sql();
-5 +     let data = String::from("owned").to_sql();
-  |
-
-error[E0599]: no function or associated item named `from_sql_owned` found for struct `std::string::String` in the current scope
- --> tests/compile_fail/data_api_conversions.rs:6:21
-  |
-6 |     let _ = String::from_sql_owned(data);
-  |                     ^^^^^^^^^^^^^^ function or associated item not found in `std::string::String`
-  |
-note: if you're trying to build a new `std::string::String` consider using one of the following associated functions:
-      std::string::String::new
-      std::string::String::with_capacity
-      std::string::String::try_with_capacity
-      std::string::String::from_utf8
-      and $N others
- --> $RUST/alloc/src/string.rs
-  |
-  |     pub const fn new() -> String {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-...
-  |     pub fn with_capacity(capacity: usize) -> String {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-...
-  |     pub fn try_with_capacity(capacity: usize) -> Result<String, TryReserveError> {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-...
-  |     pub fn from_utf8(vec: Vec<u8>) -> Result<String, FromUtf8Error> {
-  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
-help: there is an associated function `from_sql` with a similar name
-  |
-6 -     let _ = String::from_sql_owned(data);
-6 +     let _ = String::from_sql(data);
-  |

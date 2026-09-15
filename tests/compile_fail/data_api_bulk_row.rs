@@ -1,4 +1,4 @@
-// Compatibility issue: https://github.com/saurabh500/mssql-tiberius-bridge/issues/131
+// Compatibility issue: https://github.com/saurabh500/mssql-tiberius-bridge/issues/129
 use mssql_tiberius_bridge::{IntoRow, IntoSql, TokenRow};
 
 fn main() {
@@ -8,5 +8,20 @@ fn main() {
     let _ = row.iter().count();
     let _ = row.clone().into_iter().count();
     row.clear();
+    let _ = 1i32.into_row();
     let _ = (1i32, 2i32).into_row();
+    let _ = (1i32, 2i32, 3i32).into_row();
+    let _ = (1i32, 2i32, 3i32, 4i32).into_row();
+    let _ = (1i32, 2i32, 3i32, 4i32, 5i32).into_row();
+    let _ = (1i32, 2i32, 3i32, 4i32, 5i32, 6i32).into_row();
+    let _ = (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32).into_row();
+    let _ = (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32).into_row();
+    let _ = (
+        1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32, 9i32,
+    )
+        .into_row();
+    let _ = (
+        1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32, 9i32, 10i32,
+    )
+        .into_row();
 }

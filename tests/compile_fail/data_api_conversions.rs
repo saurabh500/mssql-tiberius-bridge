@@ -1,8 +1,14 @@
-// Compatibility issue: https://github.com/saurabh500/mssql-tiberius-bridge/issues/127
-use mssql_tiberius_bridge::{ColumnData, FromSqlOwned, IntoSql};
+// Compatibility issue: https://github.com/saurabh500/mssql-tiberius-bridge/issues/128
+use mssql_tiberius_bridge::{ColumnData, FromSql, FromSqlOwned, IntoSql};
 
-fn main() {
-    let data = String::from("owned").into_sql();
-    let _ = String::from_sql_owned(data);
-    let _: Option<ColumnData<'static>> = None;
+fn conversions<T, O>(value: T, borrowed: &ColumnData<'_>)
+where
+    T: IntoSql<'static>,
+    O: FromSqlOwned,
+{
+    let data = <T as IntoSql>::into_sql(value);
+    let _ = <O as FromSqlOwned>::from_sql_owned(data);
+    let _ = <&str as FromSql>::from_sql(borrowed);
 }
+
+fn main() {}

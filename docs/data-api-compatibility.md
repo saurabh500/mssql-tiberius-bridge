@@ -30,11 +30,11 @@ are collected for the latter.
 | Order | Logical API | Issue | Compile fixtures |
 |---:|---|---|---|
 | 1 | Query stream/items, metadata, result indexes, async collectors | [#125](https://github.com/saurabh500/mssql-tiberius-bridge/issues/125) | `data_api_query_stream.rs`, `data_api_query_stream_collectors.rs` |
-| 2 | Public conversion traits and error channel | [#127](https://github.com/saurabh500/mssql-tiberius-bridge/issues/127) | `data_api_conversions.rs`, `data_api_conversion_errors.rs` |
-| 3 | Dynamic `Query` builder | [#129](https://github.com/saurabh500/mssql-tiberius-bridge/issues/129) | `data_api_query_builder.rs` |
-| 4 | `ExecuteResult` access and standard iteration | [#130](https://github.com/saurabh500/mssql-tiberius-bridge/issues/130) | `data_api_execute_rows_affected.rs`, `data_api_execute_into_iterator.rs` |
-| 5 | Row cell/consuming iteration | [#128](https://github.com/saurabh500/mssql-tiberius-bridge/issues/128) | `data_api_row_iteration.rs` |
-| 6 | `TokenRow`, `IntoRow`, and incremental bulk lifecycle | [#131](https://github.com/saurabh500/mssql-tiberius-bridge/issues/131) | `data_api_bulk_row.rs`, `data_api_bulk_lifecycle.rs` |
+| 2 | Public conversion traits and error channel | [#128](https://github.com/saurabh500/mssql-tiberius-bridge/issues/128) | `data_api_conversions.rs`, `data_api_conversion_errors.rs` |
+| 3 | Dynamic `Query` builder | [#127](https://github.com/saurabh500/mssql-tiberius-bridge/issues/127) | `data_api_query_builder.rs` |
+| 4 | `ExecuteResult` access and standard iteration | [#131](https://github.com/saurabh500/mssql-tiberius-bridge/issues/131) | `data_api_execute_rows_affected.rs`, `data_api_execute_into_iterator.rs` |
+| 5 | Row cell/consuming iteration | [#130](https://github.com/saurabh500/mssql-tiberius-bridge/issues/130) | `data_api_row_iteration.rs` |
+| 6 | `TokenRow`, `IntoRow`, and incremental bulk lifecycle | [#129](https://github.com/saurabh500/mssql-tiberius-bridge/issues/129) | `data_api_bulk_row.rs`, `data_api_bulk_lifecycle.rs` |
 
 Each fixture is an expected compile failure in `tests/compile_fail`. Implementing
 its issue means moving the same source to a trybuild pass suite; changing the

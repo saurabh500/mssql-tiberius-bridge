@@ -974,7 +974,12 @@ mod tests {
     #[test]
     fn option_none_preserves_the_inner_parameter_type() {
         assert!(matches!(None::<bool>.to_sql(), SqlType::Bit(None)));
+        assert!(matches!(None::<u8>.to_sql(), SqlType::TinyInt(None)));
+        assert!(matches!(None::<i16>.to_sql(), SqlType::SmallInt(None)));
         assert!(matches!(None::<i32>.to_sql(), SqlType::Int(None)));
+        assert!(matches!(None::<i64>.to_sql(), SqlType::BigInt(None)));
+        assert!(matches!(None::<f32>.to_sql(), SqlType::Real(None)));
+        assert!(matches!(None::<f64>.to_sql(), SqlType::Float(None)));
         assert!(matches!(
             None::<String>.to_sql(),
             SqlType::NVarchar(None, 4000)
@@ -987,6 +992,22 @@ mod tests {
         assert!(matches!(
             None::<rust_decimal::Decimal>.to_sql(),
             SqlType::Numeric(None)
+        ));
+        assert!(matches!(
+            None::<chrono::NaiveDate>.to_sql(),
+            SqlType::Date(None)
+        ));
+        assert!(matches!(
+            None::<chrono::NaiveTime>.to_sql(),
+            SqlType::Time(None)
+        ));
+        assert!(matches!(
+            None::<chrono::NaiveDateTime>.to_sql(),
+            SqlType::DateTime2(None)
+        ));
+        assert!(matches!(
+            into_typed_null(SqlType::Variant(Box::new(SqlType::Int(Some(1))))),
+            SqlType::Variant(inner) if matches!(*inner, SqlType::Int(None))
         ));
     }
 

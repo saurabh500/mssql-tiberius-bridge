@@ -31,12 +31,6 @@ help: there is a method `into` with a similar name
 6 +     bulk.send((1i32, Option::<&str>::None).into()).await?;
   |
 
-error[E0599]: no method named `rows_affected` found for struct `ExecuteResult` in the current scope
- --> tests/compile_fail/data_api_bulk_lifecycle.rs:8:28
-  |
-8 |     let _: &[u64] = result.rows_affected();
-  |                            ^^^^^^^^^^^^^ method not found in `ExecuteResult`
-
 error[E0599]: no variant or associated item named `BulkInput` found for enum `mssql_tiberius_bridge::Error` in the current scope
   --> tests/compile_fail/data_api_bulk_lifecycle.rs:13:36
    |

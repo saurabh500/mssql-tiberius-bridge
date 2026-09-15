@@ -7,6 +7,13 @@ async fn native_apis_still_compile(client: &mut Client) -> mssql_tiberius_bridge
     let result: ExecuteResult = client.execute("DELETE FROM #items WHERE id = @P1", &[&1i32]).await?;
     let _ = result.total();
 
+    let result: ExecuteResult = client.execute("DELETE FROM #items WHERE id = @P1", &[&1i32]).await?;
+    let _: &[u64] = result.rows_affected();
+    let _ = ExecuteResult::into_iter(result);
+
+    let result: ExecuteResult = client.execute("DELETE FROM #items WHERE id = @P1", &[&1i32]).await?;
+    for _ in result {}
+
     let _: QueryStream<'_> = client.query_compat("SELECT @P1", &[&1i32]);
     Ok(())
 }

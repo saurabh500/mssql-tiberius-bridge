@@ -12,9 +12,9 @@ The machine-readable traceability matrix is `TRACEABILITY` in
 
 | Status | Scenarios |
 |---|---:|
-| Passes with the unchanged Tiberius-facing call | 8 |
+| Passes with the unchanged Tiberius-facing call | 10 |
 | Passes through the current bridge API | 23 |
-| Compile/API gap | 7 |
+| Compile/API gap | 5 |
 | Behavioral gap | 0 |
 | Intentional bridge improvement | 2 |
 
@@ -59,6 +59,12 @@ primitives, strings and bytes, UUID, `rust_decimal`, `chrono`, and enabled
 `time`/`jiff` types. Native vector, variant, and table parameters use
 `ColumnData::Native`; they have no claimed Tiberius `ColumnData` equivalent.
 
+Issue #131 additively completes Tiberius-compatible `ExecuteResult` data
+access with `rows_affected()` and standard consuming `IntoIterator`. Existing
+bridge-native `total()` and inherent `into_iter()` calls remain unchanged.
+Counts retain statement order and zero-row entries from the shared execution
+collector used by direct, dynamic-query, and prepared execution.
+
 ## Phase 3 order
 
 | Order | Logical API | Issue | Compile fixtures |
@@ -66,7 +72,7 @@ primitives, strings and bytes, UUID, `rust_decimal`, `chrono`, and enabled
 | 1 | Query stream/items, metadata, result indexes, async collectors | [#125](https://github.com/saurabh500/mssql-tiberius-bridge/issues/125) | `data_api_query_stream.rs`, `data_api_query_stream_collectors.rs` |
 | 2 | Public conversion traits and error channel | [#128](https://github.com/saurabh500/mssql-tiberius-bridge/issues/128) | `data_api_conversions.rs`, `data_api_conversion_errors.rs` |
 | 3 | Dynamic `Query` builder | [#127](https://github.com/saurabh500/mssql-tiberius-bridge/issues/127) | `data_api_query_builder.rs` |
-| 4 | `ExecuteResult` access and standard iteration | [#131](https://github.com/saurabh500/mssql-tiberius-bridge/issues/131) | `data_api_execute_rows_affected.rs`, `data_api_execute_into_iterator.rs` |
+| 4 | `ExecuteResult` access and standard iteration (implemented, additive) | [#131](https://github.com/saurabh500/mssql-tiberius-bridge/issues/131) | `data_api_execute_rows_affected.rs`, `data_api_execute_into_iterator.rs` |
 | 5 | Row cell/consuming iteration | [#130](https://github.com/saurabh500/mssql-tiberius-bridge/issues/130) | `data_api_row_iteration.rs` |
 | 6 | `TokenRow`, `IntoRow`, and incremental bulk lifecycle | [#129](https://github.com/saurabh500/mssql-tiberius-bridge/issues/129) | `data_api_bulk_row.rs`, `data_api_bulk_lifecycle.rs` |
 

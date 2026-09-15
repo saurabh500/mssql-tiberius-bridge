@@ -178,9 +178,12 @@ async fn prepared_execute_against_dml() {
     );
 
     for (id, name) in [(1i32, "Alice"), (2, "Bob"), (3, "Carol")] {
-        stmt.execute(&mut client, &[&id, &name])
+        let result = stmt
+            .execute(&mut client, &[&id, &name])
             .await
             .expect("execute_prepared");
+        assert_eq!(result.rows_affected(), &[1]);
+        assert_eq!(result.total(), 1);
     }
 
     stmt.close(&mut client).await.expect("close");

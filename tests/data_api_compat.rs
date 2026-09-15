@@ -65,8 +65,8 @@ const TRACEABILITY: &[Trace] = &[
     Trace { behavior: "async into_row helper", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_collectors_match_tiberius_shape" },
     Trace { behavior: "ExecuteResult total", source: "tests/query.rs:execute_multiple_count_total", status: Status::AdaptedPass, evidence: "execute_counts_iterate_and_total" },
     Trace { behavior: "ExecuteResult inherent into_iter", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "execute_counts_iterate_and_total" },
-    Trace { behavior: "ExecuteResult rows_affected", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_execute_rows_affected.rs (#131)" },
-    Trace { behavior: "ExecuteResult IntoIterator trait", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_execute_into_iterator.rs (#131)" },
+    Trace { behavior: "ExecuteResult rows_affected", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "execute_result_preserves_order_zero_counts_and_iteration; pass/data_api_execute_rows_affected.rs (#131)" },
+    Trace { behavior: "ExecuteResult IntoIterator trait", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "execute_result_preserves_order_zero_counts_and_iteration; pass/data_api_execute_into_iterator.rs (#131)" },
     Trace { behavior: "dynamic Query binding", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::UnchangedPass, evidence: "dynamic_query_builder_*; pass/data_api_query_builder.rs (#127)" },
     Trace { behavior: "dynamic NULL binding through Client::query", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "typed_null_parameter_preserves_column_type" },
     Trace { behavior: "bulk nullable-row success and count", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "bulk_nullable_rows_succeed" },
@@ -113,7 +113,7 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::UnchangedPass)
             .count(),
-        8
+        10
     );
     assert_eq!(
         TRACEABILITY
@@ -127,7 +127,7 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::CompileGap)
             .count(),
-        7
+        5
     );
     assert_eq!(
         TRACEABILITY
@@ -547,6 +547,48 @@ async fn dynamic_query_builder_executes_and_is_recreated_for_repeated_use() {
             .total(),
         2
     );
+}
+
+#[tokio::test]
+async fn execute_result_preserves_order_zero_counts_and_iteration() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    client
+        .simple_query("CREATE TABLE #compat_execute_result (id int NOT NULL)")
+        .await
+        .expect("create execute-result table");
+
+    let first = client
+        .execute(
+            "INSERT INTO #compat_execute_result VALUES (1), (2); \
+             UPDATE #compat_execute_result SET id = id WHERE id < 0; \
+             INSERT INTO #compat_execute_result VALUES (3)",
+            &[],
+        )
+        .await
+        .expect("execute first batch");
+    assert_eq!(first.rows_affected(), &[2, 0, 1]);
+    assert_eq!(first.total(), 3);
+    assert_eq!(
+        ExecuteResult::into_iter(first).collect::<Vec<_>>(),
+        vec![2, 0, 1]
+    );
+
+    let second = Query::new(
+        "UPDATE #compat_execute_result SET id = id WHERE id < 0; \
+         DELETE FROM #compat_execute_result WHERE id = 3",
+    )
+    .execute(&mut client)
+    .await
+    .expect("execute second batch");
+    assert_eq!(second.rows_affected(), &[0, 1]);
+    assert_eq!(second.total(), 1);
+    let mut iterated = Vec::new();
+    for count in second {
+        iterated.push(count);
+    }
+    assert_eq!(iterated, vec![0, 1]);
 }
 
 #[tokio::test]

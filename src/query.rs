@@ -19,17 +19,27 @@ pub struct ExecuteResult {
 }
 
 impl ExecuteResult {
+    /// Per-statement row counts in statement order.
+    pub fn rows_affected(&self) -> &[u64] {
+        self.counts.as_slice()
+    }
+
     /// Total rows affected across all statements.
     pub fn total(&self) -> u64 {
         self.counts.iter().sum()
     }
 
     /// Iterate over per-statement row counts.
-    #[expect(
-        clippy::should_implement_trait,
-        reason = "Preserve the tiberius-compatible inherent into_iter API"
-    )]
     pub fn into_iter(self) -> impl Iterator<Item = u64> {
+        self.counts.into_iter()
+    }
+}
+
+impl IntoIterator for ExecuteResult {
+    type Item = u64;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
         self.counts.into_iter()
     }
 }
@@ -862,8 +872,26 @@ mod tests {
         let result = ExecuteResult {
             counts: vec![0, 2, 3],
         };
+        ensure_equal(result.rows_affected(), &[0, 2, 3])?;
         ensure_equal(result.total(), 5)?;
-        ensure_equal(result.into_iter().collect::<Vec<_>>(), vec![0, 2, 3])?;
+        ensure_equal(
+            ExecuteResult::into_iter(result).collect::<Vec<_>>(),
+            vec![0, 2, 3],
+        )?;
+        let result = ExecuteResult {
+            counts: vec![0, 2, 3],
+        };
+        ensure_equal(
+            IntoIterator::into_iter(result).collect::<Vec<_>>(),
+            vec![0, 2, 3],
+        )?;
+        let mut iterated = Vec::new();
+        for count in (ExecuteResult {
+            counts: vec![0, 2, 3],
+        }) {
+            iterated.push(count);
+        }
+        ensure_equal(iterated, vec![0, 2, 3])?;
         Ok(())
     }
 

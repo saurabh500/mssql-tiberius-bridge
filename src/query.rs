@@ -30,6 +30,10 @@ impl ExecuteResult {
     }
 
     /// Iterate over per-statement row counts.
+    #[expect(
+        clippy::should_implement_trait,
+        reason = "The existing inherent method must remain source-compatible alongside IntoIterator"
+    )]
     pub fn into_iter(self) -> impl Iterator<Item = u64> {
         self.counts.into_iter()
     }

@@ -13,8 +13,8 @@ use mssql_tds::message::bulk_load::StreamingBulkLoadWriter;
 use mssql_tiberius_bridge::bulk::BulkLoadRow;
 use mssql_tiberius_bridge::compat::FromSql as CompatFromSql;
 use mssql_tiberius_bridge::{
-    AuthMethod, Client, ColumnData, ColumnType, Config, Error, FromSql, FromSqlOwned, IntoSql,
-    Query, QueryItem, Row, ToSql,
+    AuthMethod, Client, ColumnData, ColumnType, Config, Error, ExecuteResult, FromSql,
+    FromSqlOwned, IntoSql, Query, QueryItem, Row, ToSql,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

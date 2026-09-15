@@ -510,6 +510,54 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
+    use mssql_tds::datatypes::sql_tvp::TvpTypeName;
+    use mssql_tds::datatypes::sql_vector::SqlVector;
+    use mssql_tds::datatypes::sqldatatypes::VectorBaseType;
+
+    fn samples() -> (
+        DecimalParts,
+        SqlDate,
+        SqlTime,
+        SqlDateTime2,
+        SqlDateTimeOffset,
+    ) {
+        let numeric = DecimalParts::new(true, 5, 2, 12_345);
+        let date = SqlDate::create(738_944).expect("valid SQL date");
+        let time = SqlTime {
+            time_nanoseconds: 45_296_123_456,
+            scale: 7,
+        };
+        let datetime2 = SqlDateTime2 {
+            days: date.get_days(),
+            time: time.clone(),
+        };
+        let datetime_offset = SqlDateTimeOffset {
+            datetime2: datetime2.clone(),
+            offset: 330,
+        };
+        (numeric, date, time, datetime2, datetime_offset)
+    }
+
+    fn sql_string(value: &str) -> SqlString {
+        SqlString::from_utf8_string(value.to_string())
+    }
+
+    fn assert_roundtrip<T>(value: T)
+    where
+        T: NativeToSql + for<'a> FromSql<'a> + Clone + PartialEq + std::fmt::Debug,
+    {
+        let by_ref = <T as ToSql>::to_sql(&value);
+        assert_eq!(
+            <T as FromSql>::from_sql(&by_ref).expect("decode by-reference conversion"),
+            Some(value.clone())
+        );
+        let by_value = <T as IntoSql>::into_sql(value.clone());
+        assert_eq!(
+            T::from_sql_owned(by_value).expect("decode owned conversion"),
+            Some(value)
+        );
+    }
 
     #[test]
     fn owned_and_borrowed_values_use_native_encoding() {
@@ -553,6 +601,669 @@ mod tests {
         );
         assert!(matches!(
             i32::from_sql_owned(ColumnData::String(Some(Cow::Borrowed("wrong")))),
+            Err(Error::Conversion(_))
+        ));
+    }
+
+    #[test]
+    fn native_sql_types_map_to_exact_compat_variants() {
+        let (numeric, date, time, datetime2, datetime_offset) = samples();
+        let uuid = Uuid::from_u128(0x1234);
+        let vector = SqlVector::try_from_f32(vec![1.0, 2.0]).expect("valid vector");
+        let table_name = TvpTypeName::new(Some("dbo".into()), "Items".into());
+        let native_values = vec![
+            (SqlType::Bit(Some(true)), ColumnData::Bit(Some(true))),
+            (SqlType::TinyInt(Some(1)), ColumnData::U8(Some(1))),
+            (SqlType::SmallInt(Some(2)), ColumnData::I16(Some(2))),
+            (SqlType::Int(Some(3)), ColumnData::I32(Some(3))),
+            (SqlType::BigInt(Some(4)), ColumnData::I64(Some(4))),
+            (SqlType::Real(Some(5.0)), ColumnData::F32(Some(5.0))),
+            (SqlType::Float(Some(6.0)), ColumnData::F64(Some(6.0))),
+            (
+                SqlType::Decimal(Some(numeric)),
+                ColumnData::Numeric(Some(numeric)),
+            ),
+            (
+                SqlType::Numeric(Some(numeric)),
+                ColumnData::Numeric(Some(numeric)),
+            ),
+            (
+                SqlType::Money(Some(SqlMoney::from(70_000))),
+                ColumnData::Money(Some(SqlMoney::from(70_000))),
+            ),
+            (
+                SqlType::SmallMoney(Some(SqlSmallMoney::from(80_000))),
+                ColumnData::SmallMoney(Some(SqlSmallMoney::from(80_000))),
+            ),
+            (
+                SqlType::Time(Some(time.clone())),
+                ColumnData::Time(Some(time.clone())),
+            ),
+            (
+                SqlType::DateTime2(Some(datetime2.clone())),
+                ColumnData::DateTime2(Some(datetime2.clone())),
+            ),
+            (
+                SqlType::DateTimeOffset(Some(datetime_offset.clone())),
+                ColumnData::DateTimeOffset(Some(datetime_offset)),
+            ),
+            (
+                SqlType::SmallDateTime(Some(SqlSmallDateTime { days: 9, time: 10 })),
+                ColumnData::SmallDateTime(Some(SqlSmallDateTime { days: 9, time: 10 })),
+            ),
+            (
+                SqlType::DateTime(Some(SqlDateTime { days: 11, time: 12 })),
+                ColumnData::DateTime(Some(SqlDateTime { days: 11, time: 12 })),
+            ),
+            (
+                SqlType::Date(Some(date.clone())),
+                ColumnData::Date(Some(date)),
+            ),
+            (
+                SqlType::NVarchar(Some(sql_string("nvarchar")), 20),
+                ColumnData::String(Some(Cow::Owned("nvarchar".into()))),
+            ),
+            (
+                SqlType::NVarcharMax(Some(sql_string("nvarchar max"))),
+                ColumnData::String(Some(Cow::Owned("nvarchar max".into()))),
+            ),
+            (
+                SqlType::Varchar(Some(sql_string("varchar")), 20),
+                ColumnData::String(Some(Cow::Owned("varchar".into()))),
+            ),
+            (
+                SqlType::VarcharMax(Some(sql_string("varchar max"))),
+                ColumnData::String(Some(Cow::Owned("varchar max".into()))),
+            ),
+            (
+                SqlType::Char(Some(sql_string("char")), 4),
+                ColumnData::String(Some(Cow::Owned("char".into()))),
+            ),
+            (
+                SqlType::NChar(Some(sql_string("nchar")), 5),
+                ColumnData::String(Some(Cow::Owned("nchar".into()))),
+            ),
+            (
+                SqlType::Text(Some(sql_string("text"))),
+                ColumnData::String(Some(Cow::Owned("text".into()))),
+            ),
+            (
+                SqlType::NText(Some(sql_string("ntext"))),
+                ColumnData::String(Some(Cow::Owned("ntext".into()))),
+            ),
+            (
+                SqlType::VarBinary(Some(vec![1]), 1),
+                ColumnData::Binary(Some(Cow::Owned(vec![1]))),
+            ),
+            (
+                SqlType::VarBinaryMax(Some(vec![2])),
+                ColumnData::Binary(Some(Cow::Owned(vec![2]))),
+            ),
+            (
+                SqlType::Binary(Some(vec![3]), 1),
+                ColumnData::Binary(Some(Cow::Owned(vec![3]))),
+            ),
+            (
+                SqlType::Json(Some(SqlJson::from("{\"n\":1}".to_string()))),
+                ColumnData::Json(Some(Cow::Owned("{\"n\":1}".into()))),
+            ),
+            (
+                SqlType::Xml(Some(SqlXml::from("<n>1</n>".to_string()))),
+                ColumnData::Xml(Some(Cow::Owned("<n>1</n>".into()))),
+            ),
+            (SqlType::Uuid(Some(uuid)), ColumnData::Guid(Some(uuid))),
+        ];
+
+        for (native, expected) in native_values {
+            assert_eq!(ColumnData::from_native(native), expected);
+        }
+
+        let native_only = vec![
+            SqlType::Vector(Some(vector), 2, VectorBaseType::Float32),
+            SqlType::Variant(Box::new(SqlType::Int(Some(1)))),
+            SqlType::Table(table_name, None),
+        ];
+        for native in native_only {
+            assert_eq!(
+                ColumnData::from_native(native.clone()),
+                ColumnData::Native(native)
+            );
+        }
+    }
+
+    #[test]
+    fn compatibility_values_encode_all_variants_and_nulls() {
+        let (numeric, date, time, datetime2, datetime_offset) = samples();
+        let uuid = Uuid::from_u128(0x5678);
+        let values = vec![
+            (ColumnData::Bit(Some(true)), ColumnValues::Bit(true)),
+            (ColumnData::U8(Some(1)), ColumnValues::TinyInt(1)),
+            (ColumnData::I16(Some(2)), ColumnValues::SmallInt(2)),
+            (ColumnData::I32(Some(3)), ColumnValues::Int(3)),
+            (ColumnData::I64(Some(4)), ColumnValues::BigInt(4)),
+            (ColumnData::F32(Some(5.0)), ColumnValues::Real(5.0)),
+            (ColumnData::F64(Some(6.0)), ColumnValues::Float(6.0)),
+            (
+                ColumnData::String(Some(Cow::Borrowed("text"))),
+                ColumnValues::String(sql_string("text")),
+            ),
+            (ColumnData::Guid(Some(uuid)), ColumnValues::Uuid(uuid)),
+            (
+                ColumnData::Binary(Some(Cow::Borrowed(&[7, 8]))),
+                ColumnValues::Bytes(vec![7, 8]),
+            ),
+            (
+                ColumnData::Numeric(Some(numeric)),
+                ColumnValues::Numeric(numeric),
+            ),
+            (
+                ColumnData::Xml(Some(Cow::Borrowed("<x/>"))),
+                ColumnValues::Xml(SqlXml::from("<x/>".to_string())),
+            ),
+            (
+                ColumnData::DateTime(Some(SqlDateTime { days: 9, time: 10 })),
+                ColumnValues::DateTime(SqlDateTime { days: 9, time: 10 }),
+            ),
+            (
+                ColumnData::SmallDateTime(Some(SqlSmallDateTime { days: 11, time: 12 })),
+                ColumnValues::SmallDateTime(SqlSmallDateTime { days: 11, time: 12 }),
+            ),
+            (
+                ColumnData::Time(Some(time.clone())),
+                ColumnValues::Time(time),
+            ),
+            (
+                ColumnData::Date(Some(date.clone())),
+                ColumnValues::Date(date),
+            ),
+            (
+                ColumnData::DateTime2(Some(datetime2.clone())),
+                ColumnValues::DateTime2(datetime2),
+            ),
+            (
+                ColumnData::DateTimeOffset(Some(datetime_offset.clone())),
+                ColumnValues::DateTimeOffset(datetime_offset),
+            ),
+            (
+                ColumnData::Money(Some(SqlMoney::from(13))),
+                ColumnValues::Money(SqlMoney::from(13)),
+            ),
+            (
+                ColumnData::SmallMoney(Some(SqlSmallMoney::from(14))),
+                ColumnValues::SmallMoney(SqlSmallMoney::from(14)),
+            ),
+            (
+                ColumnData::Json(Some(Cow::Borrowed("{\"ok\":true}"))),
+                ColumnValues::Json(SqlJson::from("{\"ok\":true}".to_string())),
+            ),
+        ];
+        for (value, expected) in values {
+            assert_eq!(
+                value
+                    .into_column_value()
+                    .expect("encode compatibility value"),
+                expected
+            );
+        }
+
+        let nulls = vec![
+            ColumnData::Bit(None),
+            ColumnData::U8(None),
+            ColumnData::I16(None),
+            ColumnData::I32(None),
+            ColumnData::I64(None),
+            ColumnData::F32(None),
+            ColumnData::F64(None),
+            ColumnData::String(None),
+            ColumnData::Guid(None),
+            ColumnData::Binary(None),
+            ColumnData::Numeric(None),
+            ColumnData::Xml(None),
+            ColumnData::DateTime(None),
+            ColumnData::SmallDateTime(None),
+            ColumnData::Time(None),
+            ColumnData::Date(None),
+            ColumnData::DateTime2(None),
+            ColumnData::DateTimeOffset(None),
+            ColumnData::Money(None),
+            ColumnData::SmallMoney(None),
+            ColumnData::Json(None),
+        ];
+        for value in nulls {
+            assert!(value.is_null());
+            assert_eq!(
+                value.into_column_value().expect("encode typed NULL"),
+                ColumnValues::Null
+            );
+        }
+        assert!(!ColumnData::I32(Some(1)).is_null());
+
+        let native = ColumnData::Native(SqlType::Variant(Box::new(SqlType::Int(Some(1)))));
+        assert!(matches!(
+            native.into_column_value(),
+            Err(Error::Conversion(message))
+                if message.contains("bridge-native parameter")
+        ));
+    }
+
+    #[test]
+    fn native_row_values_adapt_borrowed_owned_and_typed_nulls() {
+        let (numeric, date, time, datetime2, datetime_offset) = samples();
+        let uuid = Uuid::from_u128(0x9abc);
+        let vector = SqlVector::try_from_f32(vec![1.0, 2.0]).expect("valid vector");
+        let values = vec![
+            (
+                ColumnValues::TinyInt(1),
+                None,
+                ColumnType::Int1,
+                ColumnData::U8(Some(1)),
+            ),
+            (
+                ColumnValues::SmallInt(2),
+                None,
+                ColumnType::Int2,
+                ColumnData::I16(Some(2)),
+            ),
+            (
+                ColumnValues::Int(3),
+                None,
+                ColumnType::Int4,
+                ColumnData::I32(Some(3)),
+            ),
+            (
+                ColumnValues::BigInt(4),
+                None,
+                ColumnType::Int8,
+                ColumnData::I64(Some(4)),
+            ),
+            (
+                ColumnValues::Real(5.0),
+                None,
+                ColumnType::Float4,
+                ColumnData::F32(Some(5.0)),
+            ),
+            (
+                ColumnValues::Float(6.0),
+                None,
+                ColumnType::Float8,
+                ColumnData::F64(Some(6.0)),
+            ),
+            (
+                ColumnValues::Decimal(numeric),
+                None,
+                ColumnType::Decimaln,
+                ColumnData::Numeric(Some(numeric)),
+            ),
+            (
+                ColumnValues::Numeric(numeric),
+                None,
+                ColumnType::Numericn,
+                ColumnData::Numeric(Some(numeric)),
+            ),
+            (
+                ColumnValues::Bit(true),
+                None,
+                ColumnType::Bit,
+                ColumnData::Bit(Some(true)),
+            ),
+            (
+                ColumnValues::String(sql_string("wire")),
+                Some("decoded"),
+                ColumnType::NVarchar,
+                ColumnData::String(Some(Cow::Borrowed("decoded"))),
+            ),
+            (
+                ColumnValues::DateTime(SqlDateTime { days: 7, time: 8 }),
+                None,
+                ColumnType::Datetime,
+                ColumnData::DateTime(Some(SqlDateTime { days: 7, time: 8 })),
+            ),
+            (
+                ColumnValues::Date(date.clone()),
+                None,
+                ColumnType::Date,
+                ColumnData::Date(Some(date)),
+            ),
+            (
+                ColumnValues::Time(time.clone()),
+                None,
+                ColumnType::Time,
+                ColumnData::Time(Some(time)),
+            ),
+            (
+                ColumnValues::DateTime2(datetime2.clone()),
+                None,
+                ColumnType::Datetime2,
+                ColumnData::DateTime2(Some(datetime2)),
+            ),
+            (
+                ColumnValues::DateTimeOffset(datetime_offset.clone()),
+                None,
+                ColumnType::DatetimeOffset,
+                ColumnData::DateTimeOffset(Some(datetime_offset)),
+            ),
+            (
+                ColumnValues::SmallDateTime(SqlSmallDateTime { days: 9, time: 10 }),
+                None,
+                ColumnType::Datetime4,
+                ColumnData::SmallDateTime(Some(SqlSmallDateTime { days: 9, time: 10 })),
+            ),
+            (
+                ColumnValues::SmallMoney(SqlSmallMoney::from(11)),
+                None,
+                ColumnType::Money4,
+                ColumnData::SmallMoney(Some(SqlSmallMoney::from(11))),
+            ),
+            (
+                ColumnValues::Money(SqlMoney::from(12)),
+                None,
+                ColumnType::Money,
+                ColumnData::Money(Some(SqlMoney::from(12))),
+            ),
+            (
+                ColumnValues::Bytes(vec![13, 14]),
+                None,
+                ColumnType::VarBinary,
+                ColumnData::Binary(Some(Cow::Borrowed(&[13, 14]))),
+            ),
+            (
+                ColumnValues::Xml(SqlXml::from("<x/>".to_string())),
+                Some("<decoded/>"),
+                ColumnType::Xml,
+                ColumnData::Xml(Some(Cow::Borrowed("<decoded/>"))),
+            ),
+            (
+                ColumnValues::Uuid(uuid),
+                None,
+                ColumnType::Guid,
+                ColumnData::Guid(Some(uuid)),
+            ),
+            (
+                ColumnValues::Json(SqlJson::from("{\"wire\":true}".to_string())),
+                Some("{\"decoded\":true}"),
+                ColumnType::Json,
+                ColumnData::Json(Some(Cow::Borrowed("{\"decoded\":true}"))),
+            ),
+        ];
+        for (value, decoded, column_type, expected) in &values {
+            assert_eq!(
+                column_data_ref(value, *decoded, *column_type),
+                expected.clone()
+            );
+        }
+
+        assert!(matches!(
+            column_data_ref(
+                &ColumnValues::Vector(vector.clone()),
+                None,
+                ColumnType::Vector
+            ),
+            ColumnData::Native(SqlType::Vector(Some(value), 2, VectorBaseType::Float32))
+                if value == vector
+        ));
+
+        let typed_nulls = vec![
+            (ColumnType::Bit, ColumnData::Bit(None)),
+            (ColumnType::Int1, ColumnData::U8(None)),
+            (ColumnType::Int2, ColumnData::I16(None)),
+            (ColumnType::Int4, ColumnData::I32(None)),
+            (ColumnType::Int8, ColumnData::I64(None)),
+            (ColumnType::Float4, ColumnData::F32(None)),
+            (ColumnType::Float8, ColumnData::F64(None)),
+            (ColumnType::Datetime, ColumnData::DateTime(None)),
+            (ColumnType::Datetime4, ColumnData::DateTime(None)),
+            (ColumnType::Datetime2, ColumnData::DateTime2(None)),
+            (ColumnType::DatetimeOffset, ColumnData::DateTimeOffset(None)),
+            (ColumnType::Date, ColumnData::Date(None)),
+            (ColumnType::Time, ColumnData::Time(None)),
+            (ColumnType::Decimaln, ColumnData::Numeric(None)),
+            (ColumnType::Numericn, ColumnData::Numeric(None)),
+            (ColumnType::Money, ColumnData::Money(None)),
+            (ColumnType::Money4, ColumnData::SmallMoney(None)),
+            (ColumnType::Guid, ColumnData::Guid(None)),
+            (ColumnType::Xml, ColumnData::Xml(None)),
+            (ColumnType::Json, ColumnData::Json(None)),
+            (ColumnType::NVarchar, ColumnData::String(None)),
+            (ColumnType::Varchar, ColumnData::String(None)),
+            (ColumnType::NChar, ColumnData::String(None)),
+            (ColumnType::Char, ColumnData::String(None)),
+            (ColumnType::NText, ColumnData::String(None)),
+            (ColumnType::Text, ColumnData::String(None)),
+            (ColumnType::Null, ColumnData::String(None)),
+            (ColumnType::Binary, ColumnData::Binary(None)),
+            (ColumnType::VarBinary, ColumnData::Binary(None)),
+            (ColumnType::Image, ColumnData::Binary(None)),
+            (ColumnType::BigVarBin, ColumnData::Binary(None)),
+            (ColumnType::Ssvariant, ColumnData::Binary(None)),
+            (ColumnType::Geography, ColumnData::Binary(None)),
+            (ColumnType::Geometry, ColumnData::Binary(None)),
+            (ColumnType::Udt, ColumnData::Binary(None)),
+            (ColumnType::Vector, ColumnData::Binary(None)),
+        ];
+        for (column_type, expected) in typed_nulls {
+            assert_eq!(
+                column_data_ref(&ColumnValues::Null, None, column_type),
+                expected
+            );
+        }
+
+        assert!(matches!(
+            column_data_owned(
+                ColumnValues::String(sql_string("wire")),
+                Some("decoded".into()),
+                ColumnType::NVarchar
+            ),
+            ColumnData::String(Some(Cow::Owned(value))) if value == "decoded"
+        ));
+        assert!(matches!(
+            column_data_owned(
+                ColumnValues::String(sql_string("fallback")),
+                None,
+                ColumnType::NVarchar
+            ),
+            ColumnData::String(Some(Cow::Owned(value))) if value == "fallback"
+        ));
+        assert!(matches!(
+            column_data_owned(ColumnValues::Bytes(vec![1, 2]), None, ColumnType::VarBinary),
+            ColumnData::Binary(Some(Cow::Owned(value))) if value == [1, 2]
+        ));
+        assert!(matches!(
+            column_data_owned(
+                ColumnValues::Xml(SqlXml::from("<wire/>".to_string())),
+                Some("<decoded/>".into()),
+                ColumnType::Xml
+            ),
+            ColumnData::Xml(Some(Cow::Owned(value))) if value == "<decoded/>"
+        ));
+        assert!(matches!(
+            column_data_owned(
+                ColumnValues::Xml(SqlXml::from("<fallback/>".to_string())),
+                None,
+                ColumnType::Xml
+            ),
+            ColumnData::Xml(Some(Cow::Owned(value))) if value == "<fallback/>"
+        ));
+        assert!(matches!(
+            column_data_owned(
+                ColumnValues::Json(SqlJson::from("{\"wire\":true}".to_string())),
+                Some("{\"decoded\":true}".into()),
+                ColumnType::Json
+            ),
+            ColumnData::Json(Some(Cow::Owned(value))) if value == "{\"decoded\":true}"
+        ));
+        assert!(matches!(
+            column_data_owned(
+                ColumnValues::Json(SqlJson::from("{\"fallback\":true}".to_string())),
+                None,
+                ColumnType::Json
+            ),
+            ColumnData::Json(Some(Cow::Owned(value))) if value == "{\"fallback\":true}"
+        ));
+        assert_eq!(
+            column_data_owned(ColumnValues::Int(42), None, ColumnType::Int4),
+            ColumnData::I32(Some(42))
+        );
+    }
+
+    #[test]
+    fn owned_and_native_parameter_adapters_preserve_every_variant() {
+        let (numeric, date, time, datetime2, datetime_offset) = samples();
+        let uuid = Uuid::from_u128(0xdef0);
+        let values = vec![
+            ColumnData::Bit(Some(true)),
+            ColumnData::U8(Some(1)),
+            ColumnData::I16(Some(2)),
+            ColumnData::I32(Some(3)),
+            ColumnData::I64(Some(4)),
+            ColumnData::F32(Some(5.0)),
+            ColumnData::F64(Some(6.0)),
+            ColumnData::String(Some(Cow::Borrowed("borrowed"))),
+            ColumnData::Guid(Some(uuid)),
+            ColumnData::Binary(Some(Cow::Borrowed(&[7, 8]))),
+            ColumnData::Numeric(Some(numeric)),
+            ColumnData::Xml(Some(Cow::Borrowed("<x/>"))),
+            ColumnData::DateTime(Some(SqlDateTime { days: 9, time: 10 })),
+            ColumnData::SmallDateTime(Some(SqlSmallDateTime { days: 11, time: 12 })),
+            ColumnData::Time(Some(time)),
+            ColumnData::Date(Some(date)),
+            ColumnData::DateTime2(Some(datetime2)),
+            ColumnData::DateTimeOffset(Some(datetime_offset)),
+            ColumnData::Money(Some(SqlMoney::from(13))),
+            ColumnData::SmallMoney(Some(SqlSmallMoney::from(14))),
+            ColumnData::Json(Some(Cow::Borrowed("{\"ok\":true}"))),
+            ColumnData::Native(SqlType::Variant(Box::new(SqlType::Int(Some(15))))),
+        ];
+        for value in values {
+            let owned = value.clone().into_owned();
+            assert_eq!(ColumnData::from_native(NativeToSql::to_sql(&value)), owned);
+        }
+        assert!(matches!(
+            ColumnData::String(Some(Cow::Borrowed("text"))).into_owned(),
+            ColumnData::String(Some(Cow::Owned(value))) if value == "text"
+        ));
+        assert!(matches!(
+            ColumnData::Binary(Some(Cow::Borrowed(&[1, 2]))).into_owned(),
+            ColumnData::Binary(Some(Cow::Owned(value))) if value == [1, 2]
+        ));
+        assert!(matches!(
+            ColumnData::Xml(Some(Cow::Borrowed("<x/>"))).into_owned(),
+            ColumnData::Xml(Some(Cow::Owned(value))) if value == "<x/>"
+        ));
+        assert!(matches!(
+            ColumnData::Json(Some(Cow::Borrowed("{}"))).into_owned(),
+            ColumnData::Json(Some(Cow::Owned(value))) if value == "{}"
+        ));
+    }
+
+    #[test]
+    fn public_conversion_traits_roundtrip_supported_types() {
+        assert_roundtrip(true);
+        assert_roundtrip(1u8);
+        assert_roundtrip(2i16);
+        assert_roundtrip(3i32);
+        assert_roundtrip(4i64);
+        assert_roundtrip(5.25f32);
+        assert_roundtrip(6.5f64);
+        assert_roundtrip("owned string".to_string());
+        assert_roundtrip(Uuid::from_u128(0x1234_5678));
+        assert_roundtrip(vec![1u8, 2, 3]);
+        assert_roundtrip(serde_json::json!({"compatible": true}));
+        assert_roundtrip(
+            "12345.67"
+                .parse::<rust_decimal::Decimal>()
+                .expect("valid decimal"),
+        );
+
+        let chrono_date = chrono::NaiveDate::from_ymd_opt(2024, 2, 29).expect("valid date");
+        let chrono_time =
+            chrono::NaiveTime::from_hms_nano_opt(23, 45, 56, 123_456_700).expect("valid time");
+        let chrono_datetime = chrono_date.and_time(chrono_time);
+        let chrono_offset = chrono::FixedOffset::east_opt(19_800).expect("valid offset");
+        let chrono_zoned = chrono_offset
+            .from_local_datetime(&chrono_datetime)
+            .single()
+            .expect("unambiguous fixed-offset datetime");
+        assert_roundtrip(chrono_date);
+        assert_roundtrip(chrono_time);
+        assert_roundtrip(chrono_datetime);
+        assert_roundtrip(chrono_zoned);
+
+        #[cfg(feature = "time")]
+        {
+            let date = time::Date::from_calendar_date(2024, time::Month::February, 29)
+                .expect("valid date");
+            let time = time::Time::from_hms_nano(23, 45, 56, 123_456_700).expect("valid time");
+            let datetime = time::PrimitiveDateTime::new(date, time);
+            let offset = time::UtcOffset::from_hms(5, 30, 0).expect("valid offset");
+            assert_roundtrip(date);
+            assert_roundtrip(time);
+            assert_roundtrip(datetime);
+            assert_roundtrip(datetime.assume_offset(offset));
+        }
+
+        #[cfg(feature = "jiff")]
+        {
+            let datetime = jiff::civil::DateTime::new(2024, 2, 29, 23, 45, 56, 123_456_700)
+                .expect("valid datetime");
+            let offset = jiff::tz::Offset::from_seconds(19_800)
+                .expect("valid offset")
+                .to_time_zone();
+            let zoned = datetime.to_zoned(offset).expect("valid zoned datetime");
+            assert_roundtrip(datetime.date());
+            assert_roundtrip(datetime.time());
+            assert_roundtrip(datetime);
+            assert_roundtrip(zoned.timestamp());
+            assert_roundtrip(zoned);
+        }
+
+        assert_eq!(
+            String::from_sql_owned(ColumnData::Xml(Some(Cow::Borrowed("<root/>"))))
+                .expect("decode XML"),
+            Some("<root/>".into())
+        );
+        assert_eq!(
+            <&str as FromSql>::from_sql(&ColumnData::String(Some(Cow::Borrowed("borrowed"))))
+                .expect("decode borrowed string"),
+            Some("borrowed")
+        );
+        assert_eq!(
+            <&str as FromSql>::from_sql(&ColumnData::String(None))
+                .expect("decode borrowed NULL string"),
+            None
+        );
+        assert!(matches!(
+            <&str as FromSql>::from_sql(&ColumnData::I32(Some(1))),
+            Err(Error::Conversion(_))
+        ));
+        assert_eq!(
+            <&[u8] as FromSql>::from_sql(&ColumnData::Binary(Some(Cow::Borrowed(&[1, 2]))))
+                .expect("decode borrowed bytes"),
+            Some([1, 2].as_slice())
+        );
+        assert_eq!(
+            <&[u8] as FromSql>::from_sql(&ColumnData::Binary(None))
+                .expect("decode borrowed NULL bytes"),
+            None
+        );
+        assert!(matches!(
+            <&[u8] as FromSql>::from_sql(&ColumnData::I32(Some(1))),
+            Err(Error::Conversion(_))
+        ));
+        assert_eq!(
+            <i32 as FromSql>::from_sql_with_str(&ColumnValues::Int(9), None)
+                .expect("decode native row value"),
+            Some(9)
+        );
+        assert_eq!(
+            <i32 as FromSql>::from_sql_with_str(&ColumnValues::Null, None)
+                .expect("decode native NULL"),
+            None
+        );
+        assert!(matches!(
+            <i32 as FromSql>::from_sql_with_str(
+                &ColumnValues::String(sql_string("wrong")),
+                Some("wrong")
+            ),
             Err(Error::Conversion(_))
         ));
     }

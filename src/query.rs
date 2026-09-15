@@ -878,17 +878,13 @@ mod tests {
         };
         ensure_equal(result.rows_affected(), &[0, 2, 3])?;
         ensure_equal(result.total(), 5)?;
-        ensure_equal(
-            ExecuteResult::into_iter(result).collect::<Vec<_>>(),
-            vec![0, 2, 3],
-        )?;
+        let counts = ExecuteResult::into_iter(result).collect::<Vec<_>>();
+        ensure_equal(counts, vec![0, 2, 3])?;
         let result = ExecuteResult {
             counts: vec![0, 2, 3],
         };
-        ensure_equal(
-            IntoIterator::into_iter(result).collect::<Vec<_>>(),
-            vec![0, 2, 3],
-        )?;
+        let counts = IntoIterator::into_iter(result).collect::<Vec<_>>();
+        ensure_equal(counts, vec![0, 2, 3])?;
         let mut iterated = Vec::new();
         for count in (ExecuteResult {
             counts: vec![0, 2, 3],
@@ -1007,6 +1003,9 @@ mod tests {
 
     #[test]
     fn option_none_preserves_the_inner_parameter_type() {
+        use mssql_tds::datatypes::sql_tvp::TvpTypeName;
+        use mssql_tds::datatypes::sqldatatypes::VectorBaseType;
+
         assert!(matches!(None::<bool>.to_sql(), SqlType::Bit(None)));
         assert!(matches!(None::<u8>.to_sql(), SqlType::TinyInt(None)));
         assert!(matches!(None::<i16>.to_sql(), SqlType::SmallInt(None)));
@@ -1043,6 +1042,38 @@ mod tests {
             into_typed_null(SqlType::Variant(Box::new(SqlType::Int(Some(1))))),
             SqlType::Variant(inner) if matches!(*inner, SqlType::Int(None))
         ));
+
+        let table_name = TvpTypeName::new(Some("dbo".into()), "Items".into());
+        let remaining = [
+            (SqlType::Decimal(None), SqlType::Decimal(None)),
+            (SqlType::Money(None), SqlType::Money(None)),
+            (SqlType::SmallMoney(None), SqlType::SmallMoney(None)),
+            (SqlType::DateTimeOffset(None), SqlType::DateTimeOffset(None)),
+            (SqlType::SmallDateTime(None), SqlType::SmallDateTime(None)),
+            (SqlType::DateTime(None), SqlType::DateTime(None)),
+            (SqlType::NVarcharMax(None), SqlType::NVarcharMax(None)),
+            (SqlType::Varchar(None, 12), SqlType::Varchar(None, 12)),
+            (SqlType::VarcharMax(None), SqlType::VarcharMax(None)),
+            (SqlType::VarBinary(None, 12), SqlType::VarBinary(None, 12)),
+            (SqlType::Binary(None, 12), SqlType::Binary(None, 12)),
+            (SqlType::Char(None, 12), SqlType::Char(None, 12)),
+            (SqlType::NChar(None, 12), SqlType::NChar(None, 12)),
+            (SqlType::Text(None), SqlType::Text(None)),
+            (SqlType::NText(None), SqlType::NText(None)),
+            (SqlType::Json(None), SqlType::Json(None)),
+            (SqlType::Xml(None), SqlType::Xml(None)),
+            (
+                SqlType::Vector(None, 3, VectorBaseType::Float32),
+                SqlType::Vector(None, 3, VectorBaseType::Float32),
+            ),
+            (
+                SqlType::Table(table_name.clone(), None),
+                SqlType::Table(table_name, None),
+            ),
+        ];
+        for (input, expected) in remaining {
+            assert_eq!(into_typed_null(input), expected);
+        }
     }
 
     #[test]

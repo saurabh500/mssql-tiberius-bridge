@@ -934,6 +934,25 @@ async fn compat_bulk_oversized_value_is_explicit_input_error() {
         .expect("compatibility adapter retains rows until finalize");
     assert!(matches!(bulk.finalize().await, Err(Error::BulkInput(_))));
 
+    let mut native = client
+        .bulk_insert("#compat_bulk_limit")
+        .await
+        .expect("start native-only value bulk");
+    let mut row = mssql_tiberius_bridge::TokenRow::new();
+    row.push(ColumnData::Native(
+        mssql_tds::datatypes::sqltypes::SqlType::Variant(Box::new(
+            mssql_tds::datatypes::sqltypes::SqlType::Int(Some(1)),
+        )),
+    ));
+    native
+        .send(row)
+        .await
+        .expect("adapter retains native-only row until finalize");
+    assert!(matches!(
+        native.finalize().await,
+        Err(Error::BulkInput(message)) if message.contains("bridge-native parameter")
+    ));
+
     let mut healthy = client
         .bulk_insert("#compat_bulk_limit")
         .await

@@ -997,32 +997,23 @@ mod tests {
         ensure_equal(<i32 as CompatFromSql>::from_sql(&null_value)?, None)?;
         let (last_column, last_value) = cells.next().ok_or("missing last cell")?;
         ensure_equal(last_column.name(), "last")?;
-        ensure_equal(
-            <String as CompatFromSql>::from_sql(&last_value)?,
-            Some("last".into()),
-        )?;
-        if cells.next().is_some() {
-            return Err("borrowed iteration yielded an extra cell".into());
-        }
+        let last = <String as CompatFromSql>::from_sql(&last_value)?;
+        ensure_equal(last, Some("last".into()))?;
+        ensure_equal(cells.next().is_none(), true)?;
 
         let values = row.clone().into_iter().collect::<Vec<_>>();
         ensure_equal(values.len(), 3)?;
-        ensure_equal(
-            i32::from_sql_owned(values.first().ok_or("missing owned first")?.clone())?,
-            Some(7),
-        )?;
-        ensure_equal(
-            i32::from_sql_owned(values.get(1).ok_or("missing owned NULL")?.clone())?,
-            None,
-        )?;
-        ensure_equal(
-            String::from_sql_owned(values.get(2).ok_or("missing owned last")?.clone())?,
-            Some("last".into()),
-        )?;
+        let first = i32::from_sql_owned(values.first().ok_or("missing owned first")?.clone())?;
+        ensure_equal(first, Some(7))?;
+        let null = i32::from_sql_owned(values.get(1).ok_or("missing owned NULL")?.clone())?;
+        ensure_equal(null, None)?;
+        let last = String::from_sql_owned(values.get(2).ok_or("missing owned last")?.clone())?;
+        ensure_equal(last, Some("last".into()))?;
 
         ensure_equal(row.get::<i32, _>(0usize), Some(7))?;
         ensure_equal(row.get::<i32, _>("first"), Some(7))?;
         ensure_equal(row.get::<Option<i32>, _>("nullable"), Some(None))?;
+        ensure_equal(row.get_compat::<i32, _>("first"), Some(7))?;
         ensure_equal(row.cells().count(), 3)?;
         ensure_equal(row.cells().count(), 3)?;
         ensure_equal(row.clone(), row.clone())?;

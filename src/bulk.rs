@@ -511,6 +511,7 @@ mod tests {
 
     #[test]
     fn token_row_helpers_and_tuple_arities_preserve_values() {
+        assert!(TokenRow::new().is_empty());
         let mut row = TokenRow::with_capacity(2);
         assert!(row.is_empty());
         row.push(1i32.into_sql());

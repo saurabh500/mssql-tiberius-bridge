@@ -17,7 +17,7 @@ use futures_core::Stream;
 use crate::row::RowSchema;
 use crate::{Client, Column, ExecuteResult, Result, Row};
 
-mod conversion;
+pub(crate) mod conversion;
 
 pub use conversion::{ColumnData, FromSql, FromSqlOwned, IntoSql, ToSql};
 

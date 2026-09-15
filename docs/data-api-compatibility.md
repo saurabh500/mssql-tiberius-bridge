@@ -12,9 +12,9 @@ The machine-readable traceability matrix is `TRACEABILITY` in
 
 | Status | Scenarios |
 |---|---:|
-| Passes with the unchanged Tiberius-facing call | 10 |
+| Passes with the unchanged Tiberius-facing call | 11 |
 | Passes through the current bridge API | 23 |
-| Compile/API gap | 5 |
+| Compile/API gap | 4 |
 | Behavioral gap | 0 |
 | Intentional bridge improvement | 2 |
 
@@ -65,6 +65,12 @@ bridge-native `total()` and inherent `into_iter()` calls remain unchanged.
 Counts retain statement order and zero-row entries from the shared execution
 collector used by direct, dynamic-query, and prepared execution.
 
+Issue #130 additively exposes borrowed `Row::cells()` and consuming
+`IntoIterator` in indexed column order. Both use the compatibility
+`ColumnData` representation from #128, preserve SQL NULL cells, and adapt the
+existing native row storage without changing `get`, `try_get`, `raw_value`,
+result indexes, cloning, or equality.
+
 ## Phase 3 order
 
 | Order | Logical API | Issue | Compile fixtures |
@@ -73,7 +79,7 @@ collector used by direct, dynamic-query, and prepared execution.
 | 2 | Public conversion traits and error channel | [#128](https://github.com/saurabh500/mssql-tiberius-bridge/issues/128) | `data_api_conversions.rs`, `data_api_conversion_errors.rs` |
 | 3 | Dynamic `Query` builder | [#127](https://github.com/saurabh500/mssql-tiberius-bridge/issues/127) | `data_api_query_builder.rs` |
 | 4 | `ExecuteResult` access and standard iteration (implemented, additive) | [#131](https://github.com/saurabh500/mssql-tiberius-bridge/issues/131) | `data_api_execute_rows_affected.rs`, `data_api_execute_into_iterator.rs` |
-| 5 | Row cell/consuming iteration | [#130](https://github.com/saurabh500/mssql-tiberius-bridge/issues/130) | `data_api_row_iteration.rs` |
+| 5 | Row cell/consuming iteration (implemented, additive) | [#130](https://github.com/saurabh500/mssql-tiberius-bridge/issues/130) | `data_api_row_iteration.rs` |
 | 6 | `TokenRow`, `IntoRow`, and incremental bulk lifecycle | [#129](https://github.com/saurabh500/mssql-tiberius-bridge/issues/129) | `data_api_bulk_row.rs`, `data_api_bulk_lifecycle.rs` |
 
 Unimplemented fixtures are expected compile failures in `tests/compile_fail`.

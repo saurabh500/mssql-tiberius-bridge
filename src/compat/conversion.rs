@@ -13,6 +13,7 @@ use uuid::Uuid;
 use crate::error::{Error, Result};
 use crate::query::ToSql as NativeToSql;
 use crate::row::FromSql as NativeFromSql;
+use crate::ColumnType;
 
 /// Tiberius-shaped SQL value used by the compatibility conversion traits.
 ///
@@ -171,6 +172,140 @@ impl ColumnData<'_> {
                 | ColumnData::SmallMoney(None)
                 | ColumnData::Json(None)
         )
+    }
+}
+
+pub(crate) fn column_data_ref<'a>(
+    value: &'a ColumnValues,
+    decoded: Option<&'a str>,
+    column_type: ColumnType,
+) -> ColumnData<'a> {
+    match value {
+        ColumnValues::TinyInt(value) => ColumnData::U8(Some(*value)),
+        ColumnValues::SmallInt(value) => ColumnData::I16(Some(*value)),
+        ColumnValues::Int(value) => ColumnData::I32(Some(*value)),
+        ColumnValues::BigInt(value) => ColumnData::I64(Some(*value)),
+        ColumnValues::Real(value) => ColumnData::F32(Some(*value)),
+        ColumnValues::Float(value) => ColumnData::F64(Some(*value)),
+        ColumnValues::Decimal(value) | ColumnValues::Numeric(value) => {
+            ColumnData::Numeric(Some(*value))
+        }
+        ColumnValues::Bit(value) => ColumnData::Bit(Some(*value)),
+        ColumnValues::String(_) => ColumnData::String(decoded.map(Cow::Borrowed)),
+        ColumnValues::DateTime(value) => ColumnData::DateTime(Some(value.clone())),
+        ColumnValues::Date(value) => ColumnData::Date(Some(value.clone())),
+        ColumnValues::Time(value) => ColumnData::Time(Some(value.clone())),
+        ColumnValues::DateTime2(value) => ColumnData::DateTime2(Some(value.clone())),
+        ColumnValues::DateTimeOffset(value) => ColumnData::DateTimeOffset(Some(value.clone())),
+        ColumnValues::SmallDateTime(value) => ColumnData::SmallDateTime(Some(value.clone())),
+        ColumnValues::SmallMoney(value) => ColumnData::SmallMoney(Some(value.clone())),
+        ColumnValues::Money(value) => ColumnData::Money(Some(value.clone())),
+        ColumnValues::Bytes(value) => ColumnData::Binary(Some(Cow::Borrowed(value))),
+        ColumnValues::Xml(_) => ColumnData::Xml(decoded.map(Cow::Borrowed)),
+        ColumnValues::Null => null_column_data(column_type),
+        ColumnValues::Uuid(value) => ColumnData::Guid(Some(*value)),
+        ColumnValues::Json(_) => ColumnData::Json(decoded.map(Cow::Borrowed)),
+        ColumnValues::Vector(value) => ColumnData::Native(SqlType::Vector(
+            Some(value.clone()),
+            value.dimension_count(),
+            value.base_type(),
+        )),
+    }
+}
+
+pub(crate) fn column_data_owned(
+    value: ColumnValues,
+    decoded: Option<String>,
+    column_type: ColumnType,
+) -> ColumnData<'static> {
+    match value {
+        ColumnValues::String(value) => ColumnData::String(Some(Cow::Owned(
+            decoded.unwrap_or_else(|| value.to_utf8_string()),
+        ))),
+        ColumnValues::Bytes(value) => ColumnData::Binary(Some(Cow::Owned(value))),
+        ColumnValues::Xml(value) => ColumnData::Xml(Some(Cow::Owned(
+            decoded.unwrap_or_else(|| value.as_string()),
+        ))),
+        ColumnValues::Json(value) => ColumnData::Json(Some(Cow::Owned(
+            decoded.unwrap_or_else(|| value.as_string()),
+        ))),
+        value => column_data_ref(&value, None, column_type).into_owned(),
+    }
+}
+
+fn null_column_data(column_type: ColumnType) -> ColumnData<'static> {
+    match column_type {
+        ColumnType::Bit => ColumnData::Bit(None),
+        ColumnType::Int1 => ColumnData::U8(None),
+        ColumnType::Int2 => ColumnData::I16(None),
+        ColumnType::Int4 => ColumnData::I32(None),
+        ColumnType::Int8 => ColumnData::I64(None),
+        ColumnType::Float4 => ColumnData::F32(None),
+        ColumnType::Float8 => ColumnData::F64(None),
+        ColumnType::Datetime | ColumnType::Datetime4 => ColumnData::DateTime(None),
+        ColumnType::Datetime2 => ColumnData::DateTime2(None),
+        ColumnType::DatetimeOffset => ColumnData::DateTimeOffset(None),
+        ColumnType::Date => ColumnData::Date(None),
+        ColumnType::Time => ColumnData::Time(None),
+        ColumnType::Decimaln | ColumnType::Numericn => ColumnData::Numeric(None),
+        ColumnType::Money => ColumnData::Money(None),
+        ColumnType::Money4 => ColumnData::SmallMoney(None),
+        ColumnType::Guid => ColumnData::Guid(None),
+        ColumnType::Xml => ColumnData::Xml(None),
+        ColumnType::Json => ColumnData::Json(None),
+        ColumnType::NVarchar
+        | ColumnType::Varchar
+        | ColumnType::NChar
+        | ColumnType::Char
+        | ColumnType::NText
+        | ColumnType::Text
+        | ColumnType::Null => ColumnData::String(None),
+        ColumnType::Binary
+        | ColumnType::VarBinary
+        | ColumnType::Image
+        | ColumnType::BigVarBin
+        | ColumnType::Ssvariant
+        | ColumnType::Geography
+        | ColumnType::Geometry
+        | ColumnType::Udt
+        | ColumnType::Vector => ColumnData::Binary(None),
+    }
+}
+
+impl ColumnData<'_> {
+    fn into_owned(self) -> ColumnData<'static> {
+        match self {
+            ColumnData::String(value) => {
+                ColumnData::String(value.map(|value| Cow::Owned(value.into_owned())))
+            }
+            ColumnData::Binary(value) => {
+                ColumnData::Binary(value.map(|value| Cow::Owned(value.into_owned())))
+            }
+            ColumnData::Xml(value) => {
+                ColumnData::Xml(value.map(|value| Cow::Owned(value.into_owned())))
+            }
+            ColumnData::Json(value) => {
+                ColumnData::Json(value.map(|value| Cow::Owned(value.into_owned())))
+            }
+            ColumnData::Bit(value) => ColumnData::Bit(value),
+            ColumnData::U8(value) => ColumnData::U8(value),
+            ColumnData::I16(value) => ColumnData::I16(value),
+            ColumnData::I32(value) => ColumnData::I32(value),
+            ColumnData::I64(value) => ColumnData::I64(value),
+            ColumnData::F32(value) => ColumnData::F32(value),
+            ColumnData::F64(value) => ColumnData::F64(value),
+            ColumnData::Guid(value) => ColumnData::Guid(value),
+            ColumnData::Numeric(value) => ColumnData::Numeric(value),
+            ColumnData::DateTime(value) => ColumnData::DateTime(value),
+            ColumnData::SmallDateTime(value) => ColumnData::SmallDateTime(value),
+            ColumnData::Time(value) => ColumnData::Time(value),
+            ColumnData::Date(value) => ColumnData::Date(value),
+            ColumnData::DateTime2(value) => ColumnData::DateTime2(value),
+            ColumnData::DateTimeOffset(value) => ColumnData::DateTimeOffset(value),
+            ColumnData::Money(value) => ColumnData::Money(value),
+            ColumnData::SmallMoney(value) => ColumnData::SmallMoney(value),
+            ColumnData::Native(value) => ColumnData::Native(value),
+        }
     }
 }
 

@@ -54,7 +54,7 @@ const TRACEABILITY: &[Trace] = &[
     Trace { behavior: "out-of-range numeric try_get is recoverable", source: "DATA_API_COVERAGE.md:Compatibility observations", status: Status::IntentionalImprovement, evidence: "row_metadata_access_and_errors" },
     Trace { behavior: "NULL row retrieval", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::UnchangedPass, evidence: "row_metadata_access_and_errors" },
     Trace { behavior: "wrong-type retrieval reports conversion error", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "row_metadata_access_and_errors through Row::try_get_compat" },
-    Trace { behavior: "Row cells and consuming iterator", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_row_iteration.rs (#130)" },
+    Trace { behavior: "Row cells and consuming iterator", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::UnchangedPass, evidence: "row_iteration_preserves_column_order_and_nulls; pass/data_api_row_iteration.rs (#130)" },
     Trace { behavior: "Row result_index", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_metadata_order_and_result_indexes" },
     Trace { behavior: "QueryItem metadata and row variants", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_metadata_order_and_result_indexes" },
     Trace { behavior: "QueryStream columns metadata", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_metadata_order_and_result_indexes" },
@@ -113,7 +113,7 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::UnchangedPass)
             .count(),
-        10
+        11
     );
     assert_eq!(
         TRACEABILITY
@@ -127,7 +127,7 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::CompileGap)
             .count(),
-        5
+        4
     );
     assert_eq!(
         TRACEABILITY
@@ -193,6 +193,67 @@ async fn row_metadata_access_and_errors() {
             index: 99,
             count: 4
         })
+    ));
+}
+
+#[tokio::test]
+async fn row_iteration_preserves_column_order_and_nulls() {
+    let Some(mut client) = connect().await else {
+        return;
+    };
+    let rows = client
+        .simple_query(
+            "SELECT CAST(7 AS int) AS first_value, CAST(NULL AS int) AS nullable, \
+             CAST('last' AS nvarchar(12)) AS final_value",
+        )
+        .await
+        .expect("query row iteration contract")
+        .into_first_result();
+    let row = rows.first().expect("one result row");
+
+    let cells = row
+        .cells()
+        .map(|(column, value)| (column.name().to_string(), value))
+        .collect::<Vec<_>>();
+    assert_eq!(
+        cells
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["first_value", "nullable", "final_value"]
+    );
+    let mut cells = cells.into_iter();
+    assert!(matches!(
+        cells.next().map(|(_, value)| value),
+        Some(ColumnData::I32(Some(7)))
+    ));
+    assert!(matches!(
+        cells.next().map(|(_, value)| value),
+        Some(ColumnData::I32(None))
+    ));
+    assert!(matches!(
+        cells.next().map(|(_, value)| value),
+        Some(ColumnData::String(Some(value))) if value == "last"
+    ));
+    assert!(cells.next().is_none());
+
+    let values = row.clone().into_iter().collect::<Vec<_>>();
+    assert_eq!(values.len(), row.columns().len());
+    let mut values = values.into_iter();
+    assert!(matches!(values.next(), Some(ColumnData::I32(Some(7)))));
+    assert!(matches!(values.next(), Some(ColumnData::I32(None))));
+    assert!(matches!(
+        values.next(),
+        Some(ColumnData::String(Some(value))) if value == "last"
+    ));
+    assert!(values.next().is_none());
+
+    assert_eq!(row.get::<i32, _>(0usize), Some(7));
+    assert_eq!(row.get::<i32, _>("first_value"), Some(7));
+    assert_eq!(row.get::<Option<i32>, _>("nullable"), Some(None));
+    assert!(matches!(
+        row.try_get::<i32, _>(3usize),
+        Err(Error::ColumnIndexOutOfBounds { index: 3, count: 3 })
     ));
 }
 

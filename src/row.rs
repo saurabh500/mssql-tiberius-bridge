@@ -95,6 +95,25 @@ impl Row {
         &self.schema.columns
     }
 
+    /// Iterate over columns and compatibility values in indexed column order.
+    pub fn cells(&self) -> impl ExactSizeIterator<Item = (&Column, crate::ColumnData<'_>)> {
+        self.schema
+            .columns
+            .iter()
+            .zip(self.values.iter())
+            .zip(self.decoded_strings.iter())
+            .map(|((column, value), decoded)| {
+                (
+                    column,
+                    crate::compat::conversion::column_data_ref(
+                        value,
+                        decoded.as_deref(),
+                        column.column_type(),
+                    ),
+                )
+            })
+    }
+
     /// Zero-based index of the result set that produced this row.
     pub fn result_index(&self) -> usize {
         self.result_index
@@ -282,6 +301,33 @@ impl PartialEq for Row {
                     .all(|(a, b)| a.column_type == b.column_type));
 
         schemas_match && self.values == other.values
+    }
+}
+
+impl IntoIterator for Row {
+    type Item = crate::ColumnData<'static>;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let Row {
+            schema,
+            values,
+            decoded_strings,
+            ..
+        } = self;
+        values
+            .into_iter()
+            .zip(decoded_strings)
+            .enumerate()
+            .map(|(index, (value, decoded))| {
+                let column_type = schema
+                    .columns
+                    .get(index)
+                    .map_or(crate::ColumnType::Null, Column::column_type);
+                crate::compat::conversion::column_data_owned(value, decoded, column_type)
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
     }
 }
 
@@ -927,6 +973,67 @@ mod tests {
             .collect();
         let schema = Arc::new(RowSchema { columns, name_map });
         Row::from_schema(schema, values)
+    }
+
+    #[test]
+    fn row_iteration_preserves_order_nulls_and_native_access() -> TestResult {
+        use crate::compat::{FromSql as CompatFromSql, FromSqlOwned};
+
+        let row = make_row(
+            &["first", "nullable", "last"],
+            vec![
+                ColumnValues::Int(7),
+                ColumnValues::Null,
+                ColumnValues::String(SqlString::from_utf8_string("last".into())),
+            ],
+        );
+
+        let mut cells = row.cells();
+        let (first_column, first_value) = cells.next().ok_or("missing first cell")?;
+        ensure_equal(first_column.name(), "first")?;
+        ensure_equal(<i32 as CompatFromSql>::from_sql(&first_value)?, Some(7))?;
+        let (null_column, null_value) = cells.next().ok_or("missing NULL cell")?;
+        ensure_equal(null_column.name(), "nullable")?;
+        ensure_equal(<i32 as CompatFromSql>::from_sql(&null_value)?, None)?;
+        let (last_column, last_value) = cells.next().ok_or("missing last cell")?;
+        ensure_equal(last_column.name(), "last")?;
+        ensure_equal(
+            <String as CompatFromSql>::from_sql(&last_value)?,
+            Some("last".into()),
+        )?;
+        if cells.next().is_some() {
+            return Err("borrowed iteration yielded an extra cell".into());
+        }
+
+        let values = row.clone().into_iter().collect::<Vec<_>>();
+        ensure_equal(values.len(), 3)?;
+        ensure_equal(
+            i32::from_sql_owned(values.first().ok_or("missing owned first")?.clone())?,
+            Some(7),
+        )?;
+        ensure_equal(
+            i32::from_sql_owned(values.get(1).ok_or("missing owned NULL")?.clone())?,
+            None,
+        )?;
+        ensure_equal(
+            String::from_sql_owned(values.get(2).ok_or("missing owned last")?.clone())?,
+            Some("last".into()),
+        )?;
+
+        ensure_equal(row.get::<i32, _>(0usize), Some(7))?;
+        ensure_equal(row.get::<i32, _>("first"), Some(7))?;
+        ensure_equal(row.get::<Option<i32>, _>("nullable"), Some(None))?;
+        ensure_equal(row.cells().count(), 3)?;
+        ensure_equal(row.cells().count(), 3)?;
+        ensure_equal(row.clone(), row.clone())?;
+        Ok(())
+    }
+
+    #[test]
+    fn empty_row_iteration_is_empty() {
+        let row = make_row(&[], Vec::new());
+        assert_eq!(row.cells().count(), 0);
+        assert_eq!(row.into_iter().count(), 0);
     }
 
     #[test]

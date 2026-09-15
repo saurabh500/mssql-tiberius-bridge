@@ -29,6 +29,8 @@ fn borrowed_into_sql<'a>(text: &'a String, bytes: &'a Vec<u8>) {
     let _: ColumnData<'a> = <&Vec<u8> as IntoSql>::into_sql(bytes);
     let _: ColumnData<'a> = <Cow<'a, str> as IntoSql>::into_sql(Cow::Borrowed(text));
     let _: ColumnData<'a> = <Cow<'a, [u8]> as IntoSql>::into_sql(Cow::Borrowed(bytes));
+    let _: ColumnData<'_> = CompatToSql::to_sql(&Cow::<str>::Borrowed(text.as_str()));
+    let _: ColumnData<'_> = CompatToSql::to_sql(&Cow::<[u8]>::Borrowed(bytes.as_slice()));
 }
 
 fn main() {}

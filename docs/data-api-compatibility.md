@@ -60,6 +60,9 @@ Encoding delegates to the existing native `ToSql` implementations for
 primitives, strings and bytes, UUID, `rust_decimal`, `chrono`, and enabled
 `time`/`jiff` types. Native vector, variant, and table parameters use
 `ColumnData::Native`; they have no claimed Tiberius `ColumnData` equivalent.
+`ColumnData::Xml` preserves XML values for row iteration and raw parameter
+encoding, but the bridge does not expose Tiberius's schema-bearing `XmlData`
+wrapper, so XML conversion through `FromSql`/`FromSqlOwned` is not implemented.
 
 Issue #131 additively completes Tiberius-compatible `ExecuteResult` data
 access with `rows_affected()` and standard consuming `IntoIterator`. Existing

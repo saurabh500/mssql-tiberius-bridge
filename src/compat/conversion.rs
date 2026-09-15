@@ -367,6 +367,42 @@ impl<T: NativeToSql + ?Sized> ToSql for T {
     }
 }
 
+impl ToSql for Cow<'_, str> {
+    fn to_sql(&self) -> ColumnData<'_> {
+        ColumnData::String(Some(Cow::Borrowed(self.as_ref())))
+    }
+}
+
+impl ToSql for Option<Cow<'_, str>> {
+    fn to_sql(&self) -> ColumnData<'_> {
+        ColumnData::String(self.as_ref().map(|value| Cow::Borrowed(value.as_ref())))
+    }
+}
+
+impl ToSql for Cow<'_, [u8]> {
+    fn to_sql(&self) -> ColumnData<'_> {
+        ColumnData::Binary(Some(Cow::Borrowed(self.as_ref())))
+    }
+}
+
+impl ToSql for Option<Cow<'_, [u8]>> {
+    fn to_sql(&self) -> ColumnData<'_> {
+        ColumnData::Binary(self.as_ref().map(|value| Cow::Borrowed(value.as_ref())))
+    }
+}
+
+impl ToSql for DecimalParts {
+    fn to_sql(&self) -> ColumnData<'_> {
+        ColumnData::Numeric(Some(*self))
+    }
+}
+
+impl ToSql for Option<DecimalParts> {
+    fn to_sql(&self) -> ColumnData<'_> {
+        ColumnData::Numeric(*self)
+    }
+}
+
 /// Tiberius-shaped by-value conversion to [`ColumnData`].
 pub trait IntoSql<'a>: Send + Sync {
     fn into_sql(self) -> ColumnData<'a>;
@@ -414,7 +450,7 @@ impl_into_sql_native!(
     chrono::NaiveTime => ColumnData::Time(None),
     chrono::NaiveDateTime => ColumnData::DateTime2(None),
     chrono::DateTime<chrono::FixedOffset> => ColumnData::DateTimeOffset(None),
-    chrono::DateTime<chrono::Utc> => ColumnData::DateTime2(None),
+    chrono::DateTime<chrono::Utc> => ColumnData::DateTimeOffset(None),
 );
 
 #[cfg(feature = "time")]
@@ -542,6 +578,18 @@ impl<'a> IntoSql<'a> for Option<&'a Uuid> {
     }
 }
 
+impl<'a> IntoSql<'a> for DecimalParts {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Numeric(Some(self))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<DecimalParts> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Numeric(self)
+    }
+}
+
 trait FromColumnData<'a>: Sized {
     fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>>;
 }
@@ -600,6 +648,38 @@ from_column_data_exact!(
     rust_decimal::Decimal => [ColumnData::Numeric(_)],
 );
 
+impl<'a> FromColumnData<'a> for DecimalParts {
+    fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
+        match value {
+            ColumnData::Numeric(value) => Ok(*value),
+            _ if value.is_null() => Ok(None),
+            _ => Err(Error::Conversion(format!(
+                "cannot interpret {value:?} as {}",
+                std::any::type_name::<Self>()
+            ))),
+        }
+    }
+}
+
+impl<'a> FromColumnData<'a> for chrono::DateTime<chrono::Utc> {
+    fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
+        match value {
+            ColumnData::DateTimeOffset(_) => {
+                decode_owned::<chrono::DateTime<chrono::FixedOffset>>(value)
+                    .map(|value| value.map(|value| value.with_timezone(&chrono::Utc)))
+            }
+            ColumnData::DateTime2(_) => decode_owned::<chrono::NaiveDateTime>(value).map(|value| {
+                value.map(|value| chrono::DateTime::from_naive_utc_and_offset(value, chrono::Utc))
+            }),
+            _ if value.is_null() => Ok(None),
+            _ => Err(Error::Conversion(format!(
+                "cannot interpret {value:?} as {}",
+                std::any::type_name::<Self>()
+            ))),
+        }
+    }
+}
+
 #[cfg(feature = "time")]
 from_column_data_exact!(
     time::Date => [ColumnData::Date(_)],
@@ -651,7 +731,7 @@ pub trait FromSql<'a>: Sized + 'a {
 
 impl<'a, T> FromSql<'a> for T
 where
-    T: NativeFromSql<'a> + FromColumnData<'a> + 'a,
+    T: FromColumnData<'a> + 'a,
 {
     fn from_sql(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
         T::from_column_data(value)
@@ -762,6 +842,24 @@ mod tests {
             IntoSql::into_sql(&borrowed_bytes),
             ColumnData::Binary(Some(Cow::Borrowed(value))) if value == bytes
         ));
+        let cow_text = Cow::Borrowed("cow text");
+        assert!(matches!(
+            ToSql::to_sql(&cow_text),
+            ColumnData::String(Some(Cow::Borrowed("cow text")))
+        ));
+        let cow_bytes = Cow::Borrowed(bytes.as_slice());
+        assert!(matches!(
+            ToSql::to_sql(&cow_bytes),
+            ColumnData::Binary(Some(Cow::Borrowed(value))) if value == bytes
+        ));
+        assert_eq!(
+            ToSql::to_sql(&Option::<Cow<'_, str>>::None),
+            ColumnData::String(None)
+        );
+        assert_eq!(
+            ToSql::to_sql(&Option::<Cow<'_, [u8]>>::None),
+            ColumnData::Binary(None)
+        );
 
         let borrowed = ColumnData::String(Some(Cow::Borrowed("borrowed")));
         assert_eq!(
@@ -1379,6 +1477,21 @@ mod tests {
                 .parse::<rust_decimal::Decimal>()
                 .expect("valid decimal"),
         );
+        let numeric = DecimalParts::new(true, 7, 2, 1_234_567);
+        assert_eq!(ToSql::to_sql(&numeric), ColumnData::Numeric(Some(numeric)));
+        assert_eq!(
+            DecimalParts::from_sql_owned(numeric.into_sql()).expect("decode numeric parts"),
+            Some(numeric)
+        );
+        assert_eq!(
+            ToSql::to_sql(&Option::<DecimalParts>::None),
+            ColumnData::Numeric(None)
+        );
+        assert_eq!(
+            DecimalParts::from_sql_owned(ColumnData::Numeric(None))
+                .expect("decode NULL numeric parts"),
+            None
+        );
 
         let chrono_date = chrono::NaiveDate::from_ymd_opt(2024, 2, 29).expect("valid date");
         let chrono_time =
@@ -1393,6 +1506,27 @@ mod tests {
         assert_roundtrip(chrono_time);
         assert_roundtrip(chrono_datetime);
         assert_roundtrip(chrono_zoned);
+        let chrono_utc = chrono::Utc.from_utc_datetime(&chrono_datetime);
+        assert_roundtrip(chrono_utc);
+        assert_eq!(
+            Option::<chrono::DateTime<chrono::Utc>>::None.into_sql(),
+            ColumnData::DateTimeOffset(None)
+        );
+        let (_, _, _, chrono_datetime2, _) = samples();
+        let expected_utc = chrono::DateTime::from_naive_utc_and_offset(
+            <chrono::NaiveDateTime as NativeFromSql>::from_sql(&ColumnValues::DateTime2(
+                chrono_datetime2.clone(),
+            ))
+            .expect("valid datetime2"),
+            chrono::Utc,
+        );
+        assert_eq!(
+            chrono::DateTime::<chrono::Utc>::from_sql_owned(ColumnData::DateTime2(Some(
+                chrono_datetime2,
+            )))
+            .expect("decode UTC datetime2"),
+            Some(expected_utc)
+        );
 
         #[cfg(feature = "time")]
         {

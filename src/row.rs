@@ -122,6 +122,36 @@ impl Row {
         self.try_get_at(idx)
     }
 
+    /// Get a value using Tiberius-compatible conversion errors.
+    ///
+    /// Panics when the column is missing or a non-NULL value has the wrong
+    /// type. Use [`Row::try_get_compat`] for a recoverable error.
+    pub fn get_compat<'a, T: crate::compat::FromSql<'a>, I: ColumnIndex>(
+        &'a self,
+        col: I,
+    ) -> Option<T> {
+        self.try_get_compat(col).expect("column conversion failed")
+    }
+
+    /// Try to get a value using Tiberius-compatible conversion errors.
+    ///
+    /// SQL NULL returns `Ok(None)`; a non-NULL type mismatch returns
+    /// [`Error::Conversion`]. The bridge-native [`Row::try_get`] is unchanged.
+    pub fn try_get_compat<'a, T: crate::compat::FromSql<'a>, I: ColumnIndex>(
+        &'a self,
+        col: I,
+    ) -> Result<Option<T>> {
+        let idx = col.resolve(self)?;
+        let value = self.values.get(idx).ok_or(Error::ColumnIndexOutOfBounds {
+            index: idx,
+            count: self.values.len(),
+        })?;
+        T::from_sql_with_str(
+            value,
+            self.decoded_strings.get(idx).and_then(|s| s.as_deref()),
+        )
+    }
+
     /// Get a column value by name using case-insensitive lookup. Returns `None`
     /// if the column is NULL or the type doesn't match. Panics if the column
     /// doesn't exist.

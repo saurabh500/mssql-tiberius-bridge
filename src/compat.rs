@@ -16,6 +16,10 @@ use futures_core::Stream;
 use crate::row::RowSchema;
 use crate::{Column, Result, Row};
 
+mod conversion;
+
+pub use conversion::{ColumnData, FromSql, FromSqlOwned, IntoSql, ToSql};
+
 /// Metadata emitted before the rows of each result set.
 #[derive(Debug, Clone)]
 pub struct ResultMetadata {

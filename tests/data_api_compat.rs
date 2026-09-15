@@ -11,8 +11,10 @@ use mssql_tds::datatypes::column_values::ColumnValues;
 use mssql_tds::datatypes::sql_string::SqlString;
 use mssql_tds::message::bulk_load::StreamingBulkLoadWriter;
 use mssql_tiberius_bridge::bulk::BulkLoadRow;
+use mssql_tiberius_bridge::compat::FromSql as CompatFromSql;
 use mssql_tiberius_bridge::{
-    AuthMethod, Client, ColumnType, Config, Error, FromSql, QueryItem, Row, ToSql,
+    AuthMethod, Client, ColumnData, ColumnType, Config, Error, FromSql, FromSqlOwned, IntoSql,
+    QueryItem, Result, Row, ToSql,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -41,9 +43,9 @@ const TRACEABILITY: &[Trace] = &[
     Trace { behavior: "chrono conversions", source: "data_api.rs:chrono_values_round_trip_through_public_conversions", status: Status::AdaptedPass, evidence: "tiberius_compat::{naive_date_time,naive_date,naive_time,datetime_offset}" },
     Trace { behavior: "time crate conversions", source: "data_api.rs:time_values_round_trip_through_public_conversions", status: Status::AdaptedPass, evidence: "query::tests::time_temporals_roundtrip_with_fractional_seconds_and_offset" },
     Trace { behavior: "typed NULL parameter preservation", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "typed_null_parameter_preserves_column_type" },
-    Trace { behavior: "FromSqlOwned conversions", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::CompileGap, evidence: "compile_fail/data_api_conversions.rs (#128)" },
-    Trace { behavior: "FromSql conversion error channel", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::CompileGap, evidence: "compile_fail/data_api_conversion_errors.rs (#128)" },
-    Trace { behavior: "ColumnData and IntoSql", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::CompileGap, evidence: "compile_fail/data_api_conversions.rs (#128)" },
+    Trace { behavior: "FromSqlOwned conversions", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::AdaptedPass, evidence: "compat_conversion_traits_cover_values_nulls_and_errors; pass/data_api_conversions.rs (#128)" },
+    Trace { behavior: "FromSql conversion error channel", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::AdaptedPass, evidence: "compat_conversion_traits_cover_values_nulls_and_errors; pass/data_api_conversion_errors.rs (#128)" },
+    Trace { behavior: "ColumnData and IntoSql", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::AdaptedPass, evidence: "compat_conversion_traits_cover_values_nulls_and_errors; pass/data_api_conversions.rs (#128)" },
     Trace { behavior: "Column name and type metadata", source: "data_api.rs:public_numeric_time_xml_and_token_row_helpers", status: Status::UnchangedPass, evidence: "row_metadata_access_and_errors" },
     Trace { behavior: "Row named access", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::UnchangedPass, evidence: "row_metadata_access_and_errors" },
     Trace { behavior: "Row numeric index access", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::UnchangedPass, evidence: "row_metadata_access_and_errors" },
@@ -51,7 +53,7 @@ const TRACEABILITY: &[Trace] = &[
     Trace { behavior: "missing named try_get is recoverable", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::UnchangedPass, evidence: "row_metadata_access_and_errors" },
     Trace { behavior: "out-of-range numeric try_get is recoverable", source: "DATA_API_COVERAGE.md:Compatibility observations", status: Status::IntentionalImprovement, evidence: "row_metadata_access_and_errors" },
     Trace { behavior: "NULL row retrieval", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::UnchangedPass, evidence: "row_metadata_access_and_errors" },
-    Trace { behavior: "wrong-type retrieval reports conversion error", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::BehavioralGap, evidence: "bridge FromSql currently represents mismatch as None" },
+    Trace { behavior: "wrong-type retrieval reports conversion error", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "row_metadata_access_and_errors through Row::try_get_compat" },
     Trace { behavior: "Row cells and consuming iterator", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::CompileGap, evidence: "compile_fail/data_api_row_iteration.rs (#130)" },
     Trace { behavior: "Row result_index", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_metadata_order_and_result_indexes" },
     Trace { behavior: "QueryItem metadata and row variants", source: "data_api.rs:row_metadata_stream_and_collection_behavior", status: Status::AdaptedPass, evidence: "query_stream_metadata_order_and_result_indexes" },
@@ -118,21 +120,21 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::AdaptedPass)
             .count(),
-        19
+        23
     );
     assert_eq!(
         TRACEABILITY
             .iter()
             .filter(|trace| trace.status == Status::CompileGap)
             .count(),
-        11
+        8
     );
     assert_eq!(
         TRACEABILITY
             .iter()
             .filter(|trace| trace.status == Status::BehavioralGap)
             .count(),
-        1
+        0
     );
     assert_eq!(
         TRACEABILITY
@@ -171,6 +173,16 @@ async fn row_metadata_access_and_errors() {
     assert_eq!(row.get::<i32, _>("unique_name"), Some(9));
     assert_eq!(row.get::<i32, _>("nullable"), None);
     assert_eq!(row.get::<Option<i32>, _>("nullable"), Some(None));
+    assert_eq!(row.get::<&str, _>("duplicate"), None);
+    assert_eq!(
+        row.try_get::<&str, _>("duplicate")
+            .expect("native mismatch remains None"),
+        None
+    );
+    assert!(matches!(
+        row.try_get_compat::<&str, _>("duplicate"),
+        Err(Error::Conversion(_))
+    ));
     assert!(matches!(
         row.try_get::<i32, _>("missing"),
         Err(Error::ColumnNotFound(name)) if name == "missing"
@@ -283,6 +295,22 @@ async fn query_stream_metadata_order_and_result_indexes() {
             }
             QueryItem::Row(row) => {
                 observed.push(("row", row.result_index()));
+                if row.result_index() == 0 {
+                    assert_eq!(row.get::<&str, _>("first_value"), None);
+                    assert_eq!(
+                        row.try_get::<&str, _>("first_value")
+                            .expect("native mismatch remains None"),
+                        None
+                    );
+                    assert!(matches!(
+                        row.try_get_compat::<&str, _>("first_value"),
+                        Err(Error::Conversion(_))
+                    ));
+                    assert!(matches!(
+                        row.try_get_compat::<i32, _>("first_value"),
+                        Ok(Some(7))
+                    ));
+                }
             }
         }
     }
@@ -541,4 +569,52 @@ fn local_conversion_contract_uses_bridge_value_types() {
         <&[u8] as FromSql>::from_sql(&ColumnValues::Bytes(vec![1, 2, 3])),
         Some(&[1, 2, 3][..])
     );
+}
+
+#[test]
+fn compat_conversion_traits_cover_values_nulls_and_errors() -> Result<()> {
+    macro_rules! check_value {
+        ($value:expr, $variant:path, $ty:ty) => {{
+            let value: $ty = $value;
+            let data = value.into_sql();
+            assert!(matches!(data, $variant(Some(_))));
+            assert_eq!(<$ty>::from_sql_owned(data)?, Some(value));
+        }};
+    }
+
+    check_value!(true, ColumnData::Bit, bool);
+    check_value!(u8::MAX, ColumnData::U8, u8);
+    check_value!(-12, ColumnData::I16, i16);
+    check_value!(-34, ColumnData::I32, i32);
+    check_value!(-56, ColumnData::I64, i64);
+    check_value!(1.25, ColumnData::F32, f32);
+    check_value!(2.5, ColumnData::F64, f64);
+
+    let text = String::from("owned");
+    assert_eq!(String::from_sql_owned(text.clone().into_sql())?, Some(text));
+    let bytes = vec![1, 2, 3];
+    assert_eq!(
+        Vec::<u8>::from_sql_owned(bytes.clone().into_sql())?,
+        Some(bytes)
+    );
+    let decimal = rust_decimal::Decimal::new(-12345, 2);
+    assert_eq!(
+        rust_decimal::Decimal::from_sql_owned(decimal.into_sql())?,
+        Some(decimal)
+    );
+    let date = chrono::NaiveDate::from_ymd_opt(2024, 2, 29).expect("valid date");
+    assert_eq!(
+        chrono::NaiveDate::from_sql_owned(date.into_sql())?,
+        Some(date)
+    );
+
+    assert_eq!(<i32 as CompatFromSql>::from_sql(&ColumnValues::Null)?, None);
+    assert!(
+        <i32 as CompatFromSql>::from_sql(&ColumnValues::String(SqlString::from_utf8_string(
+            "wrong".into()
+        )))
+        .is_err()
+    );
+    assert!(String::from_sql_owned(ColumnData::I32(Some(1))).is_err());
+    Ok(())
 }

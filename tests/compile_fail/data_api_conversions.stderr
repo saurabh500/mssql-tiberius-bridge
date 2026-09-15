@@ -1,8 +1,0 @@
-error[E0432]: unresolved imports `mssql_tiberius_bridge::ColumnData`, `mssql_tiberius_bridge::FromSqlOwned`, `mssql_tiberius_bridge::IntoSql`
- --> tests/compile_fail/data_api_conversions.rs:2:29
-  |
-2 | use mssql_tiberius_bridge::{ColumnData, FromSql, FromSqlOwned, IntoSql};
-  |                             ^^^^^^^^^^           ^^^^^^^^^^^^  ^^^^^^^ no `IntoSql` in the root
-  |                             |                    |
-  |                             |                    no `FromSqlOwned` in the root
-  |                             no `ColumnData` in the root

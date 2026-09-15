@@ -13,15 +13,13 @@ The machine-readable traceability matrix is `TRACEABILITY` in
 | Status | Scenarios |
 |---|---:|
 | Passes with the unchanged Tiberius-facing call | 7 |
-| Passes through the current bridge API | 19 |
-| Compile/API gap | 11 |
-| Behavioral gap | 1 |
+| Passes through the current bridge API | 23 |
+| Compile/API gap | 8 |
+| Behavioral gap | 0 |
 | Intentional bridge improvement | 2 |
 
-The behavioral gap is wrong-type row extraction: Tiberius returns a conversion
-error while the bridge's current `FromSql` contract returns `None`. The two
-intentional improvements are recoverable out-of-range numeric access and
-preservation of an empty middle result set in collected results. Tiberius
+The two intentional improvements are recoverable out-of-range numeric access
+and preservation of an empty middle result set in collected results. Tiberius
 panics for the former and drops the empty set when consecutive metadata items
 are collected for the latter.
 
@@ -35,6 +33,24 @@ sets. Errors returned while `QueryStream::columns()` looks ahead are delivered
 once because the bridge's native error is not cloneable; a later stream poll
 continues after that error. Existing buffered and row-only streaming methods
 keep their contracts.
+
+Issue #127 adds the conversion/error layer without changing existing
+bridge-native APIs. `compat::FromSql` has Tiberius's fallible
+`Result<Option<T>>` shape over the bridge's public `ColumnValues`; SQL NULL is
+`Ok(None)`, while a non-NULL type mismatch is `Error::Conversion`.
+`Row::try_get_compat` uses that error channel for buffered and
+compatibility-stream rows. Existing root `FromSql`, `Row::get`, and
+`Row::try_get` keep their signatures and their historical behavior of
+representing either NULL or mismatch as `None`.
+
+`ColumnData`, `FromSqlOwned`, and `IntoSql` are additive crate-root re-exports
+and are also available under `compat`. `compat::FromSql` and `compat::ToSql`
+provide Tiberius-shaped return values without changing the bridge-native root
+conversion traits used by connection APIs.
+Encoding delegates to the existing native `ToSql` implementations for
+primitives, strings and bytes, UUID, `rust_decimal`, `chrono`, and enabled
+`time`/`jiff` types. Native vector, variant, and table parameters use
+`ColumnData::Native`; they have no claimed Tiberius `ColumnData` equivalent.
 
 ## Phase 3 order
 

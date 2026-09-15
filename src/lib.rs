@@ -98,7 +98,7 @@ pub mod serde_de;
 pub use bulk::{BulkInsert, BulkLoadRow, ColumnMapping, ColumnMappingSource};
 pub use client::Client;
 pub use column::{Collation, Column, ColumnType, MultiPartName};
-pub use compat::{QueryItem, QueryStream, ResultMetadata};
+pub use compat::{ColumnData, FromSqlOwned, IntoSql, QueryItem, QueryStream, ResultMetadata};
 pub use config::{AuthMethod, Config, EncryptionLevel, Transport};
 pub use error::{Error, Result};
 pub use pool::{Pool, PooledConnection, RecyclingMethod, TdsManager};

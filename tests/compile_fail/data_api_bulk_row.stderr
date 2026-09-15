@@ -1,0 +1,32 @@
+error[E0432]: unresolved imports `mssql_tiberius_bridge::IntoRow`, `mssql_tiberius_bridge::IntoSql`, `mssql_tiberius_bridge::TokenRow`
+ --> tests/compile_fail/data_api_bulk_row.rs:2:29
+  |
+2 | use mssql_tiberius_bridge::{IntoRow, IntoSql, TokenRow};
+  |                             ^^^^^^^  ^^^^^^^  ^^^^^^^^ no `TokenRow` in the root
+  |                             |        |
+  |                             |        no `IntoSql` in the root
+  |                             no `IntoRow` in the root
+
+error[E0599]: no method named `into_sql` found for type `i32` in the current scope
+ --> tests/compile_fail/data_api_bulk_row.rs:6:19
+  |
+6 |     row.push(1i32.into_sql());
+  |                   ^^^^^^^^
+  |
+help: there is a method `to_sql` with a similar name
+  |
+6 -     row.push(1i32.into_sql());
+6 +     row.push(1i32.to_sql());
+  |
+
+error[E0599]: no method named `into_row` found for tuple `(i32, i32)` in the current scope
+  --> tests/compile_fail/data_api_bulk_row.rs:11:26
+   |
+11 |     let _ = (1i32, 2i32).into_row();
+   |                          ^^^^^^^^
+   |
+help: there is a method `into` with a similar name
+   |
+11 -     let _ = (1i32, 2i32).into_row();
+11 +     let _ = (1i32, 2i32).into();
+   |

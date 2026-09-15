@@ -1,0 +1,8 @@
+error[E0432]: unresolved import `mssql_tiberius_bridge::Query`
+ --> tests/compile_fail/data_api_query_builder.rs:2:5
+  |
+2 | use mssql_tiberius_bridge::Query;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^-----
+  |     |                      |
+  |     |                      help: a similar name exists in the module: `query`
+  |     no `Query` in the root

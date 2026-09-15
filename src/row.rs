@@ -38,11 +38,10 @@ impl RowSchema {
     /// Build a schema from a slice of mssql-tds column metadata.
     pub fn from_metadata(metadata: &[ColumnMetadata]) -> Arc<Self> {
         let columns: Vec<Column> = metadata.iter().map(Column::from_tds).collect();
-        let name_map: HashMap<String, usize> = columns
-            .iter()
-            .enumerate()
-            .map(|(i, c)| (c.name.clone(), i))
-            .collect();
+        let mut name_map = HashMap::with_capacity(columns.len());
+        for (index, column) in columns.iter().enumerate() {
+            name_map.entry(column.name.clone()).or_insert(index);
+        }
         Arc::new(RowSchema { columns, name_map })
     }
 }
@@ -920,6 +919,25 @@ mod tests {
             .try_get::<i32, _>("nope")
             .expect_err("a missing column must fail lookup");
         assert!(matches!(error, Error::ColumnNotFound(name) if name == "nope"));
+    }
+
+    #[test]
+    fn schema_name_lookup_keeps_first_duplicate_and_unique_columns() {
+        let mut metadata = mssql_tds::test_client_support::int_columns(3);
+        metadata[0].column_name = "duplicate".to_string();
+        metadata[1].column_name = "unique".to_string();
+        metadata[2].column_name = "duplicate".to_string();
+        let row = Row::from_tds(
+            &metadata,
+            vec![
+                ColumnValues::Int(7),
+                ColumnValues::Int(8),
+                ColumnValues::Int(9),
+            ],
+        );
+
+        assert_eq!(row.get::<i32, _>("duplicate"), Some(7));
+        assert_eq!(row.get::<i32, _>("unique"), Some(8));
     }
 
     #[test]

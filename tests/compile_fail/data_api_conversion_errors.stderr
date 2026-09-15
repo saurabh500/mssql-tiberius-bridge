@@ -1,0 +1,14 @@
+error[E0308]: mismatched types
+ --> tests/compile_fail/data_api_conversion_errors.rs:5:5
+  |
+4 | fn convert(value: &ColumnValues) -> Result<Option<i32>> {
+  |                                     ------------------- expected `Result<Option<i32>, mssql_tiberius_bridge::Error>` because of return type
+5 |     i32::from_sql(value)
+  |     ^^^^^^^^^^^^^^^^^^^^ expected `Result<Option<i32>, Error>`, found `Option<i32>`
+  |
+  = note: expected enum `Result<Option<i32>, mssql_tiberius_bridge::Error>`
+             found enum `Option<i32>`
+help: try wrapping the expression in `Ok`
+  |
+5 |     Ok(i32::from_sql(value))
+  |     +++                    +

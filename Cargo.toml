@@ -92,6 +92,7 @@ futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 criterion = { version = "0.5", features = ["async_tokio"] }
 tokio = { version = "1", features = ["full"] }
+trybuild = "1"
 
 [[bench]]
 name = "row_streaming"

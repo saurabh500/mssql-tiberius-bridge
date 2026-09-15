@@ -222,6 +222,7 @@ pub(crate) fn column_data_ref<'a>(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn column_data_owned(
     value: ColumnValues,
     decoded: Option<String>,
@@ -282,7 +283,7 @@ fn null_column_data(column_type: ColumnType) -> ColumnData<'static> {
 }
 
 impl ColumnData<'_> {
-    fn into_owned(self) -> ColumnData<'static> {
+    pub(crate) fn into_owned(self) -> ColumnData<'static> {
         match self {
             ColumnData::String(value) => {
                 ColumnData::String(value.map(|value| Cow::Owned(value.into_owned())))

@@ -47,8 +47,9 @@ representing either NULL or mismatch as `None`.
 and are also available under `compat`. `compat::FromSql` and `compat::ToSql`
 provide Tiberius-shaped return values without changing the bridge-native root
 conversion traits used by connection APIs. Borrowed strings and byte slices
-remain borrowed through `IntoSql`; `Row::cells()` borrows cached compatibility
-values rather than reconstructing them.
+remain borrowed through `IntoSql`; `Row::cells()` borrows compatibility values
+from a cache populated on first compatibility access, so native-only row paths
+do not pay for the second representation.
 
 Issue #127 adds the dynamic `compat::Query` builder and its crate-root
 re-export. The builder accepts borrowed or owned SQL, appends dynamic

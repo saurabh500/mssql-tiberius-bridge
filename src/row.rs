@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use mssql_tds::datatypes::column_values::{
     ColumnValues, SqlDate, SqlDateTime, SqlDateTime2, SqlDateTimeOffset, SqlMoney,
@@ -57,7 +57,7 @@ pub struct Row {
     result_index: usize,
     /// Pre-decoded UTF-8 strings for &str borrowing support.
     decoded_strings: Vec<Option<String>>,
-    compat_values: Vec<crate::ColumnData<'static>>,
+    compat_values: OnceLock<Vec<crate::ColumnData<'static>>>,
 }
 
 impl Row {
@@ -67,26 +67,39 @@ impl Row {
         result_index: usize,
         decoded_strings: Vec<Option<String>>,
     ) -> Self {
-        let compat_values = values
+        Self {
+            schema,
+            values,
+            result_index,
+            decoded_strings,
+            compat_values: OnceLock::new(),
+        }
+    }
+
+    fn build_compat_values(
+        schema: &RowSchema,
+        values: &[ColumnValues],
+        decoded_strings: &[Option<String>],
+    ) -> Vec<crate::ColumnData<'static>> {
+        values
             .iter()
-            .cloned()
-            .zip(decoded_strings.iter().cloned())
+            .zip(decoded_strings)
             .enumerate()
             .map(|(index, (value, decoded))| {
                 let column_type = schema
                     .columns
                     .get(index)
                     .map_or(crate::ColumnType::Null, Column::column_type);
-                crate::compat::conversion::column_data_owned(value, decoded, column_type)
+                crate::compat::conversion::column_data_ref(value, decoded.as_deref(), column_type)
+                    .into_owned()
             })
-            .collect();
-        Self {
-            schema,
-            values,
-            result_index,
-            decoded_strings,
-            compat_values,
-        }
+            .collect()
+    }
+
+    fn compat_values(&self) -> &[crate::ColumnData<'static>] {
+        self.compat_values.get_or_init(|| {
+            Self::build_compat_values(&self.schema, &self.values, &self.decoded_strings)
+        })
     }
 
     /// Build a Row reusing a pre-built [`RowSchema`]. Hot path for the
@@ -121,7 +134,7 @@ impl Row {
 
     /// Iterate over columns and compatibility values in indexed column order.
     pub fn cells(&self) -> impl ExactSizeIterator<Item = (&Column, &crate::ColumnData<'static>)> {
-        self.schema.columns.iter().zip(self.compat_values.iter())
+        self.schema.columns.iter().zip(self.compat_values())
     }
 
     /// Zero-based index of the result set that produced this row.
@@ -171,12 +184,12 @@ impl Row {
         col: I,
     ) -> Result<Option<T>> {
         let idx = col.resolve(self)?;
-        let value = self
-            .compat_values
+        let compat_values = self.compat_values();
+        let value = compat_values
             .get(idx)
             .ok_or(Error::ColumnIndexOutOfBounds {
                 index: idx,
-                count: self.compat_values.len(),
+                count: compat_values.len(),
             })?;
         T::from_sql(value)
     }
@@ -319,8 +332,17 @@ impl IntoIterator for Row {
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let Row { compat_values, .. } = self;
-        compat_values.into_iter()
+        let Row {
+            schema,
+            values,
+            decoded_strings,
+            compat_values,
+            ..
+        } = self;
+        compat_values
+            .into_inner()
+            .unwrap_or_else(|| Self::build_compat_values(&schema, &values, &decoded_strings))
+            .into_iter()
     }
 }
 
@@ -980,8 +1002,12 @@ mod tests {
                 ColumnValues::String(SqlString::from_utf8_string("last".into())),
             ],
         );
+        ensure_equal(row.compat_values.get().is_none(), true)?;
+        ensure_equal(row.get::<i32, _>("first"), Some(7))?;
+        ensure_equal(row.compat_values.get().is_none(), true)?;
 
         let mut cells = row.cells();
+        ensure_equal(row.compat_values.get().is_some(), true)?;
         let (first_column, first_value) = cells.next().ok_or("missing first cell")?;
         ensure_equal(first_column.name(), "first")?;
         ensure_equal(<i32 as CompatFromSql>::from_sql(first_value)?, Some(7))?;
@@ -1010,6 +1036,19 @@ mod tests {
         ensure_equal(row.cells().count(), 3)?;
         ensure_equal(row.cells().count(), 3)?;
         ensure_equal(row.clone(), row.clone())?;
+
+        let uncached = make_row(&["value"], vec![ColumnValues::Int(9)]);
+        ensure_equal(uncached.compat_values.get().is_none(), true)?;
+        let uncached_values = uncached.into_iter().collect::<Vec<_>>();
+        ensure_equal(
+            i32::from_sql_owned(
+                uncached_values
+                    .into_iter()
+                    .next()
+                    .ok_or("missing uncached value")?,
+            )?,
+            Some(9),
+        )?;
 
         let exact = make_row(
             &["smallint", "xml", "json", "string"],
@@ -1050,6 +1089,12 @@ mod tests {
         let row = make_row(&[], Vec::new());
         assert_eq!(row.cells().count(), 0);
         assert_eq!(row.into_iter().count(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "column conversion failed: ColumnNotFound(\"missing\")")]
+    fn get_compat_panic_includes_conversion_error() {
+        make_row(&["present"], vec![ColumnValues::Int(1)]).get_compat::<i32, _>("missing");
     }
 
     #[test]

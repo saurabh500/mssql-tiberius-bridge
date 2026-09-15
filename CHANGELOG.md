@@ -13,6 +13,8 @@ when the Release PR is opened.
 
 ### Changed
 
+- `RecyclingMethod::Ping` rejects connections with pending results before
+  checkout; direct `Client::ping()` remains a cached-health-only check.
 - Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached
   `is_connection_dead()` check, including for `RecyclingMethod::Ping`.
   The async API is unchanged, but success no longer verifies server
@@ -25,6 +27,13 @@ when the Release PR is opened.
 
 ### Added
 
+- `Config::connect_retry_count` to opt out of initial connection retries and
+  native idle recovery without changing the existing default.
+- Checked incremental `Client::start_query`, `query_metadata`, `next_row_into`,
+  `next_result`, `close_query`, and `has_pending_results` for caller-owned row
+  writers, plus `query_first` for first-row reads with checked draining.
+- Narrow native callback/metadata re-exports in `writer` and optional `sspi`,
+  `gssapi`, and `tls-schannel-direct-on-windows` feature forwarding.
 - `Client::reset_session()` and the no-I/O `Client::is_connection_dead()` accessor.
 - Tokio timeout support for pools built with `TdsManager::create_pool`.
 

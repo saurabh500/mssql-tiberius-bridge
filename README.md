@@ -79,8 +79,11 @@ returning a connection: recycling runs at the next checkout, not at check-in.
 For intentional legacy session reuse, build a pool with
 `TdsManager::new(config).with_recycling_method(RecyclingMethod::Ping)`.
 `Ping` now uses the driver's cached `is_connection_dead()` status instead of
-`SELECT 1`: it performs no I/O and leaves outstanding results untouched.
-Success means "not known dead," not verified server responsiveness; an idle
+`SELECT 1`: it performs no I/O and rejects connections with outstanding results
+so unread responses do not carry over to the next borrower. Finish or close the
+query before returning the connection. Direct `Client::ping()` still checks only
+cached health and does not reject or drain outstanding results.
+Successful recycling means "not known dead and no pending results," not verified server responsiveness; an idle
 connection failure may only be detected by the next operation.
 See [connection pooling](docs/connection-examples.md#connection-pooling) for
 examples and timeout configuration. `deadpool` still owns capacity and checkout;
@@ -102,12 +105,86 @@ Unpolled futures, unused bulk builders, and buffered result streams do not poiso
 the connection. Completed SQL errors retain the native driver's liveness outcome.
 A failed or cancelled session reset always retires the connection.
 
+The bridge does not replay failed SQL. Initial connection retries and native
+idle-connection recovery are separate: `config.connect_retry_count(0)` disables
+both. If unset, the native default is preserved (one retry in `mssql-tds` 0.1.0).
+The retry interval, address resolution, and pool checkout policy are unchanged.
+
 Cancellation does not guarantee that SQL stopped executing or rolled back, so
 do not automatically retry writes. Native cooperative cancellation requires
 polling through cleanup; an external timeout that drops the operation is different.
 Direct calls through `inner_mut()` bypass the bridge guards: after abandoning
 native I/O, mark the native client dead and discard it instead of returning it
 to a pool as healthy. See the `Client` rustdoc for the full contract.
+
+## Incremental custom row writers
+
+Use the checked incremental API when the consumer owns its client and reusable
+value buffers, without retaining a borrowed stream or creating bridge `Row`s:
+
+```rust,ignore
+let mut on_result = client.start_query(sql, &[]).await?;
+while on_result {
+    // Copy/validate metadata before reading; empty rowsets also expose columns.
+    configure_writer(client.query_metadata()?)?;
+    loop {
+        let mut writer = make_writer_for_next_row();
+        let decoded = client.next_row_into(&mut writer).await?;
+        // Check your writer's conversion-error latch, column count, and end_row.
+        writer.check_completed_row(decoded)?;
+        if !decoded { break; } // Current rowset boundary only.
+        publish_completed_row(writer)?;
+    }
+    on_result = client.next_result().await?; // false means query EOF.
+}
+client.close_query().await?;
+```
+
+This sketch omits application-specific writers and error cleanup; see the complete
+[integer-writer example](examples/incremental.rs), including drain-on-error.
+`start_query` drains previous results and skips non-row statements. `next_result`
+drains the current result if necessary and skips subsequent non-row statements;
+it must be called even after a row boundary to observe trailing results/errors.
+Repeated row reads at a boundary return `false` without advancing, and repeated
+`next_result` calls at query EOF return `false`. `query_metadata` returns an error
+outside a current unread rowset, including after its boundary is read.
+Row reads on healthy idle or closed clients intentionally also return `false`;
+that result alone never establishes query EOF. Use `next_result` for traversal
+and `has_pending_results` for pending-response status.
+
+`close_query` drains rather than cancels; early close of a large query can still
+take time. Completed SQL errors preserve native connection health; failed
+transport drains and dropped pending I/O retire it. Unpolled futures do not.
+For a pool that does not drain on return, reject a client when
+`is_connection_dead() || has_pending_results()`. Neither being set proves that
+the remote server is still responsive. Existing bridge operations continue to
+drain outstanding results before issuing a new request.
+
+`query_first(sql, params)` materializes at most one bridge `Row`, then drains
+everything. It reads the **first rowset**, returning `None` for an empty first
+rowset even if later rowsets have rows. Trailing errors are not hidden by an
+already-read row. Use this for scalar/count/range queries, not data refills.
+
+Import `RowWriter`, its callback argument types, `ColumnMetadata`, `TdsDataType`,
+and `TdsError` through `mssql_tiberius_bridge::writer`. These native re-exports
+couple this part of the bridge's public API to `mssql-tds` versions. Callback
+bytes may be borrowed only for the callback; copy/transcode into owned storage.
+Discard partial rows and uncommitted `value_destination` storage on failed or
+cancelled reads. Callback conversion errors must be latched and checked by the
+writer before publishing even an `Ok(true)` row; then drain or discard the client.
+
+Consumers control refill size (for example 32 rows per `block_on`). This is not
+a MAX-value byte cap, and no bridge-backed performance claim follows from
+direct-driver measurements. The optional features `sspi`, `gssapi`, and
+`tls-schannel-direct-on-windows` forward the native features of those names,
+without changing defaults, TLS semantics, or requiring a direct native dependency.
+
+The standalone consumer fixture has **only the bridge as a SQL-driver
+dependency** and compiles the same example without the bridge's dev dependencies:
+
+```powershell
+cargo check --manifest-path tests\consumer\Cargo.toml
+```
 
 ## Spatial values
 

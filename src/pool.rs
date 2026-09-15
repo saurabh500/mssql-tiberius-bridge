@@ -47,8 +47,9 @@ pub enum RecyclingMethod {
     Reset,
     /// Check cached connection health without I/O or resetting session state.
     ///
-    /// Retains temporary tables, session settings, prepared handles, uncommitted
-    /// transactions, and outstanding results. Unlike the former `SELECT 1`
+    /// Retains temporary tables, session settings, prepared handles, and uncommitted
+    /// transactions. Rejects connections with pending results rather than passing
+    /// one borrower's unread response to the next. Unlike the former `SELECT 1`
     /// probe, this does not verify server responsiveness; an undetected idle
     /// failure may surface on the borrower's next operation.
     Ping,
@@ -110,7 +111,14 @@ impl Manager for TdsManager {
         conn.ensure_usable().map_err(RecycleError::Backend)?;
         match self.recycling_method {
             RecyclingMethod::Reset => conn.reset_session().await,
-            RecyclingMethod::Ping => conn.ping().await,
+            RecyclingMethod::Ping => {
+                if conn.has_pending_results() {
+                    return Err(RecycleError::Message(
+                        "Connection has pending results; finish or close the query before returning it to the pool".into(),
+                    ));
+                }
+                conn.ping().await
+            }
         }
         .map_err(RecycleError::Backend)
     }

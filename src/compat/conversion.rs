@@ -219,23 +219,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn owned_and_borrowed_values_use_native_encoding() -> Result<()> {
+    fn owned_and_borrowed_values_use_native_encoding() {
         let owned = String::from("owned").into_sql();
         assert!(matches!(owned, ColumnData::String(Some(_))));
-        assert_eq!(String::from_sql_owned(owned)?, Some("owned".to_string()));
+        assert_eq!(
+            String::from_sql_owned(owned.clone()).expect("decode owned string"),
+            Some("owned".to_string())
+        );
+        assert_eq!(
+            String::from_sql_owned(owned).expect("decode owned string again"),
+            Some("owned".to_string())
+        );
 
         let bytes = [1, 2, 3];
         assert!(matches!(
             bytes.as_slice().into_sql(),
             ColumnData::Binary(Some(value)) if value.as_ref() == bytes
         ));
-        Ok(())
     }
 
     #[test]
-    fn null_and_wrong_type_remain_distinct() -> Result<()> {
-        assert_eq!(i32::from_sql_owned(ColumnData::I32(None))?, None);
-        assert!(i32::from_sql_owned(ColumnData::String(Some(Cow::Borrowed("wrong")))).is_err());
-        Ok(())
+    fn null_and_wrong_type_remain_distinct() {
+        assert_eq!(
+            i32::from_sql_owned(ColumnData::I32(None)).expect("decode NULL"),
+            None
+        );
+        assert!(matches!(
+            i32::from_sql_owned(ColumnData::String(Some(Cow::Borrowed("wrong")))),
+            Err(Error::Conversion(_))
+        ));
     }
 }

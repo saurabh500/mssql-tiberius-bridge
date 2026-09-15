@@ -14,7 +14,7 @@ use mssql_tiberius_bridge::bulk::BulkLoadRow;
 use mssql_tiberius_bridge::compat::FromSql as CompatFromSql;
 use mssql_tiberius_bridge::{
     AuthMethod, Client, ColumnData, ColumnType, Config, Error, FromSql, FromSqlOwned, IntoSql,
-    QueryItem, Result, Row, ToSql,
+    QueryItem, Row, ToSql,
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -572,13 +572,16 @@ fn local_conversion_contract_uses_bridge_value_types() {
 }
 
 #[test]
-fn compat_conversion_traits_cover_values_nulls_and_errors() -> Result<()> {
+fn compat_conversion_traits_cover_values_nulls_and_errors() {
     macro_rules! check_value {
         ($value:expr, $variant:path, $ty:ty) => {{
             let value: $ty = $value;
             let data = value.into_sql();
             assert!(matches!(data, $variant(Some(_))));
-            assert_eq!(<$ty>::from_sql_owned(data)?, Some(value));
+            assert_eq!(
+                <$ty>::from_sql_owned(data).expect("decode owned value"),
+                Some(value)
+            );
         }};
     }
 
@@ -591,30 +594,38 @@ fn compat_conversion_traits_cover_values_nulls_and_errors() -> Result<()> {
     check_value!(2.5, ColumnData::F64, f64);
 
     let text = String::from("owned");
-    assert_eq!(String::from_sql_owned(text.clone().into_sql())?, Some(text));
+    assert_eq!(
+        String::from_sql_owned(text.clone().into_sql()).expect("decode owned string"),
+        Some(text)
+    );
     let bytes = vec![1, 2, 3];
     assert_eq!(
-        Vec::<u8>::from_sql_owned(bytes.clone().into_sql())?,
+        Vec::<u8>::from_sql_owned(bytes.clone().into_sql()).expect("decode owned bytes"),
         Some(bytes)
     );
     let decimal = rust_decimal::Decimal::new(-12345, 2);
     assert_eq!(
-        rust_decimal::Decimal::from_sql_owned(decimal.into_sql())?,
+        rust_decimal::Decimal::from_sql_owned(decimal.into_sql()).expect("decode decimal"),
         Some(decimal)
     );
     let date = chrono::NaiveDate::from_ymd_opt(2024, 2, 29).expect("valid date");
     assert_eq!(
-        chrono::NaiveDate::from_sql_owned(date.into_sql())?,
+        chrono::NaiveDate::from_sql_owned(date.into_sql()).expect("decode date"),
         Some(date)
     );
 
-    assert_eq!(<i32 as CompatFromSql>::from_sql(&ColumnValues::Null)?, None);
-    assert!(
+    assert_eq!(
+        <i32 as CompatFromSql>::from_sql(&ColumnValues::Null).expect("decode NULL"),
+        None
+    );
+    assert!(matches!(
         <i32 as CompatFromSql>::from_sql(&ColumnValues::String(SqlString::from_utf8_string(
             "wrong".into()
-        )))
-        .is_err()
-    );
-    assert!(String::from_sql_owned(ColumnData::I32(Some(1))).is_err());
-    Ok(())
+        ))),
+        Err(Error::Conversion(_))
+    ));
+    assert!(matches!(
+        String::from_sql_owned(ColumnData::I32(Some(1))),
+        Err(Error::Conversion(_))
+    ));
 }

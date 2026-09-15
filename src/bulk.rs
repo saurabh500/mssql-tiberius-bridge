@@ -296,6 +296,7 @@ fn map_compat_bulk_error(error: Error) -> Error {
 fn is_bulk_input_message(message: &str) -> bool {
     [
         "Row ",
+        "Column index ",
         "Binary data length ",
         "String length ",
         "SQL_VARIANT data size ",
@@ -559,6 +560,13 @@ mod tests {
             "Row 1 wrote 1 columns, but expected 2 columns based on table metadata".into(),
         )));
         assert!(matches!(error, Error::BulkInput(message) if message.starts_with("Row 1")));
+
+        let error = map_compat_bulk_error(Error::Tds(mssql_tds::error::Error::UsageError(
+            "Column index 1 out of bounds, expected 1 columns based on table metadata.".into(),
+        )));
+        assert!(
+            matches!(error, Error::BulkInput(message) if message.starts_with("Column index 1"))
+        );
 
         let error = map_compat_bulk_error(Error::Conversion("not bulk".into()));
         assert!(matches!(error, Error::Conversion(message) if message == "not bulk"));

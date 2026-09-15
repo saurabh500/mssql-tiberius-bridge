@@ -191,7 +191,10 @@ pub(crate) fn column_data_ref<'a>(
             ColumnData::Numeric(Some(*value))
         }
         ColumnValues::Bit(value) => ColumnData::Bit(Some(*value)),
-        ColumnValues::String(_) => ColumnData::String(decoded.map(Cow::Borrowed)),
+        ColumnValues::String(value) => ColumnData::String(Some(match decoded {
+            Some(decoded) => Cow::Borrowed(decoded),
+            None => Cow::Owned(value.to_utf8_string()),
+        })),
         ColumnValues::DateTime(value) => ColumnData::DateTime(Some(value.clone())),
         ColumnValues::Date(value) => ColumnData::Date(Some(value.clone())),
         ColumnValues::Time(value) => ColumnData::Time(Some(value.clone())),
@@ -201,10 +204,16 @@ pub(crate) fn column_data_ref<'a>(
         ColumnValues::SmallMoney(value) => ColumnData::SmallMoney(Some(value.clone())),
         ColumnValues::Money(value) => ColumnData::Money(Some(value.clone())),
         ColumnValues::Bytes(value) => ColumnData::Binary(Some(Cow::Borrowed(value))),
-        ColumnValues::Xml(_) => ColumnData::Xml(decoded.map(Cow::Borrowed)),
+        ColumnValues::Xml(value) => ColumnData::Xml(Some(match decoded {
+            Some(decoded) => Cow::Borrowed(decoded),
+            None => Cow::Owned(value.as_string()),
+        })),
         ColumnValues::Null => null_column_data(column_type),
         ColumnValues::Uuid(value) => ColumnData::Guid(Some(*value)),
-        ColumnValues::Json(_) => ColumnData::Json(decoded.map(Cow::Borrowed)),
+        ColumnValues::Json(value) => ColumnData::Json(Some(match decoded {
+            Some(decoded) => Cow::Borrowed(decoded),
+            None => Cow::Owned(value.as_string()),
+        })),
         ColumnValues::Vector(value) => ColumnData::Native(SqlType::Vector(
             Some(value.clone()),
             value.dimension_count(),
@@ -990,6 +999,27 @@ mod tests {
                 column_data_ref(value, *decoded, *column_type),
                 expected.clone()
             );
+        }
+
+        let uncached_text = [
+            (
+                ColumnValues::String(sql_string("string fallback")),
+                ColumnType::NVarchar,
+                ColumnData::String(Some(Cow::Owned("string fallback".into()))),
+            ),
+            (
+                ColumnValues::Xml(SqlXml::from("<fallback/>".to_string())),
+                ColumnType::Xml,
+                ColumnData::Xml(Some(Cow::Owned("<fallback/>".into()))),
+            ),
+            (
+                ColumnValues::Json(SqlJson::from("{\"fallback\":true}".to_string())),
+                ColumnType::Json,
+                ColumnData::Json(Some(Cow::Owned("{\"fallback\":true}".into()))),
+            ),
+        ];
+        for (value, column_type, expected) in &uncached_text {
+            assert_eq!(column_data_ref(value, None, *column_type), expected.clone());
         }
 
         assert!(matches!(

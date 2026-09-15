@@ -934,6 +934,19 @@ async fn compat_bulk_oversized_value_is_explicit_input_error() {
         .expect("compatibility adapter retains rows until finalize");
     assert!(matches!(bulk.finalize().await, Err(Error::BulkInput(_))));
 
+    let mut too_wide = client
+        .bulk_insert("#compat_bulk_limit")
+        .await
+        .expect("start wrong-width bulk");
+    too_wide
+        .send(("one", "two").into_row())
+        .await
+        .expect("row width is checked against metadata during finalize");
+    assert!(matches!(
+        too_wide.finalize().await,
+        Err(Error::BulkInput(message)) if message.starts_with("Column index ")
+    ));
+
     let mut native = client
         .bulk_insert("#compat_bulk_limit")
         .await

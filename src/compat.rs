@@ -184,3 +184,119 @@ impl Stream for QueryStream<'_> {
         item
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use futures_util::{StreamExt, TryStreamExt};
+
+    use super::*;
+    use crate::Error;
+
+    fn schema() -> Arc<RowSchema> {
+        RowSchema::from_metadata(&[])
+    }
+
+    fn row() -> Row {
+        Row::from_schema(schema(), Vec::new())
+    }
+
+    #[test]
+    fn query_item_accessors_match_variants() {
+        let metadata = QueryItem::Metadata(ResultMetadata::new(schema(), 3));
+        assert_eq!(
+            metadata
+                .as_metadata()
+                .expect("metadata variant")
+                .result_index(),
+            3
+        );
+        assert!(metadata
+            .as_metadata()
+            .expect("metadata variant")
+            .columns()
+            .is_empty());
+        assert!(metadata.as_row().is_none());
+        assert_eq!(
+            metadata
+                .into_metadata()
+                .expect("consume metadata variant")
+                .result_index(),
+            3
+        );
+        assert!(QueryItem::Metadata(ResultMetadata::new(schema(), 0))
+            .into_row()
+            .is_none());
+
+        let row_item = QueryItem::Row(row());
+        assert!(row_item.as_metadata().is_none());
+        assert!(row_item.as_row().is_some());
+        assert!(row_item.into_row().is_some());
+        assert!(QueryItem::Row(row()).into_metadata().is_none());
+    }
+
+    #[tokio::test]
+    async fn columns_handles_empty_row_and_error_streams() {
+        let mut empty = QueryStream::new(Box::pin(futures_util::stream::empty()));
+        assert!(empty
+            .columns()
+            .await
+            .expect("empty stream columns")
+            .is_none());
+        assert!(empty
+            .columns()
+            .await
+            .expect("repeated empty columns")
+            .is_none());
+
+        let mut row_first = QueryStream::new(Box::pin(futures_util::stream::iter([Ok(
+            QueryItem::Row(row()),
+        )])));
+        assert!(row_first
+            .columns()
+            .await
+            .expect("row-only stream columns")
+            .is_none());
+        assert!(matches!(
+            row_first.next().await,
+            Some(Ok(QueryItem::Row(_)))
+        ));
+
+        let mut error = QueryStream::new(Box::pin(futures_util::stream::iter([Err(
+            Error::Conversion("expected".into()),
+        )])));
+        assert!(matches!(
+            error.columns().await,
+            Err(Error::Conversion(message)) if message == "expected"
+        ));
+    }
+
+    #[tokio::test]
+    async fn collectors_cover_empty_error_and_row_only_inputs() {
+        let row_only = QueryStream::new(Box::pin(futures_util::stream::iter([Ok(
+            QueryItem::Row(row()),
+        )])));
+        let results = row_only
+            .into_results()
+            .await
+            .expect("collect row-only input");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results.first().map(Vec::len), Some(1));
+
+        let empty = QueryStream::new(Box::pin(futures_util::stream::empty()));
+        assert!(empty
+            .into_first_result()
+            .await
+            .expect("collect empty first result")
+            .is_empty());
+        let empty = QueryStream::new(Box::pin(futures_util::stream::empty()));
+        assert!(empty.into_row().await.expect("collect empty row").is_none());
+
+        let error = QueryStream::new(Box::pin(futures_util::stream::iter([Err(
+            Error::Conversion("expected".into()),
+        )])));
+        assert!(matches!(
+            error.into_row_stream().try_collect::<Vec<_>>().await,
+            Err(Error::Conversion(message)) if message == "expected"
+        ));
+    }
+}

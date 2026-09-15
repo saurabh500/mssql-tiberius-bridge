@@ -124,8 +124,11 @@ impl<'a> QueryStream<'a> {
                     }
                     self.peeked = Some(Ok(item));
                 }
-                Some(Err(error)) => return Err(error),
-                None => {}
+                Some(Err(error)) => {
+                    self.columns = None;
+                    return Err(error);
+                }
+                None => self.columns = None,
             }
         }
 
@@ -192,8 +195,12 @@ impl Stream for QueryStream<'_> {
             Some(item) => Poll::Ready(Some(item)),
             None => self.inner.as_mut().poll_next(cx),
         };
-        if let Poll::Ready(Some(Ok(QueryItem::Metadata(metadata)))) = &item {
-            self.columns = Some(Arc::clone(&metadata.schema));
+        match &item {
+            Poll::Ready(Some(Ok(QueryItem::Metadata(metadata)))) => {
+                self.columns = Some(Arc::clone(&metadata.schema));
+            }
+            Poll::Ready(Some(Err(_)) | None) => self.columns = None,
+            _ => {}
         }
         item
     }
@@ -289,6 +296,31 @@ mod tests {
             Err(Error::Conversion(message)) if message == "expected"
         ));
         assert!(error.next().await.is_none());
+        assert!(error
+            .columns()
+            .await
+            .expect("columns after error")
+            .is_none());
+    }
+
+    #[tokio::test]
+    async fn direct_stream_error_clears_columns() {
+        let mut stream = QueryStream::new(Box::pin(futures_util::stream::iter([
+            Ok(QueryItem::Metadata(ResultMetadata::new(schema(), 0))),
+            Err(Error::Conversion("expected".into())),
+        ])));
+
+        assert!(stream.columns().await.expect("columns").is_some());
+        assert!(stream.next().await.is_some());
+        assert!(matches!(
+            stream.next().await,
+            Some(Err(Error::Conversion(message))) if message == "expected"
+        ));
+        assert!(stream
+            .columns()
+            .await
+            .expect("columns after error")
+            .is_none());
     }
 
     #[tokio::test]

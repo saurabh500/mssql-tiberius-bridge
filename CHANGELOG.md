@@ -11,6 +11,8 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+## [0.1.1](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0...v0.1.1) - 2026-09-15
+
 ### Changed
 
 - Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached

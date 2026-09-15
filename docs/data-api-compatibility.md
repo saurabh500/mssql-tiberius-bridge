@@ -36,8 +36,8 @@ keep their contracts.
 
 Issue #128 adds the conversion/error layer without changing existing
 bridge-native APIs. `compat::FromSql` has Tiberius's fallible
-`Result<Option<T>>` shape over the bridge's public `ColumnValues`; SQL NULL is
-`Ok(None)`, while a non-NULL type mismatch is `Error::Conversion`.
+`Result<Option<T>>` shape over compatibility `ColumnData`; SQL NULL is
+`Ok(None)`, while a non-NULL variant mismatch is `Error::Conversion`.
 `Row::try_get_compat` uses that error channel for buffered and
 compatibility-stream rows. Existing root `FromSql`, `Row::get`, and
 `Row::try_get` keep their signatures and their historical behavior of
@@ -46,7 +46,9 @@ representing either NULL or mismatch as `None`.
 `ColumnData`, `FromSqlOwned`, and `IntoSql` are additive crate-root re-exports
 and are also available under `compat`. `compat::FromSql` and `compat::ToSql`
 provide Tiberius-shaped return values without changing the bridge-native root
-conversion traits used by connection APIs.
+conversion traits used by connection APIs. Borrowed strings and byte slices
+remain borrowed through `IntoSql`; `Row::cells()` borrows cached compatibility
+values rather than reconstructing them.
 
 Issue #127 adds the dynamic `compat::Query` builder and its crate-root
 re-export. The builder accepts borrowed or owned SQL, appends dynamic

@@ -57,9 +57,38 @@ pub struct Row {
     result_index: usize,
     /// Pre-decoded UTF-8 strings for &str borrowing support.
     decoded_strings: Vec<Option<String>>,
+    compat_values: Vec<crate::ColumnData<'static>>,
 }
 
 impl Row {
+    fn from_parts(
+        schema: Arc<RowSchema>,
+        values: Vec<ColumnValues>,
+        result_index: usize,
+        decoded_strings: Vec<Option<String>>,
+    ) -> Self {
+        let compat_values = values
+            .iter()
+            .cloned()
+            .zip(decoded_strings.iter().cloned())
+            .enumerate()
+            .map(|(index, (value, decoded))| {
+                let column_type = schema
+                    .columns
+                    .get(index)
+                    .map_or(crate::ColumnType::Null, Column::column_type);
+                crate::compat::conversion::column_data_owned(value, decoded, column_type)
+            })
+            .collect();
+        Self {
+            schema,
+            values,
+            result_index,
+            decoded_strings,
+            compat_values,
+        }
+    }
+
     /// Build a Row reusing a pre-built [`RowSchema`]. Hot path for the
     /// streaming and buffered code paths — clones the `Arc`, never the
     /// underlying `Vec<Column>`/`HashMap`.
@@ -73,12 +102,7 @@ impl Row {
                 _ => None,
             })
             .collect();
-        Row {
-            schema,
-            values,
-            result_index: 0,
-            decoded_strings,
-        }
+        Self::from_parts(schema, values, 0, decoded_strings)
     }
 
     /// Build a Row from mssql-tds column metadata and decoded values.
@@ -96,22 +120,8 @@ impl Row {
     }
 
     /// Iterate over columns and compatibility values in indexed column order.
-    pub fn cells(&self) -> impl ExactSizeIterator<Item = (&Column, crate::ColumnData<'_>)> {
-        self.schema
-            .columns
-            .iter()
-            .zip(self.values.iter())
-            .zip(self.decoded_strings.iter())
-            .map(|((column, value), decoded)| {
-                (
-                    column,
-                    crate::compat::conversion::column_data_ref(
-                        value,
-                        decoded.as_deref(),
-                        column.column_type(),
-                    ),
-                )
-            })
+    pub fn cells(&self) -> impl ExactSizeIterator<Item = (&Column, &crate::ColumnData<'static>)> {
+        self.schema.columns.iter().zip(self.compat_values.iter())
     }
 
     /// Zero-based index of the result set that produced this row.
@@ -161,14 +171,14 @@ impl Row {
         col: I,
     ) -> Result<Option<T>> {
         let idx = col.resolve(self)?;
-        let value = self.values.get(idx).ok_or(Error::ColumnIndexOutOfBounds {
-            index: idx,
-            count: self.values.len(),
-        })?;
-        T::from_sql_with_str(
-            value,
-            self.decoded_strings.get(idx).and_then(|s| s.as_deref()),
-        )
+        let value = self
+            .compat_values
+            .get(idx)
+            .ok_or(Error::ColumnIndexOutOfBounds {
+                index: idx,
+                count: self.compat_values.len(),
+            })?;
+        T::from_sql(value)
     }
 
     /// Get a column value by name using case-insensitive lookup. Returns `None`
@@ -309,25 +319,8 @@ impl IntoIterator for Row {
     type IntoIter = std::vec::IntoIter<Self::Item>;
 
     fn into_iter(self) -> Self::IntoIter {
-        let Row {
-            schema,
-            values,
-            decoded_strings,
-            ..
-        } = self;
-        values
-            .into_iter()
-            .zip(decoded_strings)
-            .enumerate()
-            .map(|(index, (value, decoded))| {
-                let column_type = schema
-                    .columns
-                    .get(index)
-                    .map_or(crate::ColumnType::Null, Column::column_type);
-                crate::compat::conversion::column_data_owned(value, decoded, column_type)
-            })
-            .collect::<Vec<_>>()
-            .into_iter()
+        let Row { compat_values, .. } = self;
+        compat_values.into_iter()
     }
 }
 
@@ -806,12 +799,12 @@ impl BridgeRowWriter {
             &mut self.decoded_strings,
             Vec::with_capacity(self.col_count),
         );
-        Row {
-            schema: self.schema.clone(),
+        Row::from_parts(
+            self.schema.clone(),
             values,
-            result_index: self.result_index,
+            self.result_index,
             decoded_strings,
-        }
+        )
     }
 }
 
@@ -991,13 +984,13 @@ mod tests {
         let mut cells = row.cells();
         let (first_column, first_value) = cells.next().ok_or("missing first cell")?;
         ensure_equal(first_column.name(), "first")?;
-        ensure_equal(<i32 as CompatFromSql>::from_sql(&first_value)?, Some(7))?;
+        ensure_equal(<i32 as CompatFromSql>::from_sql(first_value)?, Some(7))?;
         let (null_column, null_value) = cells.next().ok_or("missing NULL cell")?;
         ensure_equal(null_column.name(), "nullable")?;
-        ensure_equal(<i32 as CompatFromSql>::from_sql(&null_value)?, None)?;
+        ensure_equal(<i32 as CompatFromSql>::from_sql(null_value)?, None)?;
         let (last_column, last_value) = cells.next().ok_or("missing last cell")?;
         ensure_equal(last_column.name(), "last")?;
-        let last = <String as CompatFromSql>::from_sql(&last_value)?;
+        let last = <String as CompatFromSql>::from_sql(last_value)?;
         ensure_equal(last, Some("last".into()))?;
         ensure_equal(cells.next().is_none(), true)?;
 
@@ -1017,6 +1010,38 @@ mod tests {
         ensure_equal(row.cells().count(), 3)?;
         ensure_equal(row.cells().count(), 3)?;
         ensure_equal(row.clone(), row.clone())?;
+
+        let exact = make_row(
+            &["smallint", "xml", "json", "string"],
+            vec![
+                ColumnValues::SmallInt(7),
+                ColumnValues::Xml(SqlXml::from("<root/>".to_string())),
+                ColumnValues::Json(SqlJson::from("{\"ok\":true}".to_string())),
+                ColumnValues::String(SqlString::from_utf8_string("text".into())),
+            ],
+        );
+        ensure_equal(
+            matches!(
+                exact.try_get_compat::<i32, _>("smallint"),
+                Err(Error::Conversion(_))
+            ),
+            true,
+        )?;
+        ensure_equal(
+            matches!(
+                exact.try_get_compat::<&str, _>("xml"),
+                Err(Error::Conversion(_))
+            ),
+            true,
+        )?;
+        ensure_equal(
+            matches!(
+                exact.try_get_compat::<&str, _>("json"),
+                Err(Error::Conversion(_))
+            ),
+            true,
+        )?;
+        ensure_equal(exact.try_get_compat::<&str, _>("string")?, Some("text"))?;
         Ok(())
     }
 

@@ -358,11 +358,11 @@ impl NativeToSql for ColumnData<'_> {
 
 /// Tiberius-shaped by-reference conversion to [`ColumnData`].
 pub trait ToSql: Send + Sync {
-    fn to_sql(&self) -> ColumnData<'static>;
+    fn to_sql(&self) -> ColumnData<'_>;
 }
 
 impl<T: NativeToSql + ?Sized> ToSql for T {
-    fn to_sql(&self) -> ColumnData<'static> {
+    fn to_sql(&self) -> ColumnData<'_> {
         ColumnData::from_native(NativeToSql::to_sql(self))
     }
 }
@@ -372,17 +372,181 @@ pub trait IntoSql<'a>: Send + Sync {
     fn into_sql(self) -> ColumnData<'a>;
 }
 
-impl<'a, T: NativeToSql> IntoSql<'a> for T {
+impl<'a> IntoSql<'a> for ColumnData<'a> {
     fn into_sql(self) -> ColumnData<'a> {
-        ColumnData::from_native(NativeToSql::to_sql(&self))
+        self
+    }
+}
+
+macro_rules! impl_into_sql_native {
+    ($($ty:ty => $null:expr),+ $(,)?) => {
+        $(
+            impl<'a> IntoSql<'a> for $ty {
+                fn into_sql(self) -> ColumnData<'a> {
+                    ColumnData::from_native(NativeToSql::to_sql(&self))
+                }
+            }
+
+            impl<'a> IntoSql<'a> for Option<$ty> {
+                fn into_sql(self) -> ColumnData<'a> {
+                    match self {
+                        Some(value) => ColumnData::from_native(NativeToSql::to_sql(&value)),
+                        None => $null,
+                    }
+                }
+            }
+        )+
+    };
+}
+
+impl_into_sql_native!(
+    bool => ColumnData::Bit(None),
+    u8 => ColumnData::U8(None),
+    i16 => ColumnData::I16(None),
+    i32 => ColumnData::I32(None),
+    i64 => ColumnData::I64(None),
+    f32 => ColumnData::F32(None),
+    f64 => ColumnData::F64(None),
+    Uuid => ColumnData::Guid(None),
+    rust_decimal::Decimal => ColumnData::Numeric(None),
+    serde_json::Value => ColumnData::Json(None),
+    chrono::NaiveDate => ColumnData::Date(None),
+    chrono::NaiveTime => ColumnData::Time(None),
+    chrono::NaiveDateTime => ColumnData::DateTime2(None),
+    chrono::DateTime<chrono::FixedOffset> => ColumnData::DateTimeOffset(None),
+    chrono::DateTime<chrono::Utc> => ColumnData::DateTime2(None),
+);
+
+#[cfg(feature = "time")]
+impl_into_sql_native!(
+    time::Date => ColumnData::Date(None),
+    time::Time => ColumnData::Time(None),
+    time::PrimitiveDateTime => ColumnData::DateTime2(None),
+    time::OffsetDateTime => ColumnData::DateTimeOffset(None),
+);
+
+#[cfg(feature = "jiff")]
+impl_into_sql_native!(
+    jiff::civil::Date => ColumnData::Date(None),
+    jiff::civil::Time => ColumnData::Time(None),
+    jiff::civil::DateTime => ColumnData::DateTime2(None),
+    jiff::Timestamp => ColumnData::DateTimeOffset(None),
+    jiff::Zoned => ColumnData::DateTimeOffset(None),
+);
+
+impl<'a> IntoSql<'a> for String {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::String(Some(Cow::Owned(self)))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<String> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::String(self.map(Cow::Owned))
+    }
+}
+
+impl<'a> IntoSql<'a> for &'a str {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::String(Some(Cow::Borrowed(self)))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<&'a str> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::String(self.map(Cow::Borrowed))
+    }
+}
+
+impl<'a> IntoSql<'a> for &'a String {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::String(Some(Cow::Borrowed(self.as_str())))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<&'a String> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::String(self.map(|value| Cow::Borrowed(value.as_str())))
+    }
+}
+
+impl<'a> IntoSql<'a> for Cow<'a, str> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::String(Some(self))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<Cow<'a, str>> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::String(self)
+    }
+}
+
+impl<'a> IntoSql<'a> for Vec<u8> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Binary(Some(Cow::Owned(self)))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<Vec<u8>> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Binary(self.map(Cow::Owned))
+    }
+}
+
+impl<'a> IntoSql<'a> for &'a [u8] {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Binary(Some(Cow::Borrowed(self)))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<&'a [u8]> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Binary(self.map(Cow::Borrowed))
+    }
+}
+
+impl<'a> IntoSql<'a> for &'a Vec<u8> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Binary(Some(Cow::Borrowed(self.as_slice())))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<&'a Vec<u8>> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Binary(self.map(|value| Cow::Borrowed(value.as_slice())))
+    }
+}
+
+impl<'a> IntoSql<'a> for Cow<'a, [u8]> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Binary(Some(self))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<Cow<'a, [u8]>> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Binary(self)
+    }
+}
+
+impl<'a> IntoSql<'a> for &'a Uuid {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Guid(Some(*self))
+    }
+}
+
+impl<'a> IntoSql<'a> for Option<&'a Uuid> {
+    fn into_sql(self) -> ColumnData<'a> {
+        ColumnData::Guid(self.copied())
     }
 }
 
 trait FromColumnData<'a>: Sized {
-    fn from_column_data(value: &'a ColumnData<'_>) -> Result<Option<Self>>;
+    fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>>;
 }
 
-fn decode_owned<T>(value: &ColumnData<'_>) -> Result<Option<T>>
+fn decode_owned<T>(value: &ColumnData<'static>) -> Result<Option<T>>
 where
     T: for<'a> NativeFromSql<'a>,
 {
@@ -397,56 +561,66 @@ where
     }
 }
 
-macro_rules! from_column_data_owned {
-    ($($ty:ty),+ $(,)?) => {
+macro_rules! from_column_data_exact {
+    ($($ty:ty => [$($variant:pat_param)|+]),+ $(,)?) => {
         $(
             impl<'a> FromColumnData<'a> for $ty {
-                fn from_column_data(value: &'a ColumnData<'_>) -> Result<Option<Self>> {
-                    decode_owned(value)
+                fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
+                    match value {
+                        $($variant)|+ => decode_owned(value),
+                        _ if value.is_null() => Ok(None),
+                        _ => Err(Error::Conversion(format!(
+                            "cannot interpret {value:?} as {}",
+                            std::any::type_name::<Self>()
+                        ))),
+                    }
                 }
             }
         )+
     };
 }
 
-from_column_data_owned!(
-    bool,
-    u8,
-    i16,
-    i32,
-    i64,
-    f32,
-    f64,
-    String,
-    Uuid,
-    Vec<u8>,
-    serde_json::Value,
-    chrono::NaiveDate,
-    chrono::NaiveTime,
-    chrono::NaiveDateTime,
-    chrono::DateTime<chrono::FixedOffset>,
-    rust_decimal::Decimal,
+from_column_data_exact!(
+    bool => [ColumnData::Bit(_)],
+    u8 => [ColumnData::U8(_)],
+    i16 => [ColumnData::I16(_)],
+    i32 => [ColumnData::I32(_)],
+    i64 => [ColumnData::I64(_)],
+    f32 => [ColumnData::F32(_)],
+    f64 => [ColumnData::F64(_)],
+    String => [ColumnData::String(_)],
+    Uuid => [ColumnData::Guid(_)],
+    Vec<u8> => [ColumnData::Binary(_)],
+    serde_json::Value => [ColumnData::Json(_) | ColumnData::String(_)],
+    chrono::NaiveDate => [ColumnData::Date(_)],
+    chrono::NaiveTime => [ColumnData::Time(_)],
+    chrono::NaiveDateTime =>
+        [ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_)],
+    chrono::DateTime<chrono::FixedOffset> => [ColumnData::DateTimeOffset(_)],
+    rust_decimal::Decimal => [ColumnData::Numeric(_)],
 );
 
 #[cfg(feature = "time")]
-from_column_data_owned!(
-    time::Date,
-    time::Time,
-    time::PrimitiveDateTime,
-    time::OffsetDateTime,
+from_column_data_exact!(
+    time::Date => [ColumnData::Date(_)],
+    time::Time => [ColumnData::Time(_)],
+    time::PrimitiveDateTime =>
+        [ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_)],
+    time::OffsetDateTime => [ColumnData::DateTimeOffset(_)],
 );
 
 #[cfg(feature = "jiff")]
-from_column_data_owned!(
-    jiff::civil::Date,
-    jiff::civil::Time,
-    jiff::civil::DateTime,
-    jiff::Timestamp,
-    jiff::Zoned,
+from_column_data_exact!(
+    jiff::civil::Date => [ColumnData::Date(_)],
+    jiff::civil::Time => [ColumnData::Time(_)],
+    jiff::civil::DateTime =>
+        [ColumnData::DateTime(_) | ColumnData::SmallDateTime(_) | ColumnData::DateTime2(_)],
+    jiff::Timestamp => [ColumnData::DateTimeOffset(_)],
+    jiff::Zoned => [ColumnData::DateTimeOffset(_)],
 );
 
 impl<'a> FromColumnData<'a> for &'a str {
-    fn from_column_data(value: &'a ColumnData<'_>) -> Result<Option<Self>> {
+    fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
         match value {
             ColumnData::String(Some(value)) => Ok(Some(value.as_ref())),
             _ if value.is_null() => Ok(None),
@@ -458,7 +632,7 @@ impl<'a> FromColumnData<'a> for &'a str {
 }
 
 impl<'a> FromColumnData<'a> for &'a [u8] {
-    fn from_column_data(value: &'a ColumnData<'_>) -> Result<Option<Self>> {
+    fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
         match value {
             ColumnData::Binary(Some(value)) => Ok(Some(value.as_ref())),
             _ if value.is_null() => Ok(None),
@@ -470,35 +644,17 @@ impl<'a> FromColumnData<'a> for &'a [u8] {
 }
 
 /// Convert a compatibility value through the shared row decoder.
-pub trait FromSql<'a>: Sized {
+pub trait FromSql<'a>: Sized + 'a {
     /// SQL NULL is `Ok(None)`; a non-NULL type mismatch is an error.
-    fn from_sql(value: &'a ColumnData<'_>) -> Result<Option<Self>>;
-
-    #[doc(hidden)]
-    fn from_sql_with_str(value: &'a ColumnValues, decoded: Option<&'a str>)
-        -> Result<Option<Self>>;
+    fn from_sql(value: &'a ColumnData<'static>) -> Result<Option<Self>>;
 }
 
 impl<'a, T> FromSql<'a> for T
 where
-    T: NativeFromSql<'a> + FromColumnData<'a>,
+    T: NativeFromSql<'a> + FromColumnData<'a> + 'a,
 {
-    fn from_sql(value: &'a ColumnData<'_>) -> Result<Option<Self>> {
+    fn from_sql(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
         T::from_column_data(value)
-    }
-
-    fn from_sql_with_str(
-        value: &'a ColumnValues,
-        decoded: Option<&'a str>,
-    ) -> Result<Option<Self>> {
-        match (value, NativeFromSql::from_sql_with_str(value, decoded)) {
-            (ColumnValues::Null, _) => Ok(None),
-            (_, Some(value)) => Ok(Some(value)),
-            _ => Err(Error::Conversion(format!(
-                "cannot interpret {value:?} as {}",
-                std::any::type_name::<Self>()
-            ))),
-        }
     }
 }
 
@@ -554,9 +710,14 @@ mod tests {
 
     fn assert_roundtrip<T>(value: T)
     where
-        T: NativeToSql + for<'a> FromSql<'a> + Clone + PartialEq + std::fmt::Debug,
+        T: NativeToSql
+            + for<'a> FromSql<'a>
+            + for<'a> IntoSql<'a>
+            + Clone
+            + PartialEq
+            + std::fmt::Debug,
     {
-        let by_ref = <T as ToSql>::to_sql(&value);
+        let by_ref = <T as ToSql>::to_sql(&value).into_owned();
         assert_eq!(
             <T as FromSql>::from_sql(&by_ref).expect("decode by-reference conversion"),
             Some(value.clone())
@@ -571,7 +732,7 @@ mod tests {
     #[test]
     fn owned_and_borrowed_values_use_native_encoding() {
         let owned = String::from("owned").into_sql();
-        assert!(matches!(owned, ColumnData::String(Some(_))));
+        assert!(matches!(owned, ColumnData::String(Some(Cow::Owned(_)))));
         assert_eq!(
             String::from_sql_owned(owned.clone()).expect("decode owned string"),
             Some("owned".to_string())
@@ -581,10 +742,25 @@ mod tests {
             Some("owned".to_string())
         );
 
+        assert!(matches!(
+            IntoSql::into_sql("borrowed"),
+            ColumnData::String(Some(Cow::Borrowed("borrowed")))
+        ));
+        let borrowed_string = "borrowed string".to_string();
+        assert!(matches!(
+            IntoSql::into_sql(&borrowed_string),
+            ColumnData::String(Some(Cow::Borrowed("borrowed string")))
+        ));
+
         let bytes = [1, 2, 3];
         assert!(matches!(
             bytes.as_slice().into_sql(),
-            ColumnData::Binary(Some(value)) if value.as_ref() == bytes
+            ColumnData::Binary(Some(Cow::Borrowed(value))) if value == bytes
+        ));
+        let borrowed_bytes = bytes.to_vec();
+        assert!(matches!(
+            IntoSql::into_sql(&borrowed_bytes),
+            ColumnData::Binary(Some(Cow::Borrowed(value))) if value == bytes
         ));
 
         let borrowed = ColumnData::String(Some(Cow::Borrowed("borrowed")));
@@ -1246,11 +1422,14 @@ mod tests {
             assert_roundtrip(zoned);
         }
 
-        assert_eq!(
-            String::from_sql_owned(ColumnData::Xml(Some(Cow::Borrowed("<root/>"))))
-                .expect("decode XML"),
-            Some("<root/>".into())
-        );
+        assert!(matches!(
+            String::from_sql_owned(ColumnData::Xml(Some(Cow::Borrowed("<root/>")))),
+            Err(Error::Conversion(_))
+        ));
+        assert!(matches!(
+            String::from_sql_owned(ColumnData::Json(Some(Cow::Borrowed("{}")))),
+            Err(Error::Conversion(_))
+        ));
         assert_eq!(
             <&str as FromSql>::from_sql(&ColumnData::String(Some(Cow::Borrowed("borrowed"))))
                 .expect("decode borrowed string"),
@@ -1280,20 +1459,16 @@ mod tests {
             Err(Error::Conversion(_))
         ));
         assert_eq!(
-            <i32 as FromSql>::from_sql_with_str(&ColumnValues::Int(9), None)
-                .expect("decode native row value"),
+            <i32 as FromSql>::from_sql(&ColumnData::I32(Some(9)))
+                .expect("decode compatibility value"),
             Some(9)
         );
         assert_eq!(
-            <i32 as FromSql>::from_sql_with_str(&ColumnValues::Null, None)
-                .expect("decode native NULL"),
+            <i32 as FromSql>::from_sql(&ColumnData::I32(None)).expect("decode compatibility NULL"),
             None
         );
         assert!(matches!(
-            <i32 as FromSql>::from_sql_with_str(
-                &ColumnValues::String(sql_string("wrong")),
-                Some("wrong")
-            ),
+            <i32 as FromSql>::from_sql(&ColumnData::I16(Some(9))),
             Err(Error::Conversion(_))
         ));
     }

@@ -252,7 +252,8 @@ fn null_column_data(column_type: ColumnType) -> ColumnData<'static> {
         ColumnType::Int8 => ColumnData::I64(None),
         ColumnType::Float4 => ColumnData::F32(None),
         ColumnType::Float8 => ColumnData::F64(None),
-        ColumnType::Datetime | ColumnType::Datetime4 => ColumnData::DateTime(None),
+        ColumnType::Datetime => ColumnData::DateTime(None),
+        ColumnType::Datetime4 => ColumnData::SmallDateTime(None),
         ColumnType::Datetime2 => ColumnData::DateTime2(None),
         ColumnType::DatetimeOffset => ColumnData::DateTimeOffset(None),
         ColumnType::Date => ColumnData::Date(None),
@@ -329,10 +330,15 @@ impl NativeToSql for ColumnData<'_> {
             ColumnData::I64(value) => SqlType::BigInt(value),
             ColumnData::F32(value) => SqlType::Real(value),
             ColumnData::F64(value) => SqlType::Float(value),
-            ColumnData::String(value) => SqlType::NVarchar(
-                value.map(|value| SqlString::from_utf8_string(value.into_owned())),
-                4000,
-            ),
+            ColumnData::String(value) => match value {
+                Some(value) if value.encode_utf16().count() > 4000 => {
+                    SqlType::NVarcharMax(Some(SqlString::from_utf8_string(value.into_owned())))
+                }
+                value => SqlType::NVarchar(
+                    value.map(|value| SqlString::from_utf8_string(value.into_owned())),
+                    4000,
+                ),
+            },
             ColumnData::Guid(value) => SqlType::Uuid(value),
             ColumnData::Binary(value) => {
                 SqlType::VarBinaryMax(value.map(|value| value.into_owned()))
@@ -1316,7 +1322,7 @@ mod tests {
             (ColumnType::Float4, ColumnData::F32(None)),
             (ColumnType::Float8, ColumnData::F64(None)),
             (ColumnType::Datetime, ColumnData::DateTime(None)),
-            (ColumnType::Datetime4, ColumnData::DateTime(None)),
+            (ColumnType::Datetime4, ColumnData::SmallDateTime(None)),
             (ColumnType::Datetime2, ColumnData::DateTime2(None)),
             (ColumnType::DatetimeOffset, ColumnData::DateTimeOffset(None)),
             (ColumnType::Date, ColumnData::Date(None)),
@@ -1457,6 +1463,25 @@ mod tests {
         assert!(matches!(
             ColumnData::Json(Some(Cow::Borrowed("{}"))).into_owned(),
             ColumnData::Json(Some(Cow::Owned(value))) if value == "{}"
+        ));
+    }
+
+    #[test]
+    fn compatibility_strings_select_nvarchar_max_by_utf16_length() {
+        let bounded = "😀".repeat(2000);
+        let oversized = "😀".repeat(2001);
+
+        assert!(matches!(
+            NativeToSql::to_sql(&ColumnData::String(Some(Cow::Borrowed(&bounded)))),
+            SqlType::NVarchar(Some(_), 4000)
+        ));
+        assert!(matches!(
+            NativeToSql::to_sql(&ColumnData::String(Some(Cow::Borrowed(&oversized)))),
+            SqlType::NVarcharMax(Some(_))
+        ));
+        assert!(matches!(
+            NativeToSql::to_sql(&ColumnData::String(None)),
+            SqlType::NVarchar(None, 4000)
         ));
     }
 

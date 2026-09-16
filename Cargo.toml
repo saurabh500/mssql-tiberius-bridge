@@ -67,6 +67,9 @@ jiff = ["dep:jiff"]
 serde = ["dep:serde"]
 arrow = ["dep:arrow-array", "dep:arrow-schema"]
 _bench = []
+sspi = ["mssql-tds/sspi"]
+gssapi = ["mssql-tds/gssapi"]
+tls-schannel-direct-on-windows = ["mssql-tds/tls-schannel-direct-on-windows"]
 
 [dependencies]
 mssql-tds = { version = "0.1.0", default-features = false }

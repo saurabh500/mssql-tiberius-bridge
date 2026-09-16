@@ -136,6 +136,11 @@ jobs:
       - name: Unit tests
         run: cargo test --lib
 
+      - name: Incremental writer consumer
+        run: |
+          cargo test --example incremental
+          cargo check --manifest-path tests/consumer/Cargo.toml
+
       - name: Unit tests (serde feature)
         run: cargo test --lib --features serde
 

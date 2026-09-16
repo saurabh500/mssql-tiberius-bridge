@@ -42,11 +42,14 @@ use crate::query::{build_params_with_string_encoding, ExecuteResult, QueryResult
 /// do not perform I/O and are unaffected.
 ///
 /// Cancellation does **not** guarantee that SQL Server stopped the request or
-/// rolled back its effects. No SQL is retried, and no async cleanup is run from
+/// rolled back its effects. The bridge does not replay failed SQL, and no async cleanup is run from
 /// `Drop`. Completed errors keep the native driver's liveness classification;
 /// ordinary drained SQL errors do not by themselves kill a connection.
 /// [`reset_session`](Self::reset_session) is stricter: any failed or cancelled
 /// reset retires the connection rather than leaving a partially cleaned session.
+/// Initial connection retries and native idle-connection recovery are separate:
+/// use [`Config::connect_retry_count(0)`](Config::connect_retry_count) to disable
+/// them. Otherwise the native connection retry default is preserved.
 ///
 /// Native cooperative cancellation through `ExecuteOptions` is different: the
 /// native operation must keep being polled to finish its ATTENTION cleanup.
@@ -179,6 +182,153 @@ impl Client {
 
     pub(crate) fn ensure_usable(&self) -> Result<()> {
         ensure_usable(&self.inner)
+    }
+
+    /// Start an incremental query without collecting rows.
+    ///
+    /// Drains any previous query, binds `params` like [`query`](Self::query),
+    /// and skips non-row statements. `true` means metadata is available for
+    /// the first rowset, **including an empty rowset**; `false` means query EOF.
+    /// Use [`query_metadata`](Self::query_metadata) before reading rows, then
+    /// [`next_row_into`](Self::next_row_into) and [`next_result`](Self::next_result).
+    ///
+    /// All incremental I/O follows [`Client`]'s cancellation contract. Completed
+    /// errors retain the native health classification; the bridge does not
+    /// replay failed SQL. Native connection retries/recovery are controlled
+    /// separately by [`Config::connect_retry_count`].
+    pub async fn start_query(
+        &mut self,
+        sql: impl Into<String>,
+        params: &[&dyn ToSql],
+    ) -> Result<bool> {
+        let sql = sql.into();
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = async {
+            operation.close_query().await?;
+            let first = if params.is_empty() {
+                operation.execute(sql, ()).await?
+            } else {
+                let params = build_params_with_string_encoding(
+                    params,
+                    self.send_string_parameters_as_unicode,
+                );
+                operation.execute_sp_executesql(sql, params, ()).await?
+            };
+            match first {
+                StatementResult::Rows => Ok(true),
+                StatementResult::NoRows { .. } => {
+                    operation.advance_to_rows().await.map_err(Error::Tds)
+                }
+                StatementResult::End => Ok(false),
+            }
+        }
+        .await;
+        operation.complete(result)
+    }
+
+    /// Metadata for the current incremental rowset, without reading its rows.
+    ///
+    /// Available after `start_query` or `next_result` returns `true`, even for
+    /// an empty rowset. Returns an error after its row boundary has been read,
+    /// after close/EOF, or on a known-dead connection, never stale metadata.
+    /// Copy anything needed across subsequent mutable client operations.
+    pub fn query_metadata(&self) -> Result<&[crate::writer::ColumnMetadata]> {
+        self.ensure_usable()?;
+        if !self.inner.has_open_batch()
+            || !self.inner.on_rows()
+            || !self.inner.maybe_has_unread_rows()
+        {
+            return Err(Error::Tds(mssql_tds::error::Error::UsageError(
+                "No current rowset; start a query or advance to the next result".into(),
+            )));
+        }
+        Ok(self.inner.get_metadata())
+    }
+
+    /// Decode one row directly into a caller-owned writer, without a bridge
+    /// [`Row`](crate::Row) or intermediate `Vec<ColumnValues>`.
+    ///
+    /// `true` means native decoding completed one row. The writer must check
+    /// its own conversion-error latch and completeness **before accepting it**;
+    /// callbacks cannot return errors. An error or cancelled read may leave
+    /// partial writer data, which must be discarded. See [`crate::writer`].
+    ///
+    /// `false` means the **current rowset ended**, not necessarily query EOF.
+    /// Repeated reads at that boundary return `false` without advancing. Call
+    /// [`next_result`](Self::next_result) explicitly to continue. Reads on an
+    /// idle or fully closed client also return `false`.
+    pub async fn next_row_into<W: crate::writer::RowWriter + Send + ?Sized>(
+        &mut self,
+        writer: &mut W,
+    ) -> Result<bool> {
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = if operation.has_open_batch() {
+            operation.next_row_into(writer).await.map_err(Error::Tds)
+        } else {
+            Ok(false)
+        };
+        operation.complete(result)
+    }
+
+    /// Drain the current rowset and move to the next row-returning result.
+    ///
+    /// Skips non-row statements. `true` exposes fresh metadata (possibly with
+    /// zero rows); `false` is query EOF and remains `false` on repeated calls.
+    /// Unlike `next_row_into(false)`, this settles trailing statements/errors.
+    pub async fn next_result(&mut self) -> Result<bool> {
+        Self::advance_stream(&mut self.inner).await
+    }
+
+    /// Drain all unread rows and trailing results, leaving the client reusable
+    /// on success. Idempotent on a healthy idle client; rejects known-dead clients.
+    ///
+    /// This is a drain, not server cancellation, and can take time for a large
+    /// result. SQL errors are returned even after a row was successfully read.
+    /// A failed transport drain or dropped pending cleanup retires the client.
+    pub async fn close_query(&mut self) -> Result<()> {
+        let mut operation = Operation::new(&mut self.inner)?;
+        let result = operation.close_query().await.map_err(Error::Tds);
+        operation.complete(result)
+    }
+
+    /// Whether an unfinished response remains, including trailing non-row
+    /// statements after a rowset boundary. Does not perform I/O.
+    ///
+    /// A pool that cannot drain on return should reject clients when this or
+    /// [`is_connection_dead`](Self::is_connection_dead) is true. Both being false
+    /// means locally reusable, not proof that the remote server is responsive.
+    pub fn has_pending_results(&self) -> bool {
+        self.inner.has_open_batch()
+    }
+
+    /// Read at most one row of the **first rowset**, then drain the entire query.
+    ///
+    /// Intended for scalar/count/range queries. An empty first rowset yields
+    /// `None`, even if later rowsets contain rows. Unlike [`query`](Self::query),
+    /// this materializes only one bridge [`Row`](crate::Row). A trailing SQL or
+    /// cleanup error is returned rather than hidden by a successful first row.
+    pub async fn query_first(
+        &mut self,
+        sql: impl Into<String>,
+        params: &[&dyn ToSql],
+    ) -> Result<Option<crate::Row>> {
+        let row: Result<Option<crate::Row>> = async {
+            if !self.start_query(sql, params).await? {
+                return Ok(None);
+            }
+            let schema = crate::row::RowSchema::from_metadata(self.query_metadata()?);
+            let mut writer = crate::row::BridgeRowWriter::new(schema);
+            if self.next_row_into(&mut writer).await? {
+                Ok(Some(writer.take_row()))
+            } else {
+                Ok(None)
+            }
+        }
+        .await;
+        let closed = self.close_query().await;
+        let row = row?;
+        closed?;
+        Ok(row)
     }
 
     /// Execute a raw SQL query without parameters.
@@ -698,6 +848,10 @@ impl Client {
         Ok(ExecuteResult { counts })
     }
 }
+
+#[cfg(test)]
+#[path = "incremental_tests.rs"]
+mod incremental_tests;
 
 #[cfg(test)]
 mod tests {

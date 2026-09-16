@@ -5,6 +5,7 @@
 //! migrating code that consumes Tiberius `QueryStream` items. The bridge's
 //! native buffered and row-only streaming APIs remain unchanged.
 
+use std::borrow::Cow;
 use std::fmt;
 use std::future::poll_fn;
 use std::pin::Pin;
@@ -14,7 +15,55 @@ use std::task::{Context, Poll};
 use futures_core::Stream;
 
 use crate::row::RowSchema;
-use crate::{Column, Result, Row};
+use crate::{Client, Column, ExecuteResult, Result, Row};
+
+pub(crate) mod conversion;
+
+pub use conversion::{ColumnData, FromSql, FromSqlOwned, IntoSql, ToSql};
+
+/// A Tiberius-compatible dynamically bound query.
+#[derive(Debug)]
+pub struct Query<'a> {
+    sql: Cow<'a, str>,
+    params: Vec<ColumnData<'a>>,
+}
+
+impl<'a> Query<'a> {
+    /// Create a query from borrowed or owned SQL.
+    pub fn new(sql: impl Into<Cow<'a, str>>) -> Self {
+        Self {
+            sql: sql.into(),
+            params: Vec::new(),
+        }
+    }
+
+    /// Append a parameter in `@P1`, `@P2`, ... order.
+    pub fn bind(&mut self, param: impl IntoSql<'a> + 'a) {
+        self.params.push(param.into_sql());
+    }
+
+    /// Execute the query and return its compatibility item stream.
+    pub async fn query<'b>(self, client: &'b mut Client) -> Result<QueryStream<'b>> {
+        let params = self
+            .params
+            .iter()
+            .map(|param| param as &dyn crate::query::ToSql)
+            .collect::<Vec<_>>();
+        let mut stream = client.query_compat(self.sql.into_owned(), &params);
+        let _ = stream.columns().await?;
+        Ok(stream)
+    }
+
+    /// Execute the query and return affected-row counts.
+    pub async fn execute(self, client: &mut Client) -> Result<ExecuteResult> {
+        let params = self
+            .params
+            .iter()
+            .map(|param| param as &dyn crate::query::ToSql)
+            .collect::<Vec<_>>();
+        client.execute(self.sql.into_owned(), &params).await
+    }
+}
 
 /// Metadata emitted before the rows of each result set.
 #[derive(Debug, Clone)]

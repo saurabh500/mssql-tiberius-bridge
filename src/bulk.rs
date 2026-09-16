@@ -76,13 +76,19 @@
 //! [`timeout`](BulkInsert::timeout),
 //! [`notification_interval`](BulkInsert::notification_interval).
 
+use std::future::{ready, IntoFuture, Ready};
 use std::time::Duration;
 
+use async_trait::async_trait;
 use mssql_tds::connection::bulk_copy::BulkCopy as TdsBulkCopy;
 use mssql_tds::connection::tds_client::TdsClient;
+use mssql_tds::core::TdsResult;
+use mssql_tds::message::bulk_load::StreamingBulkLoadWriter;
 
+use crate::compat::ColumnData;
 use crate::error::{Error, Result};
 use crate::operation::Operation;
+use crate::{ExecuteResult, IntoSql};
 
 // Re-export upstream types that callers will use directly.
 pub use mssql_tds::connection::bulk_copy::{
@@ -106,6 +112,217 @@ pub struct BulkInsert<'a> {
     options: BulkCopyOptions,
     timeout: Option<Duration>,
     column_mappings: Vec<ColumnMapping>,
+}
+
+/// One row for the Tiberius-compatible incremental bulk API.
+#[derive(Debug, Default, Clone)]
+pub struct TokenRow<'a> {
+    data: Vec<ColumnData<'a>>,
+}
+
+impl<'a> TokenRow<'a> {
+    /// Create an empty row.
+    pub const fn new() -> Self {
+        Self { data: Vec::new() }
+    }
+
+    /// Create an empty row with allocated capacity.
+    pub fn with_capacity(capacity: usize) -> Self {
+        Self {
+            data: Vec::with_capacity(capacity),
+        }
+    }
+
+    /// Remove all values without changing the allocated capacity.
+    pub fn clear(&mut self) {
+        self.data.clear();
+    }
+
+    /// Return the number of values.
+    pub fn len(&self) -> usize {
+        self.data.len()
+    }
+
+    /// Return whether the row contains no values.
+    pub fn is_empty(&self) -> bool {
+        self.data.is_empty()
+    }
+
+    /// Borrow the value at `index`.
+    pub fn get(&self, index: usize) -> Option<&ColumnData<'a>> {
+        self.data.get(index)
+    }
+
+    /// Iterate over values in column order.
+    pub fn iter(&self) -> std::slice::Iter<'_, ColumnData<'a>> {
+        self.data.iter()
+    }
+
+    /// Append one value.
+    pub fn push(&mut self, value: ColumnData<'a>) {
+        self.data.push(value);
+    }
+}
+
+impl<'a> IntoIterator for TokenRow<'a> {
+    type Item = ColumnData<'a>;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.data.into_iter()
+    }
+}
+
+#[async_trait]
+impl BulkLoadRow for TokenRow<'_> {
+    async fn write_to_packet(
+        &self,
+        writer: &mut StreamingBulkLoadWriter<'_>,
+        column_index: &mut usize,
+    ) -> TdsResult<()> {
+        for value in &self.data {
+            let value = value
+                .clone()
+                .into_column_value()
+                .map_err(|error| mssql_tds::error::Error::UsageError(error.to_string()))?;
+            writer.write_column_value(*column_index, &value).await?;
+            *column_index += 1;
+        }
+        Ok(())
+    }
+}
+
+/// Convert a scalar or tuple into a compatibility bulk row.
+pub trait IntoRow<'a> {
+    /// Convert values to a row in tuple order.
+    fn into_row(self) -> TokenRow<'a>;
+}
+
+impl<'a, A> IntoRow<'a> for A
+where
+    A: IntoSql<'a>,
+{
+    fn into_row(self) -> TokenRow<'a> {
+        let mut row = TokenRow::with_capacity(1);
+        row.push(self.into_sql());
+        row
+    }
+}
+
+macro_rules! impl_into_row {
+    ($len:expr; $( $type:ident $field:tt ),+) => {
+        impl<'a, $( $type ),+> IntoRow<'a> for ($( $type, )+)
+        where
+            $( $type: IntoSql<'a>, )+
+        {
+            fn into_row(self) -> TokenRow<'a> {
+                let mut row = TokenRow::with_capacity($len);
+                $( row.push(self.$field.into_sql()); )+
+                row
+            }
+        }
+    };
+}
+
+impl_into_row!(2; A 0, B 1);
+impl_into_row!(3; A 0, B 1, C 2);
+impl_into_row!(4; A 0, B 1, C 2, D 3);
+impl_into_row!(5; A 0, B 1, C 2, D 3, E 4);
+impl_into_row!(6; A 0, B 1, C 2, D 3, E 4, F 5);
+impl_into_row!(7; A 0, B 1, C 2, D 3, E 4, F 5, G 6);
+impl_into_row!(8; A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7);
+impl_into_row!(9; A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8);
+impl_into_row!(10; A 0, B 1, C 2, D 3, E 4, F 5, G 6, H 7, I 8, J 9);
+
+/// Tiberius-compatible incremental bulk request.
+///
+/// Rows are retained until [`finalize`](Self::finalize), then sent through one
+/// native [`BulkInsert`] operation. Dropping the request before finalization
+/// sends nothing and leaves the connection usable.
+pub struct BulkLoadRequest<'a> {
+    bulk: BulkInsert<'a>,
+    rows: Vec<TokenRow<'a>>,
+    row_width: Option<usize>,
+}
+
+impl<'a> BulkLoadRequest<'a> {
+    /// Add one row to this request.
+    ///
+    /// A width mismatch with an earlier row is rejected without changing the
+    /// request, so a corrected row can still be sent.
+    pub async fn send(&mut self, row: TokenRow<'a>) -> Result<()> {
+        validate_row_width(&mut self.row_width, row.len())?;
+        self.rows.push(row);
+        Ok(())
+    }
+
+    /// Send all retained rows and finish the bulk operation.
+    pub async fn finalize(self) -> Result<ExecuteResult> {
+        let result = self
+            .bulk
+            .send(self.rows)
+            .await
+            .map_err(map_compat_bulk_error)?;
+        Ok(ExecuteResult {
+            counts: vec![result.rows_affected],
+        })
+    }
+}
+
+fn validate_row_width(expected: &mut Option<usize>, actual: usize) -> Result<()> {
+    match *expected {
+        Some(expected) if actual != expected => Err(Error::BulkInput(format!(
+            "Expecting {expected} columns but {actual} were given"
+        ))),
+        Some(_) => Ok(()),
+        None => {
+            *expected = Some(actual);
+            Ok(())
+        }
+    }
+}
+
+fn map_compat_bulk_error(error: Error) -> Error {
+    match error {
+        Error::Tds(mssql_tds::error::Error::UsageError(message))
+            if is_bulk_input_message(&message) =>
+        {
+            Error::BulkInput(message)
+        }
+        error => error,
+    }
+}
+
+fn is_bulk_input_message(message: &str) -> bool {
+    [
+        "Row ",
+        "Column index ",
+        "Binary data length ",
+        "String length ",
+        "SQL_VARIANT data size ",
+        "SQL_VARIANT total size ",
+        "Cannot serialize NULL ",
+        "Unsupported TDS type ",
+        "Invalid UTF-16 data: ",
+        "Conversion error: ",
+    ]
+    .iter()
+    .any(|prefix| message.starts_with(prefix))
+}
+
+impl<'a> IntoFuture for BulkInsert<'a> {
+    type Output = Result<BulkLoadRequest<'a>>;
+    type IntoFuture = Ready<Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        ready(
+            crate::operation::ensure_usable(self.client).map(|()| BulkLoadRequest {
+                bulk: self,
+                rows: Vec::new(),
+                row_width: None,
+            }),
+        )
+    }
 }
 
 impl<'a> BulkInsert<'a> {
@@ -291,5 +508,88 @@ mod tests {
     fn bulk_copy_result_zero_elapsed_yields_zero_throughput() {
         let r = BulkCopyResult::new(100, Duration::ZERO);
         assert_eq!(r.rows_per_second.to_bits(), 0.0_f64.to_bits());
+    }
+
+    #[test]
+    fn token_row_helpers_and_tuple_arities_preserve_values() {
+        assert!(TokenRow::new().is_empty());
+        let mut row = TokenRow::with_capacity(2);
+        assert!(row.is_empty());
+        row.push(1i32.into_sql());
+        row.push(Option::<&str>::None.into_sql());
+        assert_eq!(row.len(), 2);
+        assert!(matches!(row.get(0), Some(ColumnData::I32(Some(1)))));
+        assert_eq!(row.iter().count(), 2);
+        assert_eq!(row.clone().into_iter().count(), 2);
+        row.clear();
+        assert!(row.is_empty());
+
+        assert_eq!(1i32.into_row().len(), 1);
+        assert_eq!((1i32, 2i32).into_row().len(), 2);
+        assert_eq!((1i32, 2i32, 3i32).into_row().len(), 3);
+        assert_eq!((1i32, 2i32, 3i32, 4i32).into_row().len(), 4);
+        assert_eq!((1i32, 2i32, 3i32, 4i32, 5i32).into_row().len(), 5);
+        assert_eq!((1i32, 2i32, 3i32, 4i32, 5i32, 6i32).into_row().len(), 6);
+        assert_eq!(
+            (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32).into_row().len(),
+            7
+        );
+        assert_eq!(
+            (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32)
+                .into_row()
+                .len(),
+            8
+        );
+        assert_eq!(
+            (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32, 9i32)
+                .into_row()
+                .len(),
+            9
+        );
+        assert_eq!(
+            (1i32, 2i32, 3i32, 4i32, 5i32, 6i32, 7i32, 8i32, 9i32, 10i32)
+                .into_row()
+                .len(),
+            10
+        );
+    }
+
+    #[test]
+    fn compatibility_usage_errors_are_bulk_input_errors() {
+        let error = map_compat_bulk_error(Error::Tds(mssql_tds::error::Error::UsageError(
+            "Row 1 wrote 1 columns, but expected 2 columns based on table metadata".into(),
+        )));
+        assert!(matches!(error, Error::BulkInput(message) if message.starts_with("Row 1")));
+
+        let error = map_compat_bulk_error(Error::Tds(mssql_tds::error::Error::UsageError(
+            "Column index 1 out of bounds, expected 1 columns based on table metadata.".into(),
+        )));
+        assert!(
+            matches!(error, Error::BulkInput(message) if message.starts_with("Column index 1"))
+        );
+
+        let error = map_compat_bulk_error(Error::Conversion("not bulk".into()));
+        assert!(matches!(error, Error::Conversion(message) if message == "not bulk"));
+
+        let error = map_compat_bulk_error(Error::Tds(mssql_tds::error::Error::UsageError(
+            "Table not found or has no columns".into(),
+        )));
+        assert!(matches!(
+            error,
+            Error::Tds(mssql_tds::error::Error::UsageError(message))
+                if message == "Table not found or has no columns"
+        ));
+    }
+
+    #[test]
+    fn row_width_failure_does_not_change_expected_width() {
+        let mut expected = None;
+        validate_row_width(&mut expected, 2).expect("first row sets width");
+        assert!(matches!(
+            validate_row_width(&mut expected, 1),
+            Err(Error::BulkInput(_))
+        ));
+        assert_eq!(expected, Some(2));
+        validate_row_width(&mut expected, 2).expect("corrected row remains valid");
     }
 }

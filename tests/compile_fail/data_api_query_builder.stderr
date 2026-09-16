@@ -1,7 +1,0 @@
-error[E0432]: unresolved import `mssql_tiberius_bridge::query::Query`
- --> tests/compile_fail/data_api_query_builder.rs:2:29
-  |
-2 | use mssql_tiberius_bridge::{query::Query, Client, Result};
-  |                             ^^^^^^^-----
-  |                                    |
-  |                                    no `Query` in `query`

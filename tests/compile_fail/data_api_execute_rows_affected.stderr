@@ -1,5 +1,0 @@
-error[E0599]: no method named `rows_affected` found for reference `&ExecuteResult` in the current scope
- --> tests/compile_fail/data_api_execute_rows_affected.rs:5:12
-  |
-5 |     result.rows_affected()
-  |            ^^^^^^^^^^^^^ method not found in `&ExecuteResult`

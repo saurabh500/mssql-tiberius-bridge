@@ -5,7 +5,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use mssql_tds::datatypes::column_values::{
     ColumnValues, SqlDate, SqlDateTime, SqlDateTime2, SqlDateTimeOffset, SqlMoney,
@@ -57,9 +57,51 @@ pub struct Row {
     result_index: usize,
     /// Pre-decoded UTF-8 strings for &str borrowing support.
     decoded_strings: Vec<Option<String>>,
+    compat_values: OnceLock<Vec<crate::ColumnData<'static>>>,
 }
 
 impl Row {
+    fn from_parts(
+        schema: Arc<RowSchema>,
+        values: Vec<ColumnValues>,
+        result_index: usize,
+        decoded_strings: Vec<Option<String>>,
+    ) -> Self {
+        Self {
+            schema,
+            values,
+            result_index,
+            decoded_strings,
+            compat_values: OnceLock::new(),
+        }
+    }
+
+    fn build_compat_values(
+        schema: &RowSchema,
+        values: &[ColumnValues],
+        decoded_strings: &[Option<String>],
+    ) -> Vec<crate::ColumnData<'static>> {
+        values
+            .iter()
+            .zip(decoded_strings)
+            .enumerate()
+            .map(|(index, (value, decoded))| {
+                let column_type = schema
+                    .columns
+                    .get(index)
+                    .map_or(crate::ColumnType::Null, Column::column_type);
+                crate::compat::conversion::column_data_ref(value, decoded.as_deref(), column_type)
+                    .into_owned()
+            })
+            .collect()
+    }
+
+    fn compat_values(&self) -> &[crate::ColumnData<'static>] {
+        self.compat_values.get_or_init(|| {
+            Self::build_compat_values(&self.schema, &self.values, &self.decoded_strings)
+        })
+    }
+
     /// Build a Row reusing a pre-built [`RowSchema`]. Hot path for the
     /// streaming and buffered code paths — clones the `Arc`, never the
     /// underlying `Vec<Column>`/`HashMap`.
@@ -73,12 +115,7 @@ impl Row {
                 _ => None,
             })
             .collect();
-        Row {
-            schema,
-            values,
-            result_index: 0,
-            decoded_strings,
-        }
+        Self::from_parts(schema, values, 0, decoded_strings)
     }
 
     /// Build a Row from mssql-tds column metadata and decoded values.
@@ -93,6 +130,11 @@ impl Row {
     /// Column metadata for this row.
     pub fn columns(&self) -> &[Column] {
         &self.schema.columns
+    }
+
+    /// Iterate over columns and compatibility values in indexed column order.
+    pub fn cells(&self) -> impl ExactSizeIterator<Item = (&Column, &crate::ColumnData<'static>)> {
+        self.schema.columns.iter().zip(self.compat_values())
     }
 
     /// Zero-based index of the result set that produced this row.
@@ -120,6 +162,37 @@ impl Row {
     pub fn try_get<'a, T: FromSql<'a>, I: ColumnIndex>(&'a self, col: I) -> Result<Option<T>> {
         let idx = col.resolve(self)?;
         self.try_get_at(idx)
+    }
+
+    /// Get a value using Tiberius-compatible conversion errors.
+    ///
+    /// Panics when the column is missing or a non-NULL value has the wrong
+    /// type. Use [`Row::try_get_compat`] for a recoverable error.
+    pub fn get_compat<'a, T: crate::compat::FromSql<'a>, I: ColumnIndex>(
+        &'a self,
+        col: I,
+    ) -> Option<T> {
+        self.try_get_compat(col).expect("column conversion failed")
+    }
+
+    /// Try to get a value using Tiberius-compatible conversion errors.
+    ///
+    /// A target-compatible typed SQL NULL returns `Ok(None)`; an incompatible
+    /// variant returns [`Error::Conversion`]. The bridge-native
+    /// [`Row::try_get`] is unchanged.
+    pub fn try_get_compat<'a, T: crate::compat::FromSql<'a>, I: ColumnIndex>(
+        &'a self,
+        col: I,
+    ) -> Result<Option<T>> {
+        let idx = col.resolve(self)?;
+        let compat_values = self.compat_values();
+        let value = compat_values
+            .get(idx)
+            .ok_or(Error::ColumnIndexOutOfBounds {
+                index: idx,
+                count: compat_values.len(),
+            })?;
+        T::from_sql(value)
     }
 
     /// Get a column value by name using case-insensitive lookup. Returns `None`
@@ -252,6 +325,25 @@ impl PartialEq for Row {
                     .all(|(a, b)| a.column_type == b.column_type));
 
         schemas_match && self.values == other.values
+    }
+}
+
+impl IntoIterator for Row {
+    type Item = crate::ColumnData<'static>;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        let Row {
+            schema,
+            values,
+            decoded_strings,
+            compat_values,
+            ..
+        } = self;
+        compat_values
+            .into_inner()
+            .unwrap_or_else(|| Self::build_compat_values(&schema, &values, &decoded_strings))
+            .into_iter()
     }
 }
 
@@ -730,12 +822,12 @@ impl BridgeRowWriter {
             &mut self.decoded_strings,
             Vec::with_capacity(self.col_count),
         );
-        Row {
-            schema: self.schema.clone(),
+        Row::from_parts(
+            self.schema.clone(),
             values,
-            result_index: self.result_index,
+            self.result_index,
             decoded_strings,
-        }
+        )
     }
 }
 
@@ -886,9 +978,22 @@ mod tests {
 
     // Helper to build a Row without real metadata
     fn make_row(names: &[&str], values: Vec<ColumnValues>) -> Row {
-        let columns: Vec<Column> = names
+        make_typed_row(
+            &names
+                .iter()
+                .map(|name| (*name, crate::column::ColumnType::Null))
+                .collect::<Vec<_>>(),
+            values,
+        )
+    }
+
+    fn make_typed_row(
+        columns: &[(&str, crate::column::ColumnType)],
+        values: Vec<ColumnValues>,
+    ) -> Row {
+        let columns: Vec<Column> = columns
             .iter()
-            .map(|n| Column::test_column(n, crate::column::ColumnType::Null, 0))
+            .map(|(name, column_type)| Column::test_column(name, *column_type, 0))
             .collect();
         let name_map: HashMap<String, usize> = columns
             .iter()
@@ -897,6 +1002,117 @@ mod tests {
             .collect();
         let schema = Arc::new(RowSchema { columns, name_map });
         Row::from_schema(schema, values)
+    }
+
+    #[test]
+    fn row_iteration_preserves_order_nulls_and_native_access() -> TestResult {
+        use crate::compat::{FromSql as CompatFromSql, FromSqlOwned};
+
+        let row = make_typed_row(
+            &[
+                ("first", crate::column::ColumnType::Int4),
+                ("nullable", crate::column::ColumnType::Int4),
+                ("last", crate::column::ColumnType::NVarchar),
+            ],
+            vec![
+                ColumnValues::Int(7),
+                ColumnValues::Null,
+                ColumnValues::String(SqlString::from_utf8_string("last".into())),
+            ],
+        );
+        ensure_equal(row.compat_values.get().is_none(), true)?;
+        ensure_equal(row.get::<i32, _>("first"), Some(7))?;
+        ensure_equal(row.compat_values.get().is_none(), true)?;
+
+        let mut cells = row.cells();
+        ensure_equal(row.compat_values.get().is_some(), true)?;
+        let (first_column, first_value) = cells.next().ok_or("missing first cell")?;
+        ensure_equal(first_column.name(), "first")?;
+        ensure_equal(<i32 as CompatFromSql>::from_sql(first_value)?, Some(7))?;
+        let (null_column, null_value) = cells.next().ok_or("missing NULL cell")?;
+        ensure_equal(null_column.name(), "nullable")?;
+        ensure_equal(<i32 as CompatFromSql>::from_sql(null_value)?, None)?;
+        let (last_column, last_value) = cells.next().ok_or("missing last cell")?;
+        ensure_equal(last_column.name(), "last")?;
+        let last = <String as CompatFromSql>::from_sql(last_value)?;
+        ensure_equal(last, Some("last".into()))?;
+        ensure_equal(cells.next().is_none(), true)?;
+
+        let values = row.clone().into_iter().collect::<Vec<_>>();
+        ensure_equal(values.len(), 3)?;
+        let first = i32::from_sql_owned(values.first().ok_or("missing owned first")?.clone())?;
+        ensure_equal(first, Some(7))?;
+        let null = i32::from_sql_owned(values.get(1).ok_or("missing owned NULL")?.clone())?;
+        ensure_equal(null, None)?;
+        let last = String::from_sql_owned(values.get(2).ok_or("missing owned last")?.clone())?;
+        ensure_equal(last, Some("last".into()))?;
+
+        ensure_equal(row.get::<i32, _>(0usize), Some(7))?;
+        ensure_equal(row.get::<i32, _>("first"), Some(7))?;
+        ensure_equal(row.get::<Option<i32>, _>("nullable"), Some(None))?;
+        ensure_equal(row.get_compat::<i32, _>("first"), Some(7))?;
+        ensure_equal(row.cells().count(), 3)?;
+        ensure_equal(row.cells().count(), 3)?;
+        ensure_equal(row.clone(), row.clone())?;
+
+        let uncached = make_row(&["value"], vec![ColumnValues::Int(9)]);
+        ensure_equal(uncached.compat_values.get().is_none(), true)?;
+        let uncached_values = uncached.into_iter().collect::<Vec<_>>();
+        ensure_equal(
+            i32::from_sql_owned(
+                uncached_values
+                    .into_iter()
+                    .next()
+                    .ok_or("missing uncached value")?,
+            )?,
+            Some(9),
+        )?;
+
+        let exact = make_row(
+            &["smallint", "xml", "json", "string"],
+            vec![
+                ColumnValues::SmallInt(7),
+                ColumnValues::Xml(SqlXml::from("<root/>".to_string())),
+                ColumnValues::Json(SqlJson::from("{\"ok\":true}".to_string())),
+                ColumnValues::String(SqlString::from_utf8_string("text".into())),
+            ],
+        );
+        ensure_equal(
+            matches!(
+                exact.try_get_compat::<i32, _>("smallint"),
+                Err(Error::Conversion(_))
+            ),
+            true,
+        )?;
+        ensure_equal(
+            matches!(
+                exact.try_get_compat::<&str, _>("xml"),
+                Err(Error::Conversion(_))
+            ),
+            true,
+        )?;
+        ensure_equal(
+            matches!(
+                exact.try_get_compat::<&str, _>("json"),
+                Err(Error::Conversion(_))
+            ),
+            true,
+        )?;
+        ensure_equal(exact.try_get_compat::<&str, _>("string")?, Some("text"))?;
+        Ok(())
+    }
+
+    #[test]
+    fn empty_row_iteration_is_empty() {
+        let row = make_row(&[], Vec::new());
+        assert_eq!(row.cells().count(), 0);
+        assert_eq!(row.into_iter().count(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "column conversion failed: ColumnNotFound(\"missing\")")]
+    fn get_compat_panic_includes_conversion_error() {
+        make_row(&["present"], vec![ColumnValues::Int(1)]).get_compat::<i32, _>("missing");
     }
 
     #[test]

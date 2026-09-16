@@ -18,7 +18,7 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 - `Config::new().host().port().trust_cert()` — fluent builder
 - `Config::trust_cert_ca("ca.pem")` — pin a CA certificate (mirrors tiberius)
 - `AuthMethod::aad_token(jwt)` — Microsoft Entra ID / AAD federated auth
-- deadpool connection pooling with native session reset and validation before reuse
+- deadpool and optional bb8 connection pooling with native session reset and validation before reuse
 
 ## Quick Start
 
@@ -83,8 +83,36 @@ For intentional legacy session reuse, build a pool with
 Success means "not known dead," not verified server responsiveness; an idle
 connection failure may only be detected by the next operation.
 See [connection pooling](docs/connection-examples.md#connection-pooling) for
-examples and timeout configuration. `deadpool` still owns capacity and checkout;
-`mssql-tds` provides the native reset and health primitives.
+deadpool and bb8 examples and timeout configuration. The pool owns capacity and
+checkout; `mssql-tds` provides the native reset and health primitives.
+
+### bb8 pooling
+
+Enable the optional adapter with
+`mssql-tiberius-bridge = { version = "0.1.0", features = ["bb8"] }`, then:
+
+```rust,no_run
+use mssql_tiberius_bridge::{AuthMethod, Config, TdsManager};
+
+# async fn example() -> Result<(), mssql_tiberius_bridge::Error> {
+let mut config = Config::new();
+config
+    .host("localhost")
+    .authentication(AuthMethod::sql_server("sa", "password"))
+    .trust_cert();
+let pool = TdsManager::create_bb8_pool(config, 10).await?;
+let mut connection = pool.get().await.expect("bb8 checkout succeeds");
+connection.simple_query("SELECT 1").await?;
+# Ok(())
+# }
+```
+
+The convenience builder enables bb8 checkout validation. If you build a bb8
+pool yourself, keep `test_on_check_out(true)` enabled to run the configured
+recycling method (`Reset` by default, or the cached, no-I/O `Ping` check);
+otherwise, `is_valid()` is bypassed. Add `bb8 = "0.9"` to your dependencies
+when constructing a custom `bb8::Pool` builder for timeouts or
+`RecyclingMethod::Ping`.
 
 ## Cancellation and timeouts
 

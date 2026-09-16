@@ -57,6 +57,7 @@
 //! | `jiff` | off | Enables `jiff` crate support for [`FromSql`] and [`ToSql`] |
 //! | `serde` | off | Enables `serde::Deserialize` for [`Row`] (see [`serde_de`]) |
 //! | `arrow` | off | Enables [`BulkInsert::send_arrow`](crate::bulk::BulkInsert::send_arrow) for Apache Arrow `RecordBatch` input (see [`bulk_arrow`]) |
+//! | `bb8` | off | Enables [`bb8`][bb8] connection pooling via [`TdsManager`] |
 //!
 //! # Modules
 //!
@@ -65,7 +66,7 @@
 //! - [`row`] — [`Row`] with named/indexed access, [`FromSql`] trait
 //! - [`query`] — [`QueryResult`], [`ToSql`] trait, [`ExecuteResult`]
 //! - [`column`] — [`Column`] metadata, [`ColumnType`] enum
-//! - [`pool`] — Connection pooling via [`deadpool`]
+//! - [`pool`] — Connection pooling via [`deadpool`] and optional [`bb8`][bb8]
 //! - [`prepared`] — [`PreparedStatement`] for server-side `sp_prepare`/`sp_execute`
 //! - [`error`] — [`Error`] and [`Result`] types
 //!
@@ -76,7 +77,9 @@
 //!
 //! - TCP transport is handled internally — no `TcpStream` boilerplate
 //! - `row.get::<&str, _>("col")` works (strings are pre-decoded from UTF-16)
-//! - Connection pooling via [`TdsManager`] + [`deadpool`] with native session resets
+//! - Connection pooling via [`TdsManager`] + [`deadpool`] or optional [`bb8`][bb8] with native session resets
+//!
+//! [bb8]: https://docs.rs/bb8/0.9.1/bb8/
 
 pub mod bulk;
 #[cfg(feature = "arrow")]
@@ -105,6 +108,8 @@ pub use compat::{
 };
 pub use config::{AuthMethod, Config, EncryptionLevel, Transport};
 pub use error::{Error, Result};
+#[cfg(feature = "bb8")]
+pub use pool::{Bb8Pool, Bb8PooledConnection};
 pub use pool::{Pool, PooledConnection, RecyclingMethod, TdsManager};
 pub use prepared::PreparedStatement;
 pub use query::{DebugParams, ExecuteResult, QueryResult, ToSql};

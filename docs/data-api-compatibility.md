@@ -13,8 +13,8 @@ The machine-readable traceability matrix is `TRACEABILITY` in
 | Status | Scenarios |
 |---|---:|
 | Passes with the unchanged Tiberius-facing call | 14 |
-| Passes through the current bridge API | 24 |
-| Compile/API gap | 0 |
+| Passes through the current bridge API | 23 |
+| Compile/API gap | 1 |
 | Behavioral gap | 0 |
 | Intentional bridge improvement | 2 |
 
@@ -22,6 +22,9 @@ The two intentional improvements are recoverable out-of-range numeric access
 and preservation of an empty middle result set in collected results. Tiberius
 panics for the former and drops the empty set when consecutive metadata items
 are collected for the latter.
+The remaining API gap is Tiberius's schema-bearing `XmlData` wrapper. Raw XML
+values remain available through `ColumnData::Xml` and the bridge-native string
+conversion.
 
 Issue #125 is available through the separate `compat` module and the
 bridge-native `Client::query_compat` / `Client::simple_query_compat` entry
@@ -36,8 +39,9 @@ keep their contracts.
 
 Issue #128 adds the conversion/error layer without changing existing
 bridge-native APIs. `compat::FromSql` has Tiberius's fallible
-`Result<Option<T>>` shape over compatibility `ColumnData`; SQL NULL is
-`Ok(None)`, while a non-NULL variant mismatch is `Error::Conversion`.
+`Result<Option<T>>` shape over compatibility `ColumnData`; a target-compatible
+typed SQL NULL is `Ok(None)`, while an incompatible variant is
+`Error::Conversion`.
 `Row::try_get_compat` uses that error channel for buffered and
 compatibility-stream rows. Existing root `FromSql`, `Row::get`, and
 `Row::try_get` keep their signatures and their historical behavior of

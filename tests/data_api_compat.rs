@@ -39,7 +39,7 @@ const TRACEABILITY: &[Trace] = &[
     Trace { behavior: "owned and borrowed binary", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::AdaptedPass, evidence: "tiberius_compat::{varbinary_roundtrip,vec_u8_param_roundtrip}" },
     Trace { behavior: "UUID conversion", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::AdaptedPass, evidence: "tiberius_compat::uuid_roundtrip" },
     Trace { behavior: "numeric conversion", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::AdaptedPass, evidence: "tiberius_compat::{decimal_roundtrip,numeric_large}" },
-    Trace { behavior: "XML conversion", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::AdaptedPass, evidence: "tiberius_compat::xml_type" },
+    Trace { behavior: "schema-bearing XmlData conversion", source: "data_api.rs:public_value_conversions_cover_values_nulls_and_errors", status: Status::CompileGap, evidence: "ColumnData::Xml supports raw row/parameter values, but no Tiberius-compatible XmlData wrapper" },
     Trace { behavior: "chrono conversions", source: "data_api.rs:chrono_values_round_trip_through_public_conversions", status: Status::AdaptedPass, evidence: "tiberius_compat::{naive_date_time,naive_date,naive_time,datetime_offset}" },
     Trace { behavior: "time crate conversions", source: "data_api.rs:time_values_round_trip_through_public_conversions", status: Status::AdaptedPass, evidence: "query::tests::time_temporals_roundtrip_with_fractional_seconds_and_offset" },
     Trace { behavior: "typed NULL parameter preservation", source: "data_api.rs:execute_dynamic_query_and_bulk_behavior", status: Status::AdaptedPass, evidence: "typed_null_parameter_preserves_column_type" },
@@ -120,14 +120,14 @@ fn phase_1_traceability_is_complete_and_stable() {
             .iter()
             .filter(|trace| trace.status == Status::AdaptedPass)
             .count(),
-        24
+        23
     );
     assert_eq!(
         TRACEABILITY
             .iter()
             .filter(|trace| trace.status == Status::CompileGap)
             .count(),
-        0
+        1
     );
     assert_eq!(
         TRACEABILITY

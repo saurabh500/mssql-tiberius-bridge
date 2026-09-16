@@ -637,10 +637,10 @@ macro_rules! from_column_data_exact {
 
 from_column_data_exact!(
     bool => [ColumnData::Bit(_)],
-    u8 => [ColumnData::U8(_)],
-    i16 => [ColumnData::I16(_)],
-    i32 => [ColumnData::I32(_)],
-    i64 => [ColumnData::I64(_)],
+    u8 => [ColumnData::U8(_) | ColumnData::I32(None)],
+    i16 => [ColumnData::I16(_) | ColumnData::U8(None) | ColumnData::I32(None)],
+    i32 => [ColumnData::I32(_) | ColumnData::U8(None)],
+    i64 => [ColumnData::I64(_) | ColumnData::U8(None) | ColumnData::I32(None)],
     f32 => [ColumnData::F32(_)],
     f64 => [ColumnData::F64(_)],
     String => [ColumnData::String(_)],
@@ -730,7 +730,8 @@ impl<'a> FromColumnData<'a> for &'a [u8] {
 
 /// Convert a compatibility value through the shared row decoder.
 pub trait FromSql<'a>: Sized + 'a {
-    /// SQL NULL is `Ok(None)`; a non-NULL type mismatch is an error.
+    /// A target-compatible typed SQL NULL is `Ok(None)`; other variants are
+    /// conversion errors.
     fn from_sql(value: &'a ColumnData<'static>) -> Result<Option<Self>>;
 }
 
@@ -949,6 +950,30 @@ mod tests {
             chrono::DateTime::<chrono::Utc>::from_sql_owned(ColumnData::Date(None)),
             Err(Error::Conversion(_))
         ));
+        assert_eq!(
+            u8::from_sql_owned(ColumnData::I32(None)).expect("decode compatible integer NULL"),
+            None
+        );
+        assert_eq!(
+            i16::from_sql_owned(ColumnData::U8(None)).expect("decode compatible integer NULL"),
+            None
+        );
+        assert_eq!(
+            i16::from_sql_owned(ColumnData::I32(None)).expect("decode compatible integer NULL"),
+            None
+        );
+        assert_eq!(
+            i32::from_sql_owned(ColumnData::U8(None)).expect("decode compatible integer NULL"),
+            None
+        );
+        assert_eq!(
+            i64::from_sql_owned(ColumnData::U8(None)).expect("decode compatible integer NULL"),
+            None
+        );
+        assert_eq!(
+            i64::from_sql_owned(ColumnData::I32(None)).expect("decode compatible integer NULL"),
+            None
+        );
         assert!(matches!(
             i32::from_sql_owned(ColumnData::String(Some(Cow::Borrowed("wrong")))),
             Err(Error::Conversion(_))

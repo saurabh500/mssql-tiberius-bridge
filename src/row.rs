@@ -177,8 +177,9 @@ impl Row {
 
     /// Try to get a value using Tiberius-compatible conversion errors.
     ///
-    /// SQL NULL returns `Ok(None)`; a non-NULL type mismatch returns
-    /// [`Error::Conversion`]. The bridge-native [`Row::try_get`] is unchanged.
+    /// A target-compatible typed SQL NULL returns `Ok(None)`; an incompatible
+    /// variant returns [`Error::Conversion`]. The bridge-native
+    /// [`Row::try_get`] is unchanged.
     pub fn try_get_compat<'a, T: crate::compat::FromSql<'a>, I: ColumnIndex>(
         &'a self,
         col: I,

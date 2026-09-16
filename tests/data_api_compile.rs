@@ -1,5 +1,5 @@
 #[test]
-fn missing_tiberius_data_apis_are_expected_compile_failures() {
+fn tiberius_data_api_compatibility_fixtures_compile() {
     let cases = trybuild::TestCases::new();
     cases.pass("tests/pass/data_api_*.rs");
 }

@@ -977,9 +977,22 @@ mod tests {
 
     // Helper to build a Row without real metadata
     fn make_row(names: &[&str], values: Vec<ColumnValues>) -> Row {
-        let columns: Vec<Column> = names
+        make_typed_row(
+            &names
+                .iter()
+                .map(|name| (*name, crate::column::ColumnType::Null))
+                .collect::<Vec<_>>(),
+            values,
+        )
+    }
+
+    fn make_typed_row(
+        columns: &[(&str, crate::column::ColumnType)],
+        values: Vec<ColumnValues>,
+    ) -> Row {
+        let columns: Vec<Column> = columns
             .iter()
-            .map(|n| Column::test_column(n, crate::column::ColumnType::Null, 0))
+            .map(|(name, column_type)| Column::test_column(name, *column_type, 0))
             .collect();
         let name_map: HashMap<String, usize> = columns
             .iter()
@@ -994,8 +1007,12 @@ mod tests {
     fn row_iteration_preserves_order_nulls_and_native_access() -> TestResult {
         use crate::compat::{FromSql as CompatFromSql, FromSqlOwned};
 
-        let row = make_row(
-            &["first", "nullable", "last"],
+        let row = make_typed_row(
+            &[
+                ("first", crate::column::ColumnType::Int4),
+                ("nullable", crate::column::ColumnType::Int4),
+                ("last", crate::column::ColumnType::NVarchar),
+            ],
             vec![
                 ColumnValues::Int(7),
                 ColumnValues::Null,

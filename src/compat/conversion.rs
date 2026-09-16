@@ -147,6 +147,7 @@ impl ColumnData<'_> {
         Ok(value)
     }
 
+    #[cfg(test)]
     fn is_null(&self) -> bool {
         matches!(
             self,
@@ -623,7 +624,6 @@ macro_rules! from_column_data_exact {
                 fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
                     match value {
                         $($variant)|+ => decode_owned(value),
-                        _ if value.is_null() => Ok(None),
                         _ => Err(Error::Conversion(format!(
                             "cannot interpret {value:?} as {}",
                             std::any::type_name::<Self>()
@@ -659,7 +659,6 @@ impl<'a> FromColumnData<'a> for DecimalParts {
     fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
         match value {
             ColumnData::Numeric(value) => Ok(*value),
-            _ if value.is_null() => Ok(None),
             _ => Err(Error::Conversion(format!(
                 "cannot interpret {value:?} as {}",
                 std::any::type_name::<Self>()
@@ -678,7 +677,6 @@ impl<'a> FromColumnData<'a> for chrono::DateTime<chrono::Utc> {
             ColumnData::DateTime2(_) => decode_owned::<chrono::NaiveDateTime>(value).map(|value| {
                 value.map(|value| chrono::DateTime::from_naive_utc_and_offset(value, chrono::Utc))
             }),
-            _ if value.is_null() => Ok(None),
             _ => Err(Error::Conversion(format!(
                 "cannot interpret {value:?} as {}",
                 std::any::type_name::<Self>()
@@ -710,7 +708,7 @@ impl<'a> FromColumnData<'a> for &'a str {
     fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
         match value {
             ColumnData::String(Some(value)) => Ok(Some(value.as_ref())),
-            _ if value.is_null() => Ok(None),
+            ColumnData::String(None) => Ok(None),
             _ => Err(Error::Conversion(format!(
                 "cannot interpret {value:?} as &str"
             ))),
@@ -722,7 +720,7 @@ impl<'a> FromColumnData<'a> for &'a [u8] {
     fn from_column_data(value: &'a ColumnData<'static>) -> Result<Option<Self>> {
         match value {
             ColumnData::Binary(Some(value)) => Ok(Some(value.as_ref())),
-            _ if value.is_null() => Ok(None),
+            ColumnData::Binary(None) => Ok(None),
             _ => Err(Error::Conversion(format!(
                 "cannot interpret {value:?} as &[u8]"
             ))),
@@ -750,14 +748,55 @@ pub trait FromSqlOwned: Sized {
     fn from_sql_owned(value: ColumnData<'static>) -> Result<Option<Self>>;
 }
 
-impl<T> FromSqlOwned for T
-where
-    T: for<'a> FromSql<'a>,
-{
-    fn from_sql_owned(value: ColumnData<'static>) -> Result<Option<Self>> {
-        <T as FromSql>::from_sql(&value)
-    }
+macro_rules! impl_from_sql_owned {
+    ($($ty:ty),+ $(,)?) => {
+        $(
+            impl FromSqlOwned for $ty {
+                fn from_sql_owned(value: ColumnData<'static>) -> Result<Option<Self>> {
+                    <Self as FromSql>::from_sql(&value)
+                }
+            }
+        )+
+    };
 }
+
+impl_from_sql_owned!(
+    bool,
+    u8,
+    i16,
+    i32,
+    i64,
+    f32,
+    f64,
+    String,
+    Uuid,
+    Vec<u8>,
+    DecimalParts,
+    rust_decimal::Decimal,
+    serde_json::Value,
+    chrono::NaiveDate,
+    chrono::NaiveTime,
+    chrono::NaiveDateTime,
+    chrono::DateTime<chrono::FixedOffset>,
+    chrono::DateTime<chrono::Utc>,
+);
+
+#[cfg(feature = "time")]
+impl_from_sql_owned!(
+    time::Date,
+    time::Time,
+    time::PrimitiveDateTime,
+    time::OffsetDateTime,
+);
+
+#[cfg(feature = "jiff")]
+impl_from_sql_owned!(
+    jiff::civil::Date,
+    jiff::civil::Time,
+    jiff::civil::DateTime,
+    jiff::Timestamp,
+    jiff::Zoned,
+);
 
 #[cfg(test)]
 mod tests {
@@ -799,6 +838,7 @@ mod tests {
     where
         T: NativeToSql
             + for<'a> FromSql<'a>
+            + FromSqlOwned
             + for<'a> IntoSql<'a>
             + Clone
             + PartialEq
@@ -889,6 +929,26 @@ mod tests {
             i32::from_sql_owned(ColumnData::I32(None)).expect("decode NULL"),
             None
         );
+        assert!(matches!(
+            i32::from_sql_owned(ColumnData::String(None)),
+            Err(Error::Conversion(_))
+        ));
+        assert!(matches!(
+            <&str as FromSql>::from_sql(&ColumnData::I32(None)),
+            Err(Error::Conversion(_))
+        ));
+        assert!(matches!(
+            <&[u8] as FromSql>::from_sql(&ColumnData::String(None)),
+            Err(Error::Conversion(_))
+        ));
+        assert!(matches!(
+            DecimalParts::from_sql_owned(ColumnData::I32(None)),
+            Err(Error::Conversion(_))
+        ));
+        assert!(matches!(
+            chrono::DateTime::<chrono::Utc>::from_sql_owned(ColumnData::Date(None)),
+            Err(Error::Conversion(_))
+        ));
         assert!(matches!(
             i32::from_sql_owned(ColumnData::String(Some(Cow::Borrowed("wrong")))),
             Err(Error::Conversion(_))

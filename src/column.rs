@@ -69,14 +69,15 @@ impl From<TdsDataType> for ColumnType {
             TdsDataType::Decimal | TdsDataType::DecimalN => ColumnType::Decimaln,
             TdsDataType::Numeric | TdsDataType::NumericN => ColumnType::Numericn,
             TdsDataType::Money | TdsDataType::MoneyN => ColumnType::Money,
+            TdsDataType::Money4 => ColumnType::Money4,
             TdsDataType::Guid => ColumnType::Guid,
             TdsDataType::NVarChar => ColumnType::NVarchar,
             TdsDataType::VarChar | TdsDataType::BigVarChar => ColumnType::Varchar,
             TdsDataType::NChar => ColumnType::NChar,
-            TdsDataType::Char => ColumnType::Char,
+            TdsDataType::Char | TdsDataType::BigChar => ColumnType::Char,
             TdsDataType::NText => ColumnType::NText,
             TdsDataType::Text => ColumnType::Text,
-            TdsDataType::Binary => ColumnType::Binary,
+            TdsDataType::Binary | TdsDataType::BigBinary => ColumnType::Binary,
             TdsDataType::VarBinary | TdsDataType::BigVarBinary => ColumnType::VarBinary,
             TdsDataType::Image => ColumnType::Image,
             TdsDataType::Xml => ColumnType::Xml,
@@ -341,6 +342,83 @@ impl Column {
 mod tests {
     use super::*;
     use mssql_tds::test_client_support::{int_columns, udt_column, udt_column_with_metadata};
+
+    fn assert_fixed_width_metadata(
+        dt: TdsDataType,
+        wire_type: u8,
+        expected: ColumnType,
+        expected_null: crate::ColumnData<'static>,
+    ) {
+        assert_eq!(dt as u8, wire_type);
+        assert_eq!(ColumnType::from(dt), expected);
+        assert_eq!(ColumnType::from_tds_with_length(dt, 4), expected);
+
+        let mut metadata = int_columns(1);
+        let meta = metadata.first_mut().expect("one test column");
+        meta.data_type = dt;
+        meta.type_info.length = 4;
+        let schema = crate::row::RowSchema::from_metadata(&metadata);
+        let column = schema.columns.first().expect("metadata without rows");
+        assert_eq!(column.column_type(), expected);
+        assert_eq!(column.byte_length(), 4);
+        assert_eq!(
+            column.char_length(),
+            (expected == ColumnType::Char).then_some(4)
+        );
+
+        let row = crate::Row::from_schema(schema, vec![crate::ColumnValues::Null]);
+        for _ in 0..2 {
+            let (column, value) = row.cells().next().expect("typed NULL cell");
+            assert_eq!(column.column_type(), expected);
+            assert_eq!(value, &expected_null);
+        }
+    }
+
+    #[test]
+    fn fixed_width_bigchar_metadata() {
+        assert_fixed_width_metadata(
+            TdsDataType::BigChar,
+            0xaf,
+            ColumnType::Char,
+            crate::ColumnData::String(None),
+        );
+    }
+
+    #[test]
+    fn fixed_width_bigbinary_metadata() {
+        assert_fixed_width_metadata(
+            TdsDataType::BigBinary,
+            0xad,
+            ColumnType::Binary,
+            crate::ColumnData::Binary(None),
+        );
+    }
+
+    #[test]
+    fn fixed_width_money4_metadata() {
+        assert_fixed_width_metadata(
+            TdsDataType::Money4,
+            0x7a,
+            ColumnType::Money4,
+            crate::ColumnData::SmallMoney(None),
+        );
+    }
+
+    #[test]
+    fn fixed_width_related_mappings_stay_unchanged() {
+        for (dt, expected) in [
+            (TdsDataType::Char, ColumnType::Char),
+            (TdsDataType::Binary, ColumnType::Binary),
+            (TdsDataType::NChar, ColumnType::NChar),
+            (TdsDataType::BigVarChar, ColumnType::Varchar),
+            (TdsDataType::BigVarBinary, ColumnType::VarBinary),
+            (TdsDataType::Money, ColumnType::Money),
+            (TdsDataType::Void, ColumnType::Null),
+        ] {
+            assert_eq!(ColumnType::from(dt), expected, "{dt:?}");
+            assert_eq!(ColumnType::from_tds_with_length(dt, 4), expected, "{dt:?}");
+        }
+    }
 
     #[test]
     fn spatial_column_types_use_udt_identity() {

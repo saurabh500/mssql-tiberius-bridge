@@ -199,13 +199,25 @@ impl PreparedStatement {
 
     fn sql_declaration(value: &SqlType) -> Result<String> {
         if let SqlType::Table(name, _) = value {
-            let schema = name
-                .schema_name
-                .as_deref()
-                .unwrap_or("dbo")
-                .replace(']', "]]");
-            let name = name.type_name.replace(']', "]]");
-            return Ok(format!("[{schema}].[{name}] READONLY"));
+            let schema = name.schema_name.as_deref().unwrap_or("dbo");
+            return Ok(format!(
+                "{}.{} READONLY",
+                quote_identifier(schema),
+                quote_identifier(&name.type_name)
+            ));
+        }
+        if let SqlType::Udt(name, _) = value {
+            let mut parts = Vec::with_capacity(3);
+            if let Some(db_name) = name.db_name.as_deref() {
+                parts.push(quote_identifier(db_name));
+            }
+            if let Some(schema_name) = name.schema_name.as_deref() {
+                parts.push(quote_identifier(schema_name));
+            } else if name.db_name.is_some() {
+                parts.push(String::new());
+            }
+            parts.push(quote_identifier(&name.type_name));
+            return Ok(parts.join("."));
         }
         let name = TdsDataType::from(value)
             .get_meta_type_name()
@@ -281,6 +293,10 @@ impl PreparedStatement {
     }
 }
 
+fn quote_identifier(identifier: &str) -> String {
+    format!("[{}]", identifier.replace(']', "]]"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -338,6 +354,50 @@ mod tests {
         for (value, expected) in cases {
             assert_eq!(
                 PreparedStatement::sql_declaration(&value).expect("supported SQL type"),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn prepare_declarations_quote_udt_names() {
+        use mssql_tds::datatypes::sql_udt::UdtTypeName;
+
+        let cases = [
+            (
+                UdtTypeName::new(None, None, "hierarchyid".into()),
+                "[hierarchyid]",
+            ),
+            (
+                UdtTypeName::new(None, Some("types".into()), "point".into()),
+                "[types].[point]",
+            ),
+            (
+                UdtTypeName::new(
+                    Some("database".into()),
+                    Some("types".into()),
+                    "point".into(),
+                ),
+                "[database].[types].[point]",
+            ),
+            (
+                UdtTypeName::new(
+                    Some("data]base".into()),
+                    Some("ty]pes".into()),
+                    "po]int".into(),
+                ),
+                "[data]]base].[ty]]pes].[po]]int]",
+            ),
+            (
+                UdtTypeName::new(Some("database".into()), None, "point".into()),
+                "[database]..[point]",
+            ),
+        ];
+
+        for (name, expected) in cases {
+            assert_eq!(
+                PreparedStatement::sql_declaration(&SqlType::Udt(name, None))
+                    .expect("UDT declarations are supported"),
                 expected
             );
         }

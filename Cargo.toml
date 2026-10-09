@@ -69,7 +69,7 @@ arrow = ["dep:arrow-array", "dep:arrow-schema"]
 _bench = []
 
 [dependencies]
-mssql-tds = { version = "0.1.0", default-features = false }
+mssql-tds = { version = "0.2.0", default-features = false }
 deadpool = { version = "0.12", features = ["rt_tokio_1"] }
 chrono = "0.4"
 rust_decimal = "1"
@@ -87,7 +87,7 @@ futures-core = "0.3"
 async-stream = "0.3"
 
 [dev-dependencies]
-mssql-tds = { version = "0.1.0", default-features = false, features = ["test-util"] }
+mssql-tds = { version = "0.2.0", default-features = false, features = ["test-util"] }
 futures-util = "0.3"
 serde = { version = "1", features = ["derive"] }
 criterion = { version = "0.5", features = ["async_tokio"] }

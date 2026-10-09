@@ -404,6 +404,7 @@ fn into_typed_null(value: SqlType) -> SqlType {
         SqlType::Vector(_, dimensions, base_type) => SqlType::Vector(None, dimensions, base_type),
         SqlType::Variant(inner) => SqlType::Variant(Box::new(into_typed_null(*inner))),
         SqlType::Table(name, _) => SqlType::Table(name, None),
+        SqlType::Udt(name, _) => SqlType::Udt(name, None),
     }
 }
 

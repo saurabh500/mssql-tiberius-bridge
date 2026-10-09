@@ -86,9 +86,10 @@ impl ColumnData<'_> {
                 ColumnData::Xml(value.map(|value| Cow::Owned(value.as_string())))
             }
             SqlType::Uuid(value) => ColumnData::Guid(value),
-            native @ (SqlType::Vector(..) | SqlType::Variant(_) | SqlType::Table(..)) => {
-                ColumnData::Native(native)
-            }
+            native @ (SqlType::Vector(..)
+            | SqlType::Variant(_)
+            | SqlType::Table(..)
+            | SqlType::Udt(..)) => ColumnData::Native(native),
         }
     }
 

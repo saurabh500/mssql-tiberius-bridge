@@ -805,6 +805,7 @@ mod tests {
     use super::*;
     use chrono::TimeZone;
     use mssql_tds::datatypes::sql_tvp::TvpTypeName;
+    use mssql_tds::datatypes::sql_udt::UdtTypeName;
     use mssql_tds::datatypes::sql_vector::SqlVector;
     use mssql_tds::datatypes::sqldatatypes::VectorBaseType;
 
@@ -987,6 +988,11 @@ mod tests {
         let uuid = Uuid::from_u128(0x1234);
         let vector = SqlVector::try_from_f32(vec![1.0, 2.0]).expect("valid vector");
         let table_name = TvpTypeName::new(Some("dbo".into()), "Items".into());
+        let udt_name = UdtTypeName::new(
+            Some("master".into()),
+            Some("sys".into()),
+            "hierarchyid".into(),
+        );
         let native_values = vec![
             (SqlType::Bit(Some(true)), ColumnData::Bit(Some(true))),
             (SqlType::TinyInt(Some(1)), ColumnData::U8(Some(1))),
@@ -1098,6 +1104,7 @@ mod tests {
             SqlType::Vector(Some(vector), 2, VectorBaseType::Float32),
             SqlType::Variant(Box::new(SqlType::Int(Some(1)))),
             SqlType::Table(table_name, None),
+            SqlType::Udt(udt_name, Some(vec![1, 2, 3])),
         ];
         for native in native_only {
             assert_eq!(

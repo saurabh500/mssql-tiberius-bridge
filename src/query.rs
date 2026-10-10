@@ -1005,6 +1005,7 @@ mod tests {
     #[test]
     fn option_none_preserves_the_inner_parameter_type() {
         use mssql_tds::datatypes::sql_tvp::TvpTypeName;
+        use mssql_tds::datatypes::sql_udt::UdtTypeName;
         use mssql_tds::datatypes::sqldatatypes::VectorBaseType;
 
         assert!(matches!(None::<bool>.to_sql(), SqlType::Bit(None)));
@@ -1045,6 +1046,11 @@ mod tests {
         ));
 
         let table_name = TvpTypeName::new(Some("dbo".into()), "Items".into());
+        let udt_name = UdtTypeName::new(
+            Some("master".into()),
+            Some("sys".into()),
+            "hierarchyid".into(),
+        );
         let remaining = [
             (SqlType::Decimal(None), SqlType::Decimal(None)),
             (SqlType::Money(None), SqlType::Money(None)),
@@ -1070,6 +1076,10 @@ mod tests {
             (
                 SqlType::Table(table_name.clone(), None),
                 SqlType::Table(table_name, None),
+            ),
+            (
+                SqlType::Udt(udt_name.clone(), Some(vec![1, 2, 3])),
+                SqlType::Udt(udt_name, None),
             ),
         ];
         for (input, expected) in remaining {

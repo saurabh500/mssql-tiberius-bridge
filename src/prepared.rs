@@ -207,13 +207,15 @@ impl PreparedStatement {
             ));
         }
         if let SqlType::Udt(name, _) = value {
+            let db_name = name.db_name.as_deref().filter(|part| !part.is_empty());
+            let schema_name = name.schema_name.as_deref().filter(|part| !part.is_empty());
             let mut parts = Vec::with_capacity(3);
-            if let Some(db_name) = name.db_name.as_deref() {
+            if let Some(db_name) = db_name {
                 parts.push(quote_identifier(db_name));
             }
-            if let Some(schema_name) = name.schema_name.as_deref() {
+            if let Some(schema_name) = schema_name {
                 parts.push(quote_identifier(schema_name));
-            } else if name.db_name.is_some() {
+            } else if db_name.is_some() {
                 parts.push(String::new());
             }
             parts.push(quote_identifier(&name.type_name));
@@ -390,6 +392,26 @@ mod tests {
             ),
             (
                 UdtTypeName::new(Some("database".into()), None, "point".into()),
+                "[database]..[point]",
+            ),
+            (
+                UdtTypeName::new(Some(String::new()), None, "point".into()),
+                "[point]",
+            ),
+            (
+                UdtTypeName::new(None, Some(String::new()), "point".into()),
+                "[point]",
+            ),
+            (
+                UdtTypeName::new(Some(String::new()), Some(String::new()), "point".into()),
+                "[point]",
+            ),
+            (
+                UdtTypeName::new(Some(String::new()), Some("types".into()), "point".into()),
+                "[types].[point]",
+            ),
+            (
+                UdtTypeName::new(Some("database".into()), Some(String::new()), "point".into()),
                 "[database]..[point]",
             ),
         ];

@@ -11,8 +11,13 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+## [0.2.0](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0...v0.2.0) - 2026-10-10
+
 ### Changed
 
+- Upgrade `mssql-tds` to 0.2.0, including native UDT parameter support.
+- **Breaking:** add `Error::BulkInput` to the public exhaustive error enum.
+  Downstream exhaustive matches must handle the new variant.
 - Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached
   `is_connection_dead()` check, including for `RecyclingMethod::Ping`.
   The async API is unchanged, but success no longer verifies server
@@ -27,6 +32,17 @@ when the Release PR is opened.
 
 - `Client::reset_session()` and the no-I/O `Client::is_connection_dead()` accessor.
 - Tokio timeout support for pools built with `TdsManager::create_pool`.
+- Tiberius-compatible query item streams through `Client::query_compat` and
+  `Client::simple_query_compat`, preserving metadata for empty result sets.
+- Compatibility conversion traits, a dynamic `Query` builder, row iteration,
+  `ExecuteResult::rows_affected()`, and an awaited bulk upload lifecycle.
+  See [data API compatibility](docs/data-api-compatibility.md) for the supported
+  contracts and remaining XML wrapper gap.
+
+### Fixed
+
+- Preserve native UDT values and typed NULLs in parameter conversions, and
+  quote qualified UDT type names in prepared statement declarations.
 
 ## [0.1.0](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.5...v0.1.0) - 2026-09-11
 
@@ -124,6 +140,6 @@ Initial public preview.
 ### Changed
 - *(refactor)* Expose `Column` fields via getter methods instead of `pub`.
 
-[Unreleased]: https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.2...HEAD
+[Unreleased]: https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.2.0...HEAD
 [0.1.0-preview.2]: https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0-preview.1...v0.1.0-preview.2
 [0.1.0-preview.1]: https://github.com/saurabh500/mssql-tiberius-bridge/releases/tag/v0.1.0-preview.1

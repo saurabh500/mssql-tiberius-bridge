@@ -77,10 +77,10 @@ fn live_config() -> Option<Config> {
 }
 
 fn parse_server(server: &str) -> (String, u16) {
-    if let Some((host, port)) = server.rsplit_once(',').or_else(|| server.rsplit_once(':')) {
-        if let Ok(port) = port.parse::<u16>() {
-            return (host.to_string(), port);
-        }
+    if let Some((host, port)) = server.rsplit_once(',').or_else(|| server.rsplit_once(':'))
+        && let Ok(port) = port.parse::<u16>()
+    {
+        return (host.to_string(), port);
     }
     (server.to_string(), 1433)
 }

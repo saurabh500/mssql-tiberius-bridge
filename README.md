@@ -22,7 +22,7 @@ A tiberius-compatible API bridge over Microsoft's [`mssql-tds`](https://crates.i
 
 ## Quick Start
 
-Add `mssql-tiberius-bridge = "0.1.0"` to your Cargo dependencies. The bridge
+Add `mssql-tiberius-bridge = "0.2.0"` to your Cargo dependencies. The bridge
 uses `mssql-tds` 0.2.0 from crates.io.
 
 ```rust

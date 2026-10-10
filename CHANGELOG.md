@@ -11,6 +11,11 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+### Fixed
+
+- Preserve `char`, `binary`, and `smallmoney` column types for fixed-width TDS
+  metadata instead of reporting `Null`, including through the compatibility API.
+
 ### Changed
 
 - Replace `Client::ping()`'s `SELECT 1` probe with the driver's cached

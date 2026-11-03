@@ -514,7 +514,7 @@ impl Config {
             mssql_tds::message::login_options::ApplicationIntent::ReadWrite
         };
 
-        ctx.multi_subnet_failover = self.multi_subnet_failover;
+        ctx.multi_subnet_failover = Some(self.multi_subnet_failover);
 
         // UserAgent feature extension (TDS 0x10)
         let bridge_version = env!("CARGO_PKG_VERSION");
@@ -781,7 +781,7 @@ mod tests {
     fn multi_subnet_failover_defaults_to_off() {
         let cfg = Config::new();
         assert!(!cfg.is_multi_subnet_failover());
-        assert!(!cfg.to_client_context().multi_subnet_failover);
+        assert_eq!(cfg.to_client_context().multi_subnet_failover, Some(false));
     }
 
     #[test]
@@ -789,11 +789,11 @@ mod tests {
         let mut cfg = Config::new();
         cfg.multi_subnet_failover(true);
         assert!(cfg.is_multi_subnet_failover());
-        assert!(cfg.to_client_context().multi_subnet_failover);
+        assert_eq!(cfg.to_client_context().multi_subnet_failover, Some(true));
 
         cfg.multi_subnet_failover(false);
         assert!(!cfg.is_multi_subnet_failover());
-        assert!(!cfg.to_client_context().multi_subnet_failover);
+        assert_eq!(cfg.to_client_context().multi_subnet_failover, Some(false));
     }
 
     #[test]

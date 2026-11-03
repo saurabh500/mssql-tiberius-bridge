@@ -26,7 +26,7 @@ Requires Rust 1.97 or newer and uses edition 2024. Repository development and
 GitHub Actions use the pinned Rust 1.97.0 toolchain.
 
 Add `mssql-tiberius-bridge = "0.2.0"` to your Cargo dependencies. The bridge
-uses `mssql-tds` 0.2.0 from crates.io.
+uses `mssql-tds` 0.3.0 from crates.io.
 
 ```rust
 use mssql_tiberius_bridge::{Config, AuthMethod, Client};

@@ -11,6 +11,10 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+### Changed
+
+- Upgrade `mssql-tds` to 0.3.0.
+
 ## [0.2.0](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0...v0.2.0) - 2026-10-10
 
 ### Changed

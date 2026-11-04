@@ -169,6 +169,18 @@ In addition to the library, integrated auth needs:
 - A correctly configured `/etc/krb5.conf` pointing at your KDC.
 - Network reachability to the KDC (typically port 88) and a SPN registered for the SQL Server service principal.
 
+### Custom security context (`Config::security_context_provider`)
+
+To authenticate another way, such as NTLM on Linux/macOS, pass your own
+`mssql_tds::security::SecurityContextProvider`. It replaces the built-in
+SSPI/GSSAPI context for `AuthMethod::Integrated`, so the requirements above
+no longer apply:
+
+```rust,ignore
+cfg.authentication(AuthMethod::Integrated)
+   .security_context_provider(Arc::new(MyNtlmProvider::new(user, password)));
+```
+
 ### Integrated authentication (`AuthMethod::Integrated`) — Windows
 
 Uses SSPI via `secur32.dll`, which is part of every supported Windows install. **No extra packages required.** The Windows account running the process must be a domain account (or have cached domain credentials) for Kerberos/NTLM to succeed.

@@ -398,6 +398,7 @@ fn into_typed_null(value: SqlType) -> SqlType {
         SqlType::NChar(_, length) => SqlType::NChar(None, length),
         SqlType::Text(_) => SqlType::Text(None),
         SqlType::NText(_) => SqlType::NText(None),
+        SqlType::Image(_) => SqlType::Image(None),
         SqlType::Json(_) => SqlType::Json(None),
         SqlType::Xml(_) => SqlType::Xml(None),
         SqlType::Uuid(_) => SqlType::Uuid(None),

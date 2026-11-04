@@ -78,7 +78,8 @@ impl ColumnData<'_> {
             }
             SqlType::VarBinary(value, _)
             | SqlType::VarBinaryMax(value)
-            | SqlType::Binary(value, _) => ColumnData::Binary(value.map(Cow::Owned)),
+            | SqlType::Binary(value, _)
+            | SqlType::Image(value) => ColumnData::Binary(value.map(Cow::Owned)),
             SqlType::Json(value) => {
                 ColumnData::Json(value.map(|value| Cow::Owned(value.as_string())))
             }

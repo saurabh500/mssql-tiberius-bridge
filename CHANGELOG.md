@@ -11,8 +11,14 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+### Added
+
+- `Config::security_context_provider` to replace the built-in SSPI/GSSAPI
+  context for `AuthMethod::Integrated`, e.g. with NTLM on Linux/macOS.
+
 ### Changed
 
+- Upgrade `mssql-tds` to 0.4.0, including legacy `image` parameters.
 - Upgrade `mssql-tds` to 0.3.0.
 
 ## [0.2.0](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.1.0...v0.2.0) - 2026-10-10

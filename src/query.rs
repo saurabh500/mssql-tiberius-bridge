@@ -1068,6 +1068,9 @@ mod tests {
             (SqlType::NChar(None, 12), SqlType::NChar(None, 12)),
             (SqlType::Text(None), SqlType::Text(None)),
             (SqlType::NText(None), SqlType::NText(None)),
+            (SqlType::Image(Some(vec![0, 1, 255])), SqlType::Image(None)),
+            (SqlType::Image(Some(vec![])), SqlType::Image(None)),
+            (SqlType::Image(None), SqlType::Image(None)),
             (SqlType::Json(None), SqlType::Json(None)),
             (SqlType::Xml(None), SqlType::Xml(None)),
             (

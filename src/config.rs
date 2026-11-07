@@ -592,10 +592,22 @@ mod tests {
         let mut cfg = Config::new();
         cfg.authentication(AuthMethod::Integrated)
             .security_context_provider(provider.clone());
-        let ctx = cfg.to_client_context();
-        assert!(ctx
-            .security_context_provider
-            .is_some_and(|set| Arc::ptr_eq(&set, &provider)));
+        let cloned = cfg.clone();
+        assert!(format!("{cloned:?}")
+            .contains("security_context_provider: Some(SecurityContextProvider)"));
+
+        for config in [&cfg, &cloned] {
+            let ctx = config.to_client_context();
+            assert_eq!(ctx.tds_authentication_method, TdsAuthenticationMethod::SSPI);
+            let set = ctx
+                .security_context_provider
+                .expect("configured provider survives conversion and cloning");
+            assert!(Arc::ptr_eq(&set, &provider));
+            assert!(matches!(
+                set.create_context(&IntegratedAuthConfig::new(), "localhost", 1433),
+                Err(SecurityError::LoadLibraryFailed(message)) if message == "test"
+            ));
+        }
     }
 
     #[test]

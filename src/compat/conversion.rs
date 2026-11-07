@@ -1087,6 +1087,15 @@ mod tests {
                 ColumnData::Binary(Some(Cow::Owned(vec![3]))),
             ),
             (
+                SqlType::Image(Some(vec![0, 1, 255])),
+                ColumnData::Binary(Some(Cow::Owned(vec![0, 1, 255]))),
+            ),
+            (
+                SqlType::Image(Some(vec![])),
+                ColumnData::Binary(Some(Cow::Owned(vec![]))),
+            ),
+            (SqlType::Image(None), ColumnData::Binary(None)),
+            (
                 SqlType::Json(Some(SqlJson::from("{\"n\":1}".to_string()))),
                 ColumnData::Json(Some(Cow::Owned("{\"n\":1}".into()))),
             ),

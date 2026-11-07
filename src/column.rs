@@ -91,17 +91,16 @@ impl From<TdsDataType> for ColumnType {
 
 impl ColumnType {
     fn from_metadata(meta: &mssql_tds::query::metadata::ColumnMetadata) -> Self {
-        if meta.data_type == TdsDataType::Udt {
-            if let Some(info) = meta.type_info.udt_info() {
-                // A custom UDT can have the same name as a system spatial type.
-                if info.schema_name().eq_ignore_ascii_case("sys") {
-                    if info.type_name().eq_ignore_ascii_case("geography") {
-                        return Self::Geography;
-                    }
-                    if info.type_name().eq_ignore_ascii_case("geometry") {
-                        return Self::Geometry;
-                    }
-                }
+        // A custom UDT can have the same name as a system spatial type.
+        if meta.data_type == TdsDataType::Udt
+            && let Some(info) = meta.type_info.udt_info()
+            && info.schema_name().eq_ignore_ascii_case("sys")
+        {
+            if info.type_name().eq_ignore_ascii_case("geography") {
+                return Self::Geography;
+            }
+            if info.type_name().eq_ignore_ascii_case("geometry") {
+                return Self::Geometry;
             }
         }
         Self::from_tds_with_length(meta.data_type, meta.type_info.length)

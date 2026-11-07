@@ -22,7 +22,9 @@ use mssql_tds::connection::client_context::{
     ClientContext, DriverVersion, TdsAuthenticationMethod,
 };
 use mssql_tds::core::EncryptionSetting;
+use mssql_tds::security::SecurityContextProvider;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 /// The driver name sent in the TDS Login7 packet and UserAgent feature extension.
 /// Follows the MS driver naming convention (e.g., `MS-TDS`, `MS-PYTHON`).
@@ -175,6 +177,17 @@ pub struct Config {
     send_string_parameters_as_unicode: bool,
     multi_subnet_failover: bool,
     transport: Transport,
+    security_context_provider: Option<ProviderHandle>,
+}
+
+/// Lets `Config` keep deriving `Debug`; providers need not implement it.
+#[derive(Clone)]
+struct ProviderHandle(Arc<dyn SecurityContextProvider>);
+
+impl std::fmt::Debug for ProviderHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("SecurityContextProvider")
+    }
 }
 
 impl Config {
@@ -199,6 +212,7 @@ impl Config {
             send_string_parameters_as_unicode: true,
             multi_subnet_failover: false,
             transport: Transport::Tcp,
+            security_context_provider: None,
         }
     }
 
@@ -326,6 +340,16 @@ impl Config {
     ///   string keyword.
     pub fn multi_subnet_failover(&mut self, enabled: bool) -> &mut Self {
         self.multi_subnet_failover = enabled;
+        self
+    }
+
+    /// Replace the built-in SSPI/GSSAPI context used by
+    /// [`AuthMethod::Integrated`], e.g. with NTLM on Linux/macOS.
+    pub fn security_context_provider(
+        &mut self,
+        provider: Arc<dyn SecurityContextProvider>,
+    ) -> &mut Self {
+        self.security_context_provider = Some(ProviderHandle(provider));
         self
     }
 
@@ -515,6 +539,10 @@ impl Config {
         };
 
         ctx.multi_subnet_failover = Some(self.multi_subnet_failover);
+        ctx.security_context_provider = self
+            .security_context_provider
+            .as_ref()
+            .map(|handle| handle.0.clone());
 
         // UserAgent feature extension (TDS 0x10)
         let bridge_version = env!("CARGO_PKG_VERSION");
@@ -535,6 +563,52 @@ impl Default for Config {
 mod tests {
     use crate::config::*;
     use mssql_tds::connection::client_context::TdsAuthenticationMethod;
+
+    #[test]
+    fn security_context_provider_reaches_client_context() {
+        use mssql_tds::security::{
+            IntegratedAuthConfig, SecurityContext, SecurityContextProvider, SecurityError,
+        };
+        use std::sync::Arc;
+
+        struct Provider;
+        impl SecurityContextProvider for Provider {
+            fn create_context(
+                &self,
+                _: &IntegratedAuthConfig,
+                _: &str,
+                _: u16,
+            ) -> Result<Box<dyn SecurityContext>, SecurityError> {
+                Err(SecurityError::LoadLibraryFailed("test".into()))
+            }
+        }
+
+        assert!(Config::new()
+            .to_client_context()
+            .security_context_provider
+            .is_none());
+
+        let provider: Arc<dyn SecurityContextProvider> = Arc::new(Provider);
+        let mut cfg = Config::new();
+        cfg.authentication(AuthMethod::Integrated)
+            .security_context_provider(provider.clone());
+        let cloned = cfg.clone();
+        assert!(format!("{cloned:?}")
+            .contains("security_context_provider: Some(SecurityContextProvider)"));
+
+        for config in [&cfg, &cloned] {
+            let ctx = config.to_client_context();
+            assert_eq!(ctx.tds_authentication_method, TdsAuthenticationMethod::SSPI);
+            let set = ctx
+                .security_context_provider
+                .expect("configured provider survives conversion and cloning");
+            assert!(Arc::ptr_eq(&set, &provider));
+            assert!(matches!(
+                set.create_context(&IntegratedAuthConfig::new(), "localhost", 1433),
+                Err(SecurityError::LoadLibraryFailed(message)) if message == "test"
+            ));
+        }
+    }
 
     #[test]
     fn default_config() {

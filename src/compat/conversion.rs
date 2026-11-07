@@ -78,7 +78,8 @@ impl ColumnData<'_> {
             }
             SqlType::VarBinary(value, _)
             | SqlType::VarBinaryMax(value)
-            | SqlType::Binary(value, _) => ColumnData::Binary(value.map(Cow::Owned)),
+            | SqlType::Binary(value, _)
+            | SqlType::Image(value) => ColumnData::Binary(value.map(Cow::Owned)),
             SqlType::Json(value) => {
                 ColumnData::Json(value.map(|value| Cow::Owned(value.as_string())))
             }
@@ -1085,6 +1086,15 @@ mod tests {
                 SqlType::Binary(Some(vec![3]), 1),
                 ColumnData::Binary(Some(Cow::Owned(vec![3]))),
             ),
+            (
+                SqlType::Image(Some(vec![0, 1, 255])),
+                ColumnData::Binary(Some(Cow::Owned(vec![0, 1, 255]))),
+            ),
+            (
+                SqlType::Image(Some(vec![])),
+                ColumnData::Binary(Some(Cow::Owned(vec![]))),
+            ),
+            (SqlType::Image(None), ColumnData::Binary(None)),
             (
                 SqlType::Json(Some(SqlJson::from("{\"n\":1}".to_string()))),
                 ColumnData::Json(Some(Cow::Owned("{\"n\":1}".into()))),

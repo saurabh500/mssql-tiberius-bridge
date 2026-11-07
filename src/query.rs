@@ -398,6 +398,7 @@ fn into_typed_null(value: SqlType) -> SqlType {
         SqlType::NChar(_, length) => SqlType::NChar(None, length),
         SqlType::Text(_) => SqlType::Text(None),
         SqlType::NText(_) => SqlType::NText(None),
+        SqlType::Image(_) => SqlType::Image(None),
         SqlType::Json(_) => SqlType::Json(None),
         SqlType::Xml(_) => SqlType::Xml(None),
         SqlType::Uuid(_) => SqlType::Uuid(None),
@@ -1067,6 +1068,9 @@ mod tests {
             (SqlType::NChar(None, 12), SqlType::NChar(None, 12)),
             (SqlType::Text(None), SqlType::Text(None)),
             (SqlType::NText(None), SqlType::NText(None)),
+            (SqlType::Image(Some(vec![0, 1, 255])), SqlType::Image(None)),
+            (SqlType::Image(Some(vec![])), SqlType::Image(None)),
+            (SqlType::Image(None), SqlType::Image(None)),
             (SqlType::Json(None), SqlType::Json(None)),
             (SqlType::Xml(None), SqlType::Xml(None)),
             (

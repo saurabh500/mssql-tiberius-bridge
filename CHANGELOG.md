@@ -11,6 +11,16 @@ when the Release PR is opened.
 
 ## [Unreleased]
 
+## [0.3.0](https://github.com/saurabh500/mssql-tiberius-bridge/compare/v0.2.0...v0.3.0) - 2026-11-07
+
+### Added
+
+- Add Config::security_context_provider and upgrade mssql-tds to 0.4.0 ([#146](https://github.com/saurabh500/mssql-tiberius-bridge/pull/146)) ([#146](https://github.com/saurabh500/mssql-tiberius-bridge/issues/146), [#742](https://github.com/saurabh500/mssql-tiberius-bridge/issues/742), [#146](https://github.com/saurabh500/mssql-tiberius-bridge/issues/146), [#742](https://github.com/saurabh500/mssql-tiberius-bridge/issues/742))
+
+### Dependencies
+
+- *(deps)* Upgrade mssql-tds to 0.3.0 ([#144](https://github.com/saurabh500/mssql-tiberius-bridge/pull/144)) ([#144](https://github.com/saurabh500/mssql-tiberius-bridge/issues/144), [#144](https://github.com/saurabh500/mssql-tiberius-bridge/issues/144))
+
 ### Added
 
 - `Config::security_context_provider` to replace the built-in SSPI/GSSAPI
